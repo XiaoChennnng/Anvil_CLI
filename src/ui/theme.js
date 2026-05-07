@@ -138,8 +138,11 @@ function createTheme(colors) {
     borderDim: chalk.hex(colors.borderDim),
 
     // 功能色
-    thinking: chalk.hex(colors.textMuted).italic,  // 现代终端: 灰色 + 斜体
-    thinkingFallback: chalk.gray,  // 跨终端兼容: 使用 ANSI 90 灰色（所有 chalk level 有效）
+    // AI 思考内容：灰色 + 斜体
+    // 使用 .italic() 需要终端支持 SGR 3，但不是所有终端都支持
+    // fallback: 如果 italic 不可见，至少保持灰色
+    thinking: chalk.hex(colors.textMuted).italic,
+    thinkingFallback: (text) => chalk.hex(colors.textMuted)(text),
     code: chalk.hex(colors.markdownCode),
     token: chalk.hex(colors.text),
     dim: chalk.dim,
