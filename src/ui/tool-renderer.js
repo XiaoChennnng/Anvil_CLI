@@ -114,6 +114,7 @@ class ToolRenderer {
     const namePartLen = namePart.length;
     const remainingWidth = availableWidth - namePartLen - 1; // -1 for space
 
+    // read_file/view 不需要特殊处理，使用通用渲染
     // 渲染参数
     const paramsStr = this._renderParams(rawName, args, remainingWidth);
 
@@ -397,33 +398,25 @@ class ToolRenderer {
 
       case 'read_file':
       case 'view': {
+        const filePath = this._formatPath(result.filePath || toolCall?.function?.arguments?.filePath || '');
         const content = result.content || result.output || '';
-        if (content) {
-          const contentLines = content.split('\n');
-          const displayLines = contentLines.slice(0, maxLines);
-          const filePath = this._formatPath(result.filePath || toolCall?.function?.arguments?.filePath || '');
+        const totalLines = content ? content.split('\n').length : 0;
 
-          // 获取实际行号偏移（read_file 工具有 offset 参数）
-          let args = {};
-          try {
-            args = typeof toolCall?.function?.arguments === 'string'
-              ? JSON.parse(toolCall.function.arguments)
-              : (toolCall?.function?.arguments || {});
-          } catch { args = {}; }
-          const startLine = (args.offset || 0) + 1;  // offset 是 0-based，+1 转成 1-based
-          const endLine = startLine + displayLines.length - 1;
+        // 获取实际行号偏移
+        let args = {};
+        try {
+          args = typeof toolCall?.function?.arguments === 'string'
+            ? JSON.parse(toolCall.function.arguments)
+            : (toolCall?.function?.arguments || {});
+        } catch { args = {}; }
+        const startLine = (args.offset || 0) + 1;
+        const limit = args.limit || totalLines;
+        const endLine = Math.min(startLine + limit - 1, totalLines);
 
-          lines.push(`${indent}${cont} ${t.dim(`Lines ${startLine}-${endLine} of ${filePath}`)}`);
-          for (let i = 0; i < displayLines.length; i++) {
-            const ln = String(startLine + i).padStart(6);
-            const sep = t.dim('│');
-            lines.push(`${indent}${indent}${t.dim(ln)} ${sep} ${t.text(this._truncate(displayLines[i], contentWidth - 10))}`);
-          }
-          if (contentLines.length > maxLines) {
-            const overflow = `... +${contentLines.length - maxLines} more lines`;
-            const pad = Math.max(0, Math.floor((contentWidth - overflow.length) / 2));
-            lines.push(`${indent}${' '.repeat(pad)}${t.textMuted(overflow)}`);
-          }
+        if (totalLines > 0) {
+          lines.push(`${indent}${cont} ${t.dim(`Lines ${startLine}-${endLine} of ${filePath} (${totalLines} total)`)}`);
+        } else {
+          lines.push(`${indent}${cont} ${t.dim(filePath)}`);
         }
         break;
       }

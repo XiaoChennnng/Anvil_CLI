@@ -126,27 +126,31 @@ class Sidebar {
   }
 
   /**
-   * 渲染侧边栏（每次全量重绘，因为 message-box 会 clearToEndOfLine 清掉整行）
-   * 始终显示 Todo 列表，直到全部完成或被清空
+   * 渲染侧边栏（双缓冲模式，减少闪烁）
+   * 将所有输出合并为一次 write 调用
    */
   render() {
     const { messageStartRow, contentHeight, sidebarWidth, messageWidth } = this.layout;
     const viewportHeight = contentHeight;
 
-    // 每次都全量渲染（message-box 的 clearToEndOfLine 会清掉侧边栏区域，
-    // 增量渲染缓存无法感知外部清除，所以必须全量重绘）
+    // 构建完整输出字符串
+    let output = '';
+
     for (let i = 0; i < viewportHeight; i++) {
       const row = messageStartRow + i;
       const col = messageWidth + 1;
       const line = this._renderLine(i, sidebarWidth - 1);
 
-      this.layout.moveTo(row, col);
-      this.layout.clearToEndOfLine();
       if (line) {
         const truncated = this._truncateToWidth(line, sidebarWidth - 1);
-        process.stdout.write(truncated);
+        output += `\x1b[${row};${col}H\x1b[K${truncated}`;
+      } else {
+        output += `\x1b[${row};${col}H\x1b[K`;
       }
     }
+
+    // 一次性输出
+    process.stdout.write(output);
   }
 
   /**

@@ -113,18 +113,11 @@ class Layout {
   }
 
   /**
-   * 清屏（改为局部清除，避免闪烁）
-   * 使用此方法会清除整个屏幕，但仅在首次初始化时使用
+   * 清屏（一次性清屏，避免逐行清除造成的闪烁）
    */
   clearScreen() {
-    // 不再使用 \x1b[2J 全屏清屏，改为分区域清除
-    // 首次初始化时调用，后续刷新使用局部更新
+    process.stdout.write('\x1b[2J');
     this.hideCursor();
-    // 逐行清除
-    for (let row = 1; row <= this._height; row++) {
-      this.moveTo(row, 1);
-      this.clearToEndOfLine();
-    }
   }
 
   /**

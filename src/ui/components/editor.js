@@ -15,25 +15,22 @@ class Editor {
   }
 
   /**
-   * 渲染输入区
+   * 渲染输入区（双缓冲模式）
    */
   render() {
     const { editorStartRow, _width } = this.layout;
     const t = this.theme;
 
+    let output = '';
     // 顶部边框（用 dim 细线替代粗横线，不抢眼）
-    this.layout.moveTo(editorStartRow, 1);
-    this.layout.clearLine();
     const borderLine = t.textMuted('─'.repeat(_width));
-    process.stdout.write(borderLine);
+    output += `\x1b[${editorStartRow};1H\x1b[2K${borderLine}`;
 
     // 输入提示符 ">"
-    this.layout.moveTo(editorStartRow + 1, 1);
-    this.layout.clearLine();
-    process.stdout.write(chalk.hex(t.colors.primary).bold(' >'));
-    if (this.currentInput) {
-      process.stdout.write(' ' + this.currentInput);
-    }
+    const promptContent = chalk.hex(t.colors.primary).bold(' >') + (this.currentInput ? ' ' + this.currentInput : '');
+    output += `\x1b[${editorStartRow + 1};1H\x1b[2K${promptContent}`;
+
+    process.stdout.write(output);
   }
 
   /**

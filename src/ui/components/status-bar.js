@@ -145,8 +145,7 @@ class StatusBar {
     const t = this.theme;
     const { statusBarRow, _width } = this.layout;
 
-    this.layout.moveTo(statusBarRow, 1);
-    this.layout.clearLine();
+    let output = `\x1b[${statusBarRow};1H\x1b[2K`;
 
     // ─── Help Widget ───
     // bg=TextMuted(#6a6a6a), fg=BackgroundDarker(#121212), bold
@@ -276,7 +275,8 @@ class StatusBar {
     statusBar += diagWidget;
     statusBar += modelWidget;
 
-    process.stdout.write(statusBar);
+    output += statusBar;
+    process.stdout.write(output);
   }
 
   /**

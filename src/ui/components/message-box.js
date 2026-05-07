@@ -199,24 +199,24 @@ class MessageBox {
   }
 
   /**
-   * 渲染消息区到屏幕（增量渲染，只更新变化的行）
+   * 渲染消息区到屏幕（双缓冲模式，减少闪烁）
+   * 将所有输出合并为一次 write 调用，避免多次终端操作造成的闪烁
    */
   render() {
     const { messageStartRow, messageWidth, messageViewportHeight } = this.layout;
     const t = this.theme;
 
+    // 构建完整输出字符串
+    let output = '';
+
     // 滚动提示（翻页时显示在 header 区域顶部）
     if (this._showScrollHint && this.scrollOffset > 0) {
-      this.layout.moveTo(messageStartRow, 1);
-      this.layout.clearToEndOfLine();
       const hint = chalk.bgHex(t.colors.backgroundSecondary).hex(t.colors.textMuted)(
         ` ↑ ${this.scrollOffset} 行之前的内容 · 按 PageDown 继续向下查看 `
       );
-      process.stdout.write(hint + ' '.repeat(Math.max(0, messageWidth - this._visibleLength(hint))));
+      output += `\x1b[${messageStartRow};1H\x1b[K${hint}${' '.repeat(Math.max(0, messageWidth - this._visibleLength(hint)))}`;
     } else {
-      this.layout.moveTo(messageStartRow, 1);
-      this.layout.clearToEndOfLine();
-      process.stdout.write(' '.repeat(messageWidth));
+      output += `\x1b[${messageStartRow};1H\x1b[K${' '.repeat(messageWidth)}`;
     }
 
     // Header: Logo + 版本（opencode 风格: ⌬ Anvil）
@@ -226,12 +226,8 @@ class MessageBox {
     const headerLine = `  ${icon}  ${ver}  ${chalk.dim('│')}  ${help}`;
     const headerPad = ' '.repeat(Math.max(0, messageWidth - this._visibleLength(headerLine)));
 
-    this.layout.moveTo(messageStartRow + 1, 1);
-    this.layout.clearToEndOfLine();
-    process.stdout.write(headerLine + headerPad);
-    this.layout.moveTo(messageStartRow + 2, 1);
-    this.layout.clearToEndOfLine();
-    process.stdout.write(' '.repeat(messageWidth));
+    output += `\x1b[${messageStartRow + 1};1H\x1b[K${headerLine}${headerPad}`;
+    output += `\x1b[${messageStartRow + 2};1H\x1b[K${' '.repeat(messageWidth)}`;
 
     // 计算可见行
     const viewportStart = messageStartRow + 3;
@@ -263,15 +259,13 @@ class MessageBox {
 
       // 只更新变化的行
       if (line !== lastLine) {
-        this.layout.moveTo(row, 1);
-        this.layout.clearToEndOfLine();
         if (line) {
           // 用空格填充到 messageWidth，确保不侵入侧边栏区域
           const visibleLen = this._visibleLength(line);
           const padding = messageWidth - Math.min(visibleLen, messageWidth);
-          process.stdout.write(line + ' '.repeat(Math.max(0, padding)));
+          output += `\x1b[${row};1H\x1b[K${line}${' '.repeat(Math.max(0, padding))}`;
         } else {
-          process.stdout.write(' '.repeat(messageWidth));
+          output += `\x1b[${row};1H\x1b[K${' '.repeat(messageWidth)}`;
         }
         // 更新缓存
         if (i < this._lastRenderedVisibleLines.length) {
@@ -285,13 +279,14 @@ class MessageBox {
     // 如果新行数少于之前的缓存长度，清理多余部分并填充背景
     if (displayLines.length < this._lastRenderedVisibleLines.length) {
       for (let i = displayLines.length; i < this._lastRenderedVisibleLines.length; i++) {
-        this.layout.moveTo(viewportStart + i, 1);
-        this.layout.clearToEndOfLine();
-        // 用空格填充整行，确保背景一致
-        process.stdout.write(' '.repeat(messageWidth));
+        const row = viewportStart + i;
+        output += `\x1b[${row};1H\x1b[K${' '.repeat(messageWidth)}`;
       }
       this._lastRenderedVisibleLines = this._lastRenderedVisibleLines.slice(0, displayLines.length);
     }
+
+    // 一次性输出所有内容
+    process.stdout.write(output);
   }
 
   /**

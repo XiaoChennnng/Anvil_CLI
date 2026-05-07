@@ -27,11 +27,14 @@ class TUI {
     this._isProcessing = false;
     this._hasPendingContext = false;
 
-    // 渲染节流队列（30ms 间隔）
+    // 渲染节流队列（50ms 间隔）
     this._renderQueue = null;
 
     // 思考中状态栏定时刷新（每秒更新耗时）
     this._thinkingTimer = null;
+
+    // 光标隐藏标志（避免频繁 hide/show 切换造成闪烁）
+    this._cursorHidden = false;
   }
 
   /**
@@ -67,6 +70,7 @@ class TUI {
    */
   _fullRender() {
     this.layout.hideCursor();
+    this._cursorHidden = true;
     this.layout.clearScreen();
 
     // 渲染各区域
@@ -83,10 +87,8 @@ class TUI {
    * 刷新消息区 + 侧边栏（流式输出时使用，不重绘编辑器/状态栏以减少闪烁）
    */
   _refreshMessages() {
-    this.layout.hideCursor();
     this.messageBox.render();
     this.sidebar.render();
-    this._restoreCursorToEditor();
   }
 
   /**
@@ -94,6 +96,7 @@ class TUI {
    */
   _refreshAll() {
     this.layout.hideCursor();
+    this._cursorHidden = true;
     this.messageBox.render();
     this.sidebar.render();
     this.editor.render();
@@ -105,7 +108,11 @@ class TUI {
    * 恢复光标到编辑器输入位置
    */
   _restoreCursorToEditor() {
-    this.layout.showCursor();
+    // 只有在 cursor 当前是隐藏状态时才 show
+    if (this._cursorHidden) {
+      this.layout.showCursor();
+      this._cursorHidden = false;
+    }
     // 使用 editor 的 cursorPos（光标可在字符间移动），不再固定在末尾
     const cursorPos = this.editor.cursorPos ?? this.editor.currentInput?.length ?? 0;
     this.layout.moveTo(this.editor.promptRow, this.editor.promptCol + cursorPos);
@@ -117,7 +124,7 @@ class TUI {
   _queueRender() {
     if (!this._renderQueue) {
       const RenderQueue = require('./render-queue');
-      this._renderQueue = new RenderQueue(30);  // 30ms 节流
+      this._renderQueue = new RenderQueue(50);  // 50ms 节流，减少闪烁
     }
     this._renderQueue.requestRender(() => {
       this._refreshMessages();
@@ -528,6 +535,7 @@ class TUI {
     this._isProcessing = processing;
     if (!processing) {
       this.layout.showCursor();
+      this._cursorHidden = false;
     }
   }
 
