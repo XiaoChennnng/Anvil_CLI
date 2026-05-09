@@ -225,6 +225,16 @@ class Editor {
     this.cursorPos = 0;
     this.inputLines = [];
   }
+
+  /**
+   * 设置编辑器文本
+   * @param {string} text - 要设置的文本
+   */
+  setText(text) {
+    this.currentInput = text;
+    this.cursorPos = text.length;
+    this.inputLines = text.split('\n');
+  }
 }
 
 module.exports = Editor;

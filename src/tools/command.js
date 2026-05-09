@@ -25,6 +25,29 @@ function detectShell() {
   return process.env.COMSPEC || 'cmd.exe';
 }
 
+/**
+ * 将 GBK/GB2312/GB18030 编码的 Buffer 转换为 UTF-8
+ */
+function convertEncoding(buffer, fallbackEncoding = 'gbk') {
+  // 首先尝试 UTF-8
+  try {
+    const utf8Str = buffer.toString('utf8');
+    // 检查是否是有效的 UTF-8（没有替换字符）
+    if (!utf8Str.includes('\uFFFD')) {
+      return utf8Str;
+    }
+  } catch {}
+
+  // 回退到 GBK（Windows 中文默认编码）
+  try {
+    const iconv = require('iconv-lite');
+    return iconv.decode(buffer, 'gbk');
+  } catch {
+    // iconv-lite 不可用，使用原生方式
+    return buffer.toString('latin1');
+  }
+}
+
 function executeCommand(params, context) {
   return new Promise((resolve) => {
     const { command, timeout } = params;
@@ -63,7 +86,7 @@ function executeCommand(params, context) {
     // 实时流式输出
     if (proc.stdout) {
       proc.stdout.on('data', (data) => {
-        const text = data.toString('utf8');
+        const text = convertEncoding(data);
         stdout += text;
 
         // 维护最近 maxDisplayLines 行
@@ -84,7 +107,7 @@ function executeCommand(params, context) {
 
     if (proc.stderr) {
       proc.stderr.on('data', (data) => {
-        const text = data.toString('utf8');
+        const text = convertEncoding(data);
         stderr += text;
 
         const lines = text.split('\n');

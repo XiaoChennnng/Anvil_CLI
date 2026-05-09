@@ -26,6 +26,7 @@ class TUI {
     this._onContextInject = null;
     this._isProcessing = false;
     this._hasPendingContext = false;
+    this.chatEngine = null;  // 由 index.js 注入
 
     // 渲染节流队列（50ms 间隔）
     this._renderQueue = null;
@@ -387,15 +388,158 @@ class TUI {
   }
 
   /**
-   * 渲染计划批准提示（在编辑器上方显示）
+   * 渲染计划批准提示（将选项添加到消息区，类似 QuestionPanel 样式）
    */
   renderPlanApprovalHint() {
     const t = this.layout.theme;
-    const row = this.layout.editorStartRow - 1;
-    this.layout.moveTo(row, 1);
-    this.layout.clearLine();
-    process.stdout.write(' ' + t.success('⏳ 等待批准 — 输入 yes/批准 执行，no/拒绝 修改'));
-    this._restoreCursorToEditor();
+    const width = this.layout.messageWidth - 4;
+
+    // 保存当前选项索引（用于方向键导航）
+    if (this._planApprovalCursor === undefined) {
+      this._planApprovalCursor = 0;  // 0=同意, 1=拒绝, 2=其他输入
+    }
+    const cursor = this._planApprovalCursor;
+    const options = [
+      { label: '同意', desc: '批准计划并执行' },
+      { label: '拒绝', desc: '拒绝并重新规划' },
+      { label: '其他', desc: '输入修改建议' },
+    ];
+
+    // 记录提示块的起始行
+    const startLine = this.messageBox.renderedLines.length;
+
+    // 分隔线
+    this.messageBox.renderedLines.push(` ${chalk.dim('\u2500'.repeat(Math.min(width, 40)))}`);
+
+    // 选项列表
+    for (let i = 0; i < options.length; i++) {
+      const opt = options[i];
+      const isSelected = i === cursor;
+      const indicator = isSelected ? chalk.hex(t.colors.primary)('●') : chalk.hex(t.colors.textMuted)('○');
+      const prefix = isSelected ? chalk.hex(t.colors.primary)('▸') : ' ';
+      const label = isSelected ? chalk.hex(t.colors.text).bold(opt.label) : t.text(opt.label);
+      const desc = opt.desc ? chalk.hex(t.colors.textMuted)(` \u2014 ${opt.desc}`) : '';
+
+      let line = ` ${prefix} ${indicator} ${label}${desc}`;
+      // 截断过长的行
+      const visibleLen = this._visibleLength(line);
+      if (width > 0 && visibleLen > width) {
+        const maxDescLen = width - (this._visibleLength(` ${prefix} ${indicator} ${label} \u2014 `));
+        if (maxDescLen > 10) {
+          line = ` ${prefix} ${indicator} ${label}${this._truncateAnsi(desc, maxDescLen)}`;
+        } else {
+          line = ` ${prefix} ${indicator} ${label}`;
+        }
+      }
+      this.messageBox.renderedLines.push(line);
+    }
+
+    // 底部分隔线和操作提示
+    this.messageBox.renderedLines.push(` ${chalk.dim('\u2500'.repeat(Math.min(width, 40)))}`);
+    this.messageBox.renderedLines.push(` ${chalk.dim('\u2191\u2193 选择 \u00b7 Space 选中 \u00b7 Enter 确认 \u00b7 直接输入反馈')}`);
+    this.messageBox.renderedLines.push('');
+
+    // 记录提示块的位置范围（用于后续更新/清除）
+    this._planApprovalHintLines = {
+      start: startLine,
+      end: this.messageBox.renderedLines.length - 1,
+      lineCount: this.messageBox.renderedLines.length - startLine,
+    };
+
+    // 立即渲染到屏幕（批准组件加完后必须刷新才能显示）
+    this._refreshMessages();
+  }
+
+  /**
+   * 更新计划批准提示（方向键选择时调用）
+   */
+  updatePlanApprovalHint() {
+    if (!this._planApprovalHintLines) {return;}
+
+    const t = this.layout.theme;
+    const width = this.layout.messageWidth - 4;
+    const cursor = this._planApprovalCursor;
+    const options = [
+      { label: '同意', desc: '批准计划并执行' },
+      { label: '拒绝', desc: '拒绝并重新规划' },
+      { label: '其他', desc: '输入修改建议' },
+    ];
+
+    const { start, lineCount } = this._planApprovalHintLines;
+
+    // 重建选项行
+    const newLines = [];
+    for (let i = 0; i < options.length; i++) {
+      const opt = options[i];
+      const isSelected = i === cursor;
+      const indicator = isSelected ? chalk.hex(t.colors.primary)('●') : chalk.hex(t.colors.textMuted)('○');
+      const prefix = isSelected ? chalk.hex(t.colors.primary)('▸') : ' ';
+      const label = isSelected ? chalk.hex(t.colors.text).bold(opt.label) : t.text(opt.label);
+      const desc = opt.desc ? chalk.hex(t.colors.textMuted)(` \u2014 ${opt.desc}`) : '';
+
+      let line = ` ${prefix} ${indicator} ${label}${desc}`;
+      const visibleLen = this._visibleLength(line);
+      if (width > 0 && visibleLen > width) {
+        const maxDescLen = width - (this._visibleLength(` ${prefix} ${indicator} ${label} \u2014 `));
+        if (maxDescLen > 10) {
+          line = ` ${prefix} ${indicator} ${label}${this._truncateAnsi(desc, maxDescLen)}`;
+        } else {
+          line = ` ${prefix} ${indicator} ${label}`;
+        }
+      }
+      newLines.push(line);
+    }
+
+    // 更新消息区中的对应行（跳过顶部分隔线，从选项行开始更新）
+    const optionStart = start + 1;
+    for (let i = 0; i < newLines.length; i++) {
+      this.messageBox.renderedLines[optionStart + i] = newLines[i];
+    }
+  }
+
+  /**
+   * 清除计划批准提示
+   */
+  clearPlanApprovalHint() {
+    if (this._planApprovalCursor !== undefined) {
+      this._planApprovalCursor = undefined;
+    }
+    if (this._planApprovalHintLines) {
+      const { start, lineCount } = this._planApprovalHintLines;
+      this.messageBox.renderedLines.splice(start, lineCount);
+      this._planApprovalHintLines = undefined;
+    }
+  }
+
+  /**
+   * 计算字符串可见长度（忽略 ANSI）
+   */
+  _visibleLength(str) {
+    let len = 0;
+    let inEscape = false;
+    for (let i = 0; i < str.length; i++) {
+      if (str[i] === '\x1b') { inEscape = true; continue; }
+      if (inEscape) { if (str[i] === 'm') {inEscape = false;} continue; }
+      len++;
+    }
+    return len;
+  }
+
+  /**
+   * 按可见长度截断 ANSI 字符串
+   */
+  _truncateAnsi(str, maxLen) {
+    let visible = 0;
+    let result = '';
+    let inEscape = false;
+    for (let i = 0; i < str.length; i++) {
+      if (str[i] === '\x1b') { inEscape = true; result += str[i]; continue; }
+      if (inEscape) { result += str[i]; if (str[i] === 'm') {inEscape = false;} continue; }
+      if (visible >= maxLen) { result += chalk.dim('...'); break; }
+      result += str[i];
+      visible++;
+    }
+    return result;
   }
 
   /**
@@ -506,6 +650,48 @@ class TUI {
         if (button === 65) { this.messageBox.scrollDown(3); this._refreshMessages(); return { action: 'scroll_down' }; }
       }
       return null;  // 非滚轮事件（点击等），忽略
+    }
+
+    // ─── 计划批准状态：拦截方向键和确认键 ───
+    if (this.chatEngine && this.chatEngine._awaitingPlanApproval) {
+      // 上箭头 — 选项上移
+      if (buf[0] === 0x1b && buf[1] === 0x5b && buf[2] === 0x41) {
+        if (this._planApprovalCursor > 0) {
+          this._planApprovalCursor--;
+          this.updatePlanApprovalHint();
+          this._refreshMessages();
+        }
+        return { action: 'plan_approval_up' };
+      }
+      // 下箭头 — 选项下移
+      if (buf[0] === 0x1b && buf[1] === 0x5b && buf[2] === 0x42) {
+        if (this._planApprovalCursor < 2) {
+          this._planApprovalCursor++;
+          this.updatePlanApprovalHint();
+          this._refreshMessages();
+        }
+        return { action: 'plan_approval_down' };
+      }
+      // Space — 选中当前选项到编辑器
+      if (buf[0] === 0x20) {
+        const optionMap = ['yes', 'no', ''];
+        const text = optionMap[this._planApprovalCursor];
+        if (text) {
+          this.editor.setText(text);
+          this._refreshEditor();
+        }
+        return { action: 'plan_approval_select' };
+      }
+      // Enter — 发送当前选项
+      if (buf[0] === 0x0d) {
+        const optionMap = ['yes', 'no', ''];
+        const text = optionMap[this._planApprovalCursor];
+        if (text && this._onSend) {
+          this.clearPlanApprovalHint();
+          this._onSend(text);
+        }
+        return { action: 'plan_approval_confirm' };
+      }
     }
 
     // 交给编辑器处理

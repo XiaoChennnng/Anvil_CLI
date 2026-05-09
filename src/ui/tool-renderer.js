@@ -239,6 +239,26 @@ class ToolRenderer {
         break;
       }
 
+      case 'request_plan_approval':
+        mainParam = this._truncate(args.summary || '', 50);
+        if (args.steps) {
+          const stepCount = (args.steps.match(/^\d+[.、]/gm) || []).length || 1;
+          subParams.push(`${stepCount} steps`);
+        }
+        if (args.files) {
+          const fileCount = args.files.split('\n').filter(l => l.trim()).length;
+          if (fileCount > 0) {subParams.push(`${fileCount} files`);}
+        }
+        break;
+
+      case 'enter_plan_mode':
+        if (args.reason) {
+          mainParam = this._truncate(args.reason, 50);
+        } else {
+          mainParam = 'complex task';
+        }
+        break;
+
       default:
         // 通用格式
         const entries = Object.entries(args);

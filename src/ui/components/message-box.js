@@ -247,8 +247,14 @@ class MessageBox {
       }
     }
     // 限制显示行数 ≤ viewport 高度
-    while (displayLines.length > messageViewportHeight) {
-      displayLines.pop();
+    // 在底部时保留最后 viewport 行（批准组件、最新输出在末尾）
+    // 向上滚动时保留最前 viewport 行（用户在查看历史内容）
+    if (displayLines.length > messageViewportHeight) {
+      if (this.scrollOffset === 0) {
+        displayLines = displayLines.slice(displayLines.length - messageViewportHeight);
+      } else {
+        displayLines = displayLines.slice(0, messageViewportHeight);
+      }
     }
 
     // 增量渲染：只更新实际变化的行

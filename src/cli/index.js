@@ -69,6 +69,7 @@ async function main() {
   const { registerQuestionTool } = require('../tools/question');
   registerQuestionTool(toolRegistry);
   const { registerTaskCompleteTool } = require('../tools/task_complete');
+  const { registerPlanModeTools } = require('../tools/plan_mode');
   logger.debug('工具注册完成', { tools: toolRegistry.list() });
 
   const mcpManager = new MCPManager(config, logger);
@@ -116,6 +117,9 @@ async function main() {
   });
 
   ensureContextToolsRegistered();
+
+  // 注册 Plan Mode 工具（在 chatEngine 创建后）
+  registerPlanModeTools(toolRegistry, chatEngine);
 
   const tui = new TUI(config);
 
@@ -282,6 +286,7 @@ async function main() {
   tui.statusBar.model = chatEngine.model;
   tui.statusBar.setPlanMode(chatEngine._planMode);
   tui.sidebar.setChatEngine(chatEngine);
+  tui.chatEngine = chatEngine;  // 注入 chatEngine 引用供 handleKey 使用
   const todos = todoManager.getAll();
   tui.sidebar.setTodos(todos);
 
@@ -341,6 +346,10 @@ async function main() {
     tui.resetMessages();
 
     if (chatEngine._awaitingPlanApproval) {
+      // 清除计划批准提示
+      tui.clearPlanApprovalHint();
+      tui.resetMessages();
+
       const trimmed = input.trim().toLowerCase();
       if (/^(yes|y|ok|批准|确认|同意|开始|继续|行|好|可以)$/.test(trimmed)) {
         await chatEngine.approvePlan();
@@ -393,8 +402,11 @@ async function main() {
       if (response.error && !contentStarted) {
       }
 
-      // 有待批准的计划时，不调用 finishResponse（等待用户批准后会单独处理）
+      // 有待批准的计划时，结束当前响应（显示模型信息）但保持编辑器可用
       if (response.plan) {
+        tui.finishResponse(chatEngine.model);
+        tui.sidebar.updateMessages(chatEngine.messages);
+        tui.setProcessing(false);
         return;
       }
     } catch (err) {

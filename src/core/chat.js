@@ -6,34 +6,8 @@ const { EventEmitter } = require('events');
 const SessionCache = require('../ai/cache');
 const { getSystemPrompt, getAgentCheckPrompt, getAgentContinuePrompt } = require('../ai/prompts');
 
-/**
- * 评估任务复杂度，动态调整迭代限制
- */
-function estimateTaskComplexity(task) {
-  if (!task) { return { level: 'unknown', maxIterations: 100 }; }
-  const taskLength = task.length;
-  let score = 0;
-
-  if (taskLength > 500) { score += 2; }
-  else if (taskLength > 200) { score += 1; }
-
-  const multiTaskPatterns = [/\d+\s*个|多个|几个|一系列|各种|若干/];
-  score += multiTaskPatterns.filter(p => p.test(task)).length;
-
-  const complexPatterns = [/实现|开发|创建|构建|设计|重构|重写|迁移|改造|集成|对接|接入|测试/];
-  score += complexPatterns.filter(p => p.test(task)).length;
-
-  const fileOpPatterns = [/修改.*\d+|多个文件|整个项目|全局/];
-  score += fileOpPatterns.filter(p => p.test(task)).length;
-
-  const simplePatterns = [/是什么|怎么|如何|为什么|解释|说明|介绍|查看/];
-  const isSimple = simplePatterns.some(p => p.test(task)) && score < 2;
-
-  if (isSimple) { return { level: 'simple', maxIterations: 30 }; }
-  if (score <= 2) { return { level: 'medium', maxIterations: 80 }; }
-  if (score <= 4) { return { level: 'complex', maxIterations: 150 }; }
-  return { level: 'very_complex', maxIterations: 250 };
-}
+// 默认最大迭代次数（不再按关键词猜复杂度，AI 自己通过 enter_plan_mode 申请批准）
+const DEFAULT_MAX_ITERATIONS = 100;
 
 /**
  * 解析 task_complete 结果，健壮处理各种格式
@@ -296,13 +270,13 @@ class ChatEngine extends EventEmitter {
 
   /**
    * 自主 Agent 循环
-   * 像 Claude Code 一样：规划 -> 执行 -> 检查 -> 继续或结束
+   * AI 自行决定何时执行、何时调用 enter_plan_mode 请求批准、何时调用 task_complete 结束
+   * 代码层不再猜关键词——AI 在 System Prompt 里被明确告知规则
    * @param {string} originalTask - 原始任务
    * @returns {Promise<Object>} 最终结果
    */
   async _agentLoop(originalTask) {
-    const complexity = estimateTaskComplexity(originalTask);
-    const maxIterations = complexity.maxIterations;
+    const maxIterations = DEFAULT_MAX_ITERATIONS;
     const startTime = Date.now();
     const HARD_TIMEOUT = 4 * 60 * 60 * 1000;
     const SOFT_TIMEOUT = 3.5 * 60 * 60 * 1000;
@@ -319,35 +293,33 @@ class ChatEngine extends EventEmitter {
     fullThinking += result.thinking || '';
     lastUsage = result.usage;
 
-    // Plan Mode：只要有内容就视为计划，等待批准
-    if (this._planMode && result.content) {
-      this._awaitingPlanApproval = true;
-      this._pendingPlan = result.content;
-      await this.savePlanToFile(result.content);
+    // ── Plan Mode 批准检测（检测 AI 是否调用了 request_plan_approval 工具） ──
+
+    // 1. AI 调用了 request_plan_approval → 暂停等用户确认
+    if (this._planMode && this._awaitingPlanApproval) {
+      this.logger?.info('Plan Mode: AI 调用了 request_plan_approval，暂停等待确认');
       return {
         thinking: fullThinking,
         content: fullContent,
         toolCalls: [],
         usage: lastUsage,
-        plan: result.content,
+        plan: this._pendingPlan,
       };
     }
 
-    // Plan Mode：有工具调用但无内容，也等待批准
+    // 2. Plan Mode 下调了其他工具（非 request_plan_approval、非只读工具） → 提示 AI 先请求批准
     if (this._planMode && result.hadToolCalls) {
-      this._awaitingPlanApproval = true;
-      this._pendingPlan = fullContent || '(工具调用，待批准)';
-      await this.savePlanToFile(`[工具调用]\n\n${fullContent || '(无描述)'}`);
-      return {
-        thinking: fullThinking,
-        content: fullContent,
-        toolCalls: [],
-        usage: lastUsage,
-        plan: fullContent || '(工具调用，待批准)',
-      };
+      // 检查是否只是调了 request_plan_approval（上面已经处理了）
+      const requestedApproval = result.toolCalls?.some(
+        tc => tc.function?.name === 'request_plan_approval'
+      );
+      if (!requestedApproval) {
+        // 其他工具调用（读操作允许，写操作已在工具层拦截）→ 不暂停，让 AI 继续
+        this.logger?.info('Plan Mode: AI 调用了其他工具（非 request_plan_approval），继续执行');
+      }
     }
 
-    // 非 Plan Mode：没有工具调用时直接返回
+    // 非 Plan Mode：没有工具调用时直接返回（闲聊、问答、纯文字回复都不弹窗）
     if (!result.hadToolCalls) {
       return {
         thinking: fullThinking,
@@ -517,6 +489,27 @@ class ChatEngine extends EventEmitter {
         fullThinking += recheckResult.thinking || '';
         lastUsage = recheckResult.usage || lastUsage;
       }
+
+      // 检查是否有 enter_plan_mode 请求
+      if (this._isEnterPlanModeRequest(result.toolCalls)) {
+        const planModeResult = await this.requestPlanMode('AI 主动请求');
+        if (planModeResult.requested) {
+          // 等待计划生成完成
+          const planResult = await this._agentLoop(this._currentTask);
+          if (planResult.plan) {
+            this._awaitingPlanApproval = true;
+            this._pendingPlan = planResult.plan;
+            await this.savePlanToFile(planResult.plan);
+            return {
+              thinking: fullThinking,
+              content: fullContent,
+              toolCalls: [],
+              usage: lastUsage,
+              plan: planResult.plan,
+            };
+          }
+        }
+      }
     }
 
     return {
@@ -659,6 +652,7 @@ class ChatEngine extends EventEmitter {
               fileTimestamps: this.fileTimestamps,
               maxOutputLines: this.config.maxOutputLines || 50,
               planModeRestricted: this._planMode && !this._planApproved,
+              chatEngine: this,  // 让工具可以访问 chatEngine（如 enter_plan_mode）
               onOutput: (data, isError) => {
                 if (!this._suppressUI) {this.emit('command_output', data, isError);}
               },
@@ -705,6 +699,11 @@ class ChatEngine extends EventEmitter {
           if (this.logger) {
             this.logger.info(`工具调用: ${name}`, { args, result });
           }
+        }
+
+        // 如果 AI 调了 request_plan_approval，立即停止不再继续（等用户批准）
+        if (this._awaitingPlanApproval) {
+          break;
         }
 
         // 继续循环，AI 将基于工具结果生成最终回复
@@ -1056,6 +1055,39 @@ class ChatEngine extends EventEmitter {
 
     const result = await this._agentLoop(this._currentTask);
     return this._finishPlanResponse(result);
+  }
+
+  /**
+   * 请求进入 Plan Mode（由 enter_plan_mode 工具调用）
+   * @param {string} reason - 进入原因
+   * @returns {Promise<Object>}
+   */
+  async requestPlanMode(reason) {
+    if (this._planMode) {
+      return { alreadyEnabled: true, message: 'Plan Mode 已启用' };
+    }
+
+    // 开启 Plan Mode（但不设置 _awaitingPlanApproval，因为还没有产出计划）
+    this._planMode = true;
+    this._suppressUI = false;
+    this._updateSystemPrompt();
+    this.emit('plan_mode_changed', true);
+
+    this.logger?.info('AI 请求进入 Plan Mode', { reason });
+
+    return {
+      requested: true,
+      message: '已开启 Plan Mode，正在生成计划...',
+    };
+  }
+
+  /**
+   * 检查工具调用是否请求进入 Plan Mode
+   * @param {Array} toolCalls - 工具调用列表
+   * @returns {boolean}
+   */
+  _isEnterPlanModeRequest(toolCalls) {
+    return toolCalls?.some(tc => tc.function?.name === 'enter_plan_mode');
   }
 
   /**
