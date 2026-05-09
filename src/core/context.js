@@ -581,17 +581,16 @@ class ContextManager {
    */
   _addFileContext(key, content) {
     // 预算检查 (token 单位统一)
-    const currentSize = [...this._fileContexts.values()]
+    let currentSize = [...this._fileContexts.values()]
       .reduce((sum, e) => sum + (e.tokens || 0), 0);
     const newTokens = estimateTokenCount(content);
 
-    // 超出容量，淘汰最少使用的
+    // 超出容量，淘汰最少使用的（每次 evict 后重算 currentSize 防止死循环）
     while (
       this._fileContexts.size >= FILE_CONTEXT_MAX_ENTRIES ||
       currentSize + newTokens > FILE_CONTEXT_MAX_TOKENS
     ) {
       this._evictLRU();
-      // 艹，这行之前在外面算的，while 条件永远不变 -> 死循环！每次 evict 后重算
       currentSize = [...this._fileContexts.values()]
         .reduce((sum, e) => sum + (e.tokens || 0), 0);
     }

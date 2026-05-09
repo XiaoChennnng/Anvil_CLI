@@ -465,7 +465,7 @@ class TUI {
       { label: '其他', desc: '输入修改建议' },
     ];
 
-    const { start, lineCount } = this._planApprovalHintLines;
+    const { start } = this._planApprovalHintLines;
 
     // 重建选项行
     const newLines = [];

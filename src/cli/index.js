@@ -255,10 +255,39 @@ async function main() {
   chatEngine.on('plan_ready', (plan) => {
     const t = tui.layout.theme;
     const marker = chalk.hex(t.colors.primary)('●');
-    const planLines = String(plan).split('\n');
+    const planText = String(plan);
+    const planLines = planText.split('\n');
+
+    // 用消息框的 markdown 渲染器格式化计划内容，而不是裸 push
+    // 先 flush 已有内容，然后用 markdown 渲染计划
+    tui.messageBox.flushContentBuffer();
+
+    // 计划标题
+    tui.messageBox.renderedLines.push(` ${marker} ${chalk.bold(t.text('📋 计划方案'))}`);
+    tui.messageBox.renderedLines.push('');
+
+    // 逐行处理：## 标题加粗不加 marker，普通行加 marker
     for (const line of planLines) {
-      tui.messageBox.renderedLines.push(`${marker} ${line}`);
+      const trimmed = line.trim();
+      if (!trimmed) {
+        tui.messageBox.renderedLines.push('');
+        continue;
+      }
+      // markdown h2 标题 → 加粗，不加 ● 前缀
+      if (/^##\s+/.test(trimmed)) {
+        const header = trimmed.replace(/^##\s+/, '');
+        tui.messageBox.renderedLines.push(`   ${chalk.bold(t.text(header))}`);
+      }
+      // 一级步骤编号
+      else if (/^\d+[.、]/.test(trimmed)) {
+        tui.messageBox.renderedLines.push(`   ${t.dim(trimmed)}`);
+      }
+      // 普通内容
+      else {
+        tui.messageBox.renderedLines.push(`   ${t.textMuted(trimmed)}`);
+      }
     }
+
     tui.messageBox.renderedLines.push('');
     tui._refreshMessages();
     tui.renderPlanApprovalHint();

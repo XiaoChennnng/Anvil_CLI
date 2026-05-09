@@ -237,7 +237,7 @@ class MessageBox {
     );
 
     // 构建显示行：对超长行做换行处理，避免内容侵入侧边栏
-    const displayLines = [];
+    let displayLines = [];
     for (const line of visibleLines) {
       if (line) {
         const wrapped = this._wrapLine(line, messageWidth);
