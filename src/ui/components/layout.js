@@ -20,6 +20,10 @@ class Layout {
     this._pendingRender = false;
     this._renderCallback = null;
 
+    // 写缓冲（合并多次 this.write 为一次）
+    this._writeBuf = '';
+    this._buffering = false;
+
     this._updateDimensions();
   }
 
@@ -47,11 +51,11 @@ class Layout {
     if (this._isAltScreen) {return;}
     this._isAltScreen = true;
 
-    process.stdout.write('\x1b[?1049h');  // 进入 alt screen
-    process.stdout.write('\x1b[?25l');     // 隐藏光标
+    this.write('\x1b[?1049h');  // 进入 alt screen
+    this.write('\x1b[?25l');     // 隐藏光标
 
     // 启用鼠标追踪：滚轮翻页，Shift+拖动选择文本
-    process.stdout.write('\x1b[?1000h\x1b[?1006h');
+    this.write('\x1b[?1000h\x1b[?1006h');
 
     // 监听 resize
     this._onResize = () => {
@@ -68,9 +72,9 @@ class Layout {
     if (!this._isAltScreen) {return;}
     this._isAltScreen = false;
 
-    process.stdout.write('\x1b[?25h');    // 显示光标
-    process.stdout.write('\x1b[?1000l\x1b[?1006l');  // 关闭鼠标追踪
-    process.stdout.write('\x1b[?1049l');  // 退出 alt screen
+    this.write('\x1b[?25h');    // 显示光标
+    this.write('\x1b[?1000l\x1b[?1006l');  // 关闭鼠标追踪
+    this.write('\x1b[?1049l');  // 退出 alt screen
 
     if (this._onResize) {
       process.stdout.removeListener('resize', this._onResize);
@@ -81,42 +85,42 @@ class Layout {
    * 光标定位
    */
   moveTo(row, col) {
-    process.stdout.write(`\x1b[${row};${col || 1}H`);
+    this.write(`\x1b[${row};${col || 1}H`);
   }
 
   /**
    * 清除当前行
    */
   clearLine() {
-    process.stdout.write('\x1b[2K');
+    this.write('\x1b[2K');
   }
 
   /**
    * 清除从光标到行尾
    */
   clearToEndOfLine() {
-    process.stdout.write('\x1b[K');
+    this.write('\x1b[K');
   }
 
   /**
    * 隐藏光标
    */
   hideCursor() {
-    process.stdout.write('\x1b[?25l');
+    this.write('\x1b[?25l');
   }
 
   /**
    * 显示光标
    */
   showCursor() {
-    process.stdout.write('\x1b[?25h');
+    this.write('\x1b[?25h');
   }
 
   /**
    * 清屏（一次性清屏，避免逐行清除造成的闪烁）
    */
   clearScreen() {
-    process.stdout.write('\x1b[2J');
+    this.write('\x1b[2J');
     this.hideCursor();
   }
 
@@ -145,6 +149,37 @@ class Layout {
   }
 
   /**
+   * 写入终端（支持缓冲合并）
+   * 在 startBuf/endBuf 之间调用时，输出被缓冲到 _writeBuf
+   */
+  write(str) {
+    if (this._buffering) {
+      this._writeBuf += str;
+    } else {
+      process.stdout.write(str);
+    }
+  }
+
+  /**
+   * 开始写缓冲：之后所有 write() 调用都进入缓冲区
+   */
+  startBuf() {
+    this._writeBuf = '';
+    this._buffering = true;
+  }
+
+  /**
+   * 结束写缓冲，返回缓冲区内容
+   * @returns {string} 缓冲的输出
+   */
+  endBuf() {
+    this._buffering = false;
+    const buf = this._writeBuf;
+    this._writeBuf = '';
+    return buf;
+  }
+
+  /**
    * 请求渲染（可被批量合并）
    * @param {Function} renderFn - 渲染函数
    */
@@ -161,14 +196,14 @@ class Layout {
    * 插入行（向上滚动）
    */
   insertLines(n) {
-    process.stdout.write(`\x1b[${n}L`);
+    this.write(`\x1b[${n}L`);
   }
 
   /**
    * 删除行（向下滚动）
    */
   deleteLines(n) {
-    process.stdout.write(`\x1b[${n}M`);
+    this.write(`\x1b[${n}M`);
   }
 
   /**
@@ -176,7 +211,7 @@ class Layout {
    */
   writeAt(row, col, text) {
     this.moveTo(row, col);
-    process.stdout.write(text);
+    this.write(text);
   }
 
   /**

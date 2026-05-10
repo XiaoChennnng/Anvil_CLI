@@ -17,6 +17,8 @@ class MarkdownRenderer {
     this._inTable = false;   // 是否在表格内
     this._codeBlockBuffer = [];  // 代码块内容缓冲
     this._codeBlockLanguage = '';  // 代码块语言标识
+    // 预构建语法高亮主题，避免每次代码块重建 24 个闭包
+    this._syntaxTheme = this._buildSyntaxTheme();
     this._setupRenderer();
   }
 
@@ -71,7 +73,7 @@ class MarkdownRenderer {
    */
   _setupRenderer() {
     const t = this.theme;
-    const syntaxTheme = this._buildSyntaxTheme();
+    const syntaxTheme = this._syntaxTheme;
 
     // 配置 marked 使用 markedTerminal
     // 第二个参数 highlightOptions 传递给内置的 cli-highlight
@@ -158,88 +160,94 @@ class MarkdownRenderer {
   }
 
   /**
-   * 写入 chunk 并渲染（逐行策略）
-   * 简化版本：逐字符累积，只在换行符处渲染整行
+   * 写入 chunk 并渲染（成块行处理）
+   * 用 split 替代逐字符遍历，大幅减少字符串操作
    * @param {string} chunk
    * @returns {string}
    */
   write(chunk) {
+    if (!chunk) {return '';}
     let output = '';
 
-    for (const char of chunk) {
-      this.lineBuffer += char;
+    // 合并到 lineBuffer 后再拆分处理
+    this.lineBuffer += chunk;
 
-      // 遇到换行符，渲染累积的行
-      if (char === '\n') {
-        const line = this.lineBuffer.slice(0, -1); // 移除换行符
-        this.lineBuffer = '';
+    // 如果没有换行符，全部留在 lineBuffer 中
+    const newlineIdx = this.lineBuffer.indexOf('\n');
+    if (newlineIdx === -1) {return '';}
 
-        if (!line.trim()) {
-          // 空行 → 如果正在表格中，触发表格刷新
-          if (this._inTable) {
-            const tableOutput = this._flushTable();
-            if (tableOutput) {output += tableOutput + '\n';}
-          }
-          // 空行 → 如果正在代码块中，累积到代码块缓冲
-          if (this._inCodeBlock) {
-            this._codeBlockBuffer.push('');
-          }
-          continue;
-        }
+    // 按换行拆分，最后一段是可能不完整的行
+    const lines = this.lineBuffer.split('\n');
+    // 最后一段没有换行符的留在 lineBuffer
+    this.lineBuffer = lines.pop() || '';
 
-        const trimmed = line.trim();
-
-        // 检测代码块开始: ``` 后面跟语言标识
-        if (/^```/.test(trimmed) && trimmed !== '```') {
-          // 代码块结束之前，先flush之前累积的代码块内容（如果有）
-          if (this._inCodeBlock && this._codeBlockBuffer.length > 0) {
-            const codeOutput = this._highlightCodeBlock();
-            output += codeOutput;
-            this._codeBlockBuffer = [];
-          }
-          // 开始新的代码块
-          this._inCodeBlock = true;
-          this._codeBlockLanguage = trimmed.slice(3).trim() || 'plaintext';
-          this._codeBlockBuffer = [];
-          continue;
-        }
-
-        // 检测代码块结束: 只有单独的 ```
-        if (this._inCodeBlock && trimmed === '```') {
-          // 用 cli-highlight 处理累积的代码块内容
-          const codeOutput = this._highlightCodeBlock();
-          output += codeOutput;
-          this._codeBlockBuffer = [];
-          this._inCodeBlock = false;
-          this._codeBlockLanguage = '';
-          continue;
-        }
-
-        // 如果在代码块内，累积内容到缓冲
-        if (this._inCodeBlock) {
-          this._codeBlockBuffer.push(line);
-          continue;
-        }
-
-        // 检测表格行：trim 后以 | 开头且包含至少一个 |
-        const isTableRow = trimmed.startsWith('|') && trimmed.indexOf('|', 1) !== -1;
-
-        if (isTableRow) {
-          this._tableBuffer.push(line);
-          this._inTable = true;
-          continue;
-        }
-
-        // 如果在表格中，当前行不是表格行 → 表格结束，刷新缓冲
+    for (const line of lines) {
+      // 处理每一行（不含换行符）
+      if (!line.trim()) {
+        // 空行 → 如果正在表格中，触发表格刷新
         if (this._inTable) {
           const tableOutput = this._flushTable();
           if (tableOutput) {output += tableOutput + '\n';}
         }
-
-        const rendered = this._renderLine(line, this._inCodeBlock);
-        if (rendered) {
-          output += rendered + '\n';
+        // 空行 → 如果正在代码块中，累积到代码块缓冲
+        if (this._inCodeBlock) {
+          this._codeBlockBuffer.push('');
         }
+        continue;
+      }
+
+      const trimmed = line.trim();
+
+      // 检测代码块开始: ``` 后面跟语言标识
+      if (/^```/.test(trimmed) && trimmed !== '```') {
+        // 代码块结束之前，先flush之前累积的代码块内容（如果有）
+        if (this._inCodeBlock && this._codeBlockBuffer.length > 0) {
+          const codeOutput = this._highlightCodeBlock();
+          output += codeOutput;
+          this._codeBlockBuffer = [];
+        }
+        // 开始新的代码块
+        this._inCodeBlock = true;
+        this._codeBlockLanguage = trimmed.slice(3).trim() || 'plaintext';
+        this._codeBlockBuffer = [];
+        continue;
+      }
+
+      // 检测代码块结束: 只有单独的 ```
+      if (this._inCodeBlock && trimmed === '```') {
+        // 用 cli-highlight 处理累积的代码块内容
+        const codeOutput = this._highlightCodeBlock();
+        output += codeOutput;
+        this._codeBlockBuffer = [];
+        this._inCodeBlock = false;
+        this._codeBlockLanguage = '';
+        continue;
+      }
+
+      // 如果在代码块内，累积内容到缓冲
+      if (this._inCodeBlock) {
+        this._codeBlockBuffer.push(line);
+        continue;
+      }
+
+      // 检测表格行：trim 后以 | 开头且包含至少一个 |
+      const isTableRow = trimmed.startsWith('|') && trimmed.indexOf('|', 1) !== -1;
+
+      if (isTableRow) {
+        this._tableBuffer.push(line);
+        this._inTable = true;
+        continue;
+      }
+
+      // 如果在表格中，当前行不是表格行 → 表格结束，刷新缓冲
+      if (this._inTable) {
+        const tableOutput = this._flushTable();
+        if (tableOutput) {output += tableOutput + '\n';}
+      }
+
+      const rendered = this._renderLine(line, this._inCodeBlock);
+      if (rendered) {
+        output += rendered + '\n';
       }
     }
 
@@ -262,7 +270,7 @@ class MarkdownRenderer {
     try {
       const highlighted = highlight(code, {
         language: this._codeBlockLanguage || 'plaintext',
-        theme: this._buildSyntaxTheme(),
+        theme: this._syntaxTheme,
         ignoreIllegals: true,
       });
       // 分割高亮后的内容，逐行输出
@@ -287,6 +295,76 @@ class MarkdownRenderer {
   }
 
   /**
+   * 快速检测行是否包含 markdown 语法
+   * 纯文本行直接跳过 marked.parse()，节省约 100x 开销
+   * 保守检测，宁可误判也不要漏掉 markdown 语法
+   * @param {string} line
+   * @returns {boolean}
+   */
+  _hasMarkdownSyntax(line) {
+    const len = line.length;
+    if (len === 0) {return false;}
+
+    let i = 0;
+    // 跳过行首空白
+    while (i < len && line[i] === ' ') {i++;}
+
+    if (i >= len) {return false;}
+
+    const first = line[i];
+
+    // 标题 # 或引用 >
+    if (first === '#' || first === '>') {return true;}
+
+    // 列表标记：- * + 后跟空格，或数字. 数字)
+    if (first === '-' || first === '*' || first === '+') {
+      if (i + 1 < len && line[i + 1] === ' ') {return true;}
+    }
+    if (first >= '0' && first <= '9') {
+      let j = i;
+      while (j < len && line[j] >= '0' && line[j] <= '9') {j++;}
+      if (j < len && (line[j] === '.' || line[j] === ')')) {return true;}
+    }
+
+    // 表格行
+    if (first === '|') {
+      if (line.indexOf('|', i + 1) !== -1) {return true;}
+    }
+
+    // 代码围栏（连续三个以上反引号或波浪号）
+    if (first === '`' || first === '~') {
+      let count = 0;
+      while (i + count < len && line[i + count] === first) {count++;}
+      if (count >= 3) {return true;}
+    }
+
+    // 水平线（三个以上 - * _）
+    if (first === '-' || first === '*' || first === '_') {
+      let count = 0;
+      while (i + count < len && (line[i + count] === '-' || line[i + count] === '*' || line[i + count] === '_')) {
+        count++;
+      }
+      // 如果行里还有空格分隔，也算水平线
+      if (count >= 3) {
+        const rest = line.slice(i + count).trim();
+        if (rest === '' || /^[\s\-*_]+$/.test(rest)) {return true;}
+      }
+    }
+
+    // 行内语法检测（非行首位置）
+    // 反引号 `` 行内代码
+    if (line.indexOf('`') !== -1) {return true;}
+    // 链接 [ ]( ) 或图片 ![
+    if (line.indexOf('[') !== -1 || line.indexOf('!') !== -1) {return true;}
+    // 粗体 ** 或 __
+    if (line.indexOf('**') !== -1 || line.indexOf('__') !== -1) {return true;}
+    // 删除线 ~~
+    if (line.indexOf('~~') !== -1) {return true;}
+
+    return false;
+  }
+
+  /**
    * 渲染单行 markdown
    * @param {string} line
    * @param {boolean} inCodeBlock - 是否在代码块内
@@ -308,6 +386,11 @@ class MarkdownRenderer {
     // 如果在代码块内，使用灰色输出（更接近终端编辑器风格）
     if (inCodeBlock) {
       return chalk.hex(this.theme.colors.textMuted)(line);
+    }
+
+    // 纯文本行快速 bypass：跳过 marked.parse()（约 100x 快）
+    if (!this._hasMarkdownSyntax(line)) {
+      return chalk.hex(this.theme.colors.text)(line);
     }
 
     // 检测是否是代码块标记行

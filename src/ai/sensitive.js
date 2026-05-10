@@ -18,8 +18,10 @@ const SENSITIVE_PATTERNS = [
   },
   {
     name: 'PRIVATE_KEY',
-    pattern: /-----BEGIN( RSA| EC| DSA| OPENSSH|) PRIVATE KEY-----[^]*?-----END( RSA| EC| DSA| OPENSSH|) PRIVATE KEY-----/g,
+    // 使用字符串方法处理，避免 [^]*? 在无 END 标记时的灾难性回溯
+    pattern: null,
     replacement: '<ANVIL_REDACTED:PRIVATE_KEY>',
+    useStringMethod: true,
   },
   {
     name: 'PASSWORD',
@@ -45,6 +47,57 @@ const SENSITIVE_PATTERNS = [
   },
 ];
 
+/**
+ * 用字符串方法检测并替换 PRIVATE KEY 块（避免正则灾难性回溯）
+ */
+function _redactPrivateKeys(text) {
+  let sanitized = text;
+  let count = 0;
+  let result = '';
+  let lastPos = 0;
+  let searchPos = 0;
+
+  while (true) {
+    const beginIdx = sanitized.indexOf('-----BEGIN', searchPos);
+    if (beginIdx === -1) {break;}
+
+    // 确认是 PRIVATE KEY 块（不是 CERTIFICATE 等）
+    const afterBegin = sanitized.substring(beginIdx, beginIdx + 60);
+    if (!afterBegin.includes('PRIVATE KEY-----')) {
+      searchPos = beginIdx + 10;
+      continue;
+    }
+
+    const endIdx = sanitized.indexOf('-----END', beginIdx + 10);
+    if (endIdx === -1) {
+      // 没有 END 标记，剩余内容直接追加
+      result += sanitized.substring(lastPos);
+      break;
+    }
+
+    // 确认 END 标记匹配
+    const afterEnd = sanitized.substring(endIdx, endIdx + 60);
+    if (!afterEnd.includes('PRIVATE KEY-----')) {
+      searchPos = endIdx + 10;
+      continue;
+    }
+
+    // 定位 KEY 块的真正结尾
+    const keyEnd = sanitized.indexOf('-----', endIdx + 8);
+    const blockEnd = keyEnd !== -1 ? keyEnd + 5 : endIdx + 30;
+
+    result += sanitized.substring(lastPos, beginIdx);
+    result += '<ANVIL_REDACTED:PRIVATE_KEY>';
+    lastPos = blockEnd;
+    searchPos = blockEnd;
+    count++;
+  }
+
+  if (count === 0) {return { sanitized, count: 0 };}
+  result += sanitized.substring(lastPos);
+  return { sanitized: result, count };
+}
+
 function detectAndReplace(text) {
   if (!text || typeof text !== 'string') {
     return { sanitized: text || '', detections: [] };
@@ -54,6 +107,16 @@ function detectAndReplace(text) {
   const detections = [];
 
   for (const rule of SENSITIVE_PATTERNS) {
+    if (rule.useStringMethod) {
+      // 字符串方法处理（PRIVATE_KEY），避免灾难性回溯
+      const { sanitized: s, count } = _redactPrivateKeys(sanitized);
+      if (count > 0) {
+        detections.push({ type: rule.name, count });
+        sanitized = s;
+      }
+      continue;
+    }
+
     const matches = sanitized.match(rule.pattern);
     if (matches) {
       detections.push({

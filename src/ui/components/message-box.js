@@ -25,6 +25,31 @@ class MessageBox {
     this._lastRenderedVisibleLines = [];
     this._responseStarted = false;  // 标志：响应是否已开始输出
     this._firstContentBlock = true;  // 标志：是否第一个内容块（需要加 ● 前缀）
+    // renderedLines 上限控制
+    this.MAX_RENDERED_LINES = 2000;
+    // 可见长度缓存（按字符串）
+    this._visibleLengthCache = new Map();
+    // 换行缓存（按 str|maxWidth）
+    this._wrapLineCache = new Map();
+    // CJK 字符判定缓存
+    this._cjkCache = new Map();
+  }
+
+  /**
+   * 修剪 renderedLines 防止无限增长
+   * 保留最后 N 行，丢弃最早的行
+   */
+  _trimRenderedLines() {
+    if (this.renderedLines.length > this.MAX_RENDERED_LINES) {
+      const excess = this.renderedLines.length - this.MAX_RENDERED_LINES;
+      this.renderedLines.splice(0, excess);
+      // 清空增量渲染缓存（行位置变了）
+      this._lastRenderedVisibleLines = [];
+      // scrollOffset 也做相应调整
+      if (this.scrollOffset > 0) {
+        this.scrollOffset = Math.max(0, this.scrollOffset - excess);
+      }
+    }
   }
 
   addUserMessage(content) {
@@ -203,6 +228,9 @@ class MessageBox {
    * 将所有输出合并为一次 write 调用，避免多次终端操作造成的闪烁
    */
   render() {
+    // 渲染前检查是否需要裁剪 renderedLines
+    this._trimRenderedLines();
+
     const { messageStartRow, messageWidth, messageViewportHeight } = this.layout;
     const t = this.theme;
 
@@ -214,9 +242,9 @@ class MessageBox {
       const hint = chalk.bgHex(t.colors.backgroundSecondary).hex(t.colors.textMuted)(
         ` ↑ ${this.scrollOffset} 行之前的内容 · 按 PageDown 继续向下查看 `
       );
-      output += `\x1b[${messageStartRow};1H\x1b[K${hint}${' '.repeat(Math.max(0, messageWidth - this._visibleLength(hint)))}`;
+      output += `\x1b[${messageStartRow};1H${hint}${' '.repeat(Math.max(0, messageWidth - this._visibleLength(hint)))}`;
     } else {
-      output += `\x1b[${messageStartRow};1H\x1b[K${' '.repeat(messageWidth)}`;
+      output += `\x1b[${messageStartRow};1H${' '.repeat(messageWidth)}`;
     }
 
     // Header: Logo + 版本（opencode 风格: ⌬ Anvil）
@@ -226,8 +254,8 @@ class MessageBox {
     const headerLine = `  ${icon}  ${ver}  ${chalk.dim('│')}  ${help}`;
     const headerPad = ' '.repeat(Math.max(0, messageWidth - this._visibleLength(headerLine)));
 
-    output += `\x1b[${messageStartRow + 1};1H\x1b[K${headerLine}${headerPad}`;
-    output += `\x1b[${messageStartRow + 2};1H\x1b[K${' '.repeat(messageWidth)}`;
+    output += `\x1b[${messageStartRow + 1};1H${headerLine}${headerPad}`;
+    output += `\x1b[${messageStartRow + 2};1H${' '.repeat(messageWidth)}`;
 
     // 计算可见行
     const viewportStart = messageStartRow + 3;
@@ -269,9 +297,9 @@ class MessageBox {
           // 用空格填充到 messageWidth，确保不侵入侧边栏区域
           const visibleLen = this._visibleLength(line);
           const padding = messageWidth - Math.min(visibleLen, messageWidth);
-          output += `\x1b[${row};1H\x1b[K${line}${' '.repeat(Math.max(0, padding))}`;
+          output += `\x1b[${row};1H${line}${' '.repeat(Math.max(0, padding))}`;
         } else {
-          output += `\x1b[${row};1H\x1b[K${' '.repeat(messageWidth)}`;
+          output += `\x1b[${row};1H${' '.repeat(messageWidth)}`;
         }
         // 更新缓存
         if (i < this._lastRenderedVisibleLines.length) {
@@ -286,13 +314,12 @@ class MessageBox {
     if (displayLines.length < this._lastRenderedVisibleLines.length) {
       for (let i = displayLines.length; i < this._lastRenderedVisibleLines.length; i++) {
         const row = viewportStart + i;
-        output += `\x1b[${row};1H\x1b[K${' '.repeat(messageWidth)}`;
+        output += `\x1b[${row};1H${' '.repeat(messageWidth)}`;
       }
       this._lastRenderedVisibleLines = this._lastRenderedVisibleLines.slice(0, displayLines.length);
     }
 
-    // 一次性输出所有内容
-    process.stdout.write(output);
+    return output;
   }
 
   /**
@@ -380,11 +407,18 @@ class MessageBox {
   }
 
   /**
-   * 判断是否为 CJK 双倍宽字符
+   * 判断是否为 CJK 双倍宽字符（带缓存）
    */
   _isCJK(char) {
+    if (char.length === 0) {return false;}
+    // 快速路径：ASCII 字符不是 CJK
     const code = char.charCodeAt(0);
-    return (code >= 0x1100 && code <= 0x115F) ||
+    if (code < 0x1100) {return false;}
+
+    // 查缓存
+    if (this._cjkCache.has(code)) {return this._cjkCache.get(code);}
+
+    const result = (code <= 0x115F) ||
       (code >= 0x2E80 && code <= 0xA4CF) ||
       (code >= 0xAC00 && code <= 0xD7AF) ||
       (code >= 0xF900 && code <= 0xFAFF) ||
@@ -392,30 +426,64 @@ class MessageBox {
       (code >= 0xFF01 && code <= 0xFF60) ||
       (code >= 0xFFE0 && code <= 0xFFE6) ||
       (code >= 0x3000 && code <= 0x303F);
+
+    // 限制缓存大小
+    if (this._cjkCache.size < 200) {
+      this._cjkCache.set(code, result);
+    }
+    return result;
   }
 
   /**
-   * 计算字符串的可见长度（支持 CJK 双倍宽字符）
+   * 计算字符串的可见长度（支持 CJK 双倍宽字符，带缓存）
    */
   _visibleLength(str) {
+    if (!str) {return 0;}
+
+    // 查缓存
+    if (this._visibleLengthCache.has(str)) {
+      return this._visibleLengthCache.get(str);
+    }
+
     let len = 0;
     let inEscape = false;
     for (let i = 0; i < str.length; i++) {
-      if (str[i] === '\x1b') { inEscape = true; continue; }
-      if (inEscape) { if (str[i] === 'm') {inEscape = false;} continue; }
-      len += this._isCJK(str[i]) ? 2 : 1;
+      const ch = str[i];
+      if (ch === '\x1b') { inEscape = true; continue; }
+      if (inEscape) { if (ch === 'm') {inEscape = false;} continue; }
+      len += this._isCJK(ch) ? 2 : 1;
+    }
+
+    // 限制缓存大小
+    if (this._visibleLengthCache.size < 1000) {
+      this._visibleLengthCache.set(str, len);
     }
     return len;
   }
 
   /**
-   * 按可见字符宽度换行（支持 ANSI 转义序列状态延续 + CJK 双倍宽字符）
+   * 按可见字符宽度换行（支持 ANSI 转义序列状态延续 + CJK 双倍宽字符，带缓存）
    * @param {string} str - 输入字符串（含 ANSI 码）
    * @param {number} maxWidth - 最大可见字符数
    * @returns {string[]} 换行后的行数组
    */
   _wrapLine(str, maxWidth) {
-    if (maxWidth <= 0 || this._visibleLength(str) <= maxWidth) {return [str];}
+    if (maxWidth <= 0) {return [str];}
+
+    // 查缓存
+    const cacheKey = str + '|' + maxWidth;
+    if (this._wrapLineCache.has(cacheKey)) {
+      return this._wrapLineCache.get(cacheKey);
+    }
+
+    // 快速路径：不需要换行
+    if (this._visibleLength(str) <= maxWidth) {
+      const result = [str];
+      if (this._wrapLineCache.size < 500) {
+        this._wrapLineCache.set(cacheKey, result);
+      }
+      return result;
+    }
     const lines = [];
     let visibleWidth = 0;
     let currentLine = '';
@@ -461,6 +529,10 @@ class MessageBox {
     }
 
     if (currentLine || openAnsi) {lines.push(currentLine || openAnsi);}
+    // 存缓存
+    if (this._wrapLineCache.size < 500) {
+      this._wrapLineCache.set(cacheKey, lines);
+    }
     return lines;
   }
 
@@ -476,6 +548,9 @@ class MessageBox {
     this._lastRenderedLine = null;
     this._lastRenderedVisibleLines = [];
     this.renderer.markdown.reset();
+    // 渲染相关缓存
+    this._visibleLengthCache.clear();
+    this._wrapLineCache.clear();
   }
 
   /**
@@ -489,6 +564,8 @@ class MessageBox {
     this._showScrollHint = false;
     this._lastRenderedLine = null;
     this._lastRenderedVisibleLines = [];
+    this._visibleLengthCache.clear();
+    this._wrapLineCache.clear();
     this.reset();
   }
 }

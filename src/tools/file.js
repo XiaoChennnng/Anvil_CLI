@@ -1,13 +1,17 @@
 'use strict';
 
 const fs = require('fs');
+const fsp = require('fs/promises');
 const path = require('path');
 const { generateDiff } = require('../ui/diff');
+const { minimatch } = require('minimatch');
 
 function isPathSafe(targetPath, projectDir) {
   const relative = path.relative(projectDir, targetPath);
   return !relative.startsWith('..') && !path.isAbsolute(relative);
 }
+
+const MAX_FILE_READ_SIZE = 2 * 1024 * 1024; // 2MB — 大文件安全读取上限
 
 async function readFile(params, context) {
   const { filePath } = params;
@@ -20,23 +24,36 @@ async function readFile(params, context) {
   }
 
   try {
-    if (!fs.existsSync(resolvedPath)) {
-      return { error: `文件不存在: ${filePath}` };
+    // 异步打开文件，失败抛 ENOENT
+    let fileHandle;
+    let stat;
+    try {
+      fileHandle = await fsp.open(resolvedPath, 'r');
+      stat = await fileHandle.stat();
+    } catch (openErr) {
+      if (openErr.code === 'ENOENT') {
+        return { error: `文件不存在: ${filePath}` };
+      }
+      throw openErr;
     }
 
     // 二进制文件检测（读取前512字节检查 \0）
-    const fd = fs.openSync(resolvedPath, 'r');
-    const buffer = Buffer.alloc(512);
-    const bytesRead = fs.readSync(fd, buffer, 0, 512, 0);
-    fs.closeSync(fd);
-
-    const isBinary = buffer.slice(0, bytesRead).includes(0);
+    let isBinary = false;
+    if (stat.size > 0) {
+      const readSize = Math.min(512, stat.size);
+      const buffer = Buffer.alloc(readSize);
+      const { bytesRead } = await fileHandle.read(buffer, 0, readSize, 0);
+      await fileHandle.close();
+      isBinary = bytesRead > 0 && buffer.includes(0);
+    } else {
+      await fileHandle.close();
+    }
 
     if (isBinary) {
       return {
         filename: path.basename(filePath),
         type: 'binary',
-        size: fs.statSync(resolvedPath).size,
+        size: stat.size,
         note: '二进制文件，仅返回文件名',
       };
     }
@@ -45,21 +62,29 @@ async function readFile(params, context) {
     const maxLines = params.maxLines || params.limit || 0;
     let content;
     if (maxLines > 0) {
-      const lines = fs.readFileSync(resolvedPath, 'utf8').split(/\r?\n/);
+      const allContent = await fsp.readFile(resolvedPath, 'utf8');
+      const lines = allContent.split(/\r?\n/);
       const startLine = params.offset || 0;
       const selected = lines.slice(startLine, startLine + maxLines);
       content = selected.join('\n');
     } else {
-      content = fs.readFileSync(resolvedPath, 'utf8');
+      content = await fsp.readFile(resolvedPath, 'utf8');
+      if (content.length > MAX_FILE_READ_SIZE) {
+        content = content.substring(0, MAX_FILE_READ_SIZE)
+          + `\n\n... (文件过大，仅读取前 ${MAX_FILE_READ_SIZE} 字符，共 ${stat.size} 字节)`;
+      }
     }
 
     return {
       filename: path.basename(filePath),
       filePath,
       content,
-      size: fs.statSync(resolvedPath).size,
+      size: stat.size,
     };
   } catch (err) {
+    if (err.code === 'ENOENT') {
+      return { error: `文件不存在: ${filePath}` };
+    }
     return { error: `读取文件失败 ${filePath}: ${err.message}` };
   }
 }
@@ -81,14 +106,15 @@ async function writeFile(params, context) {
 
   try {
     // 确保父目录存在
-    fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
+    await fsp.mkdir(path.dirname(resolvedPath), { recursive: true });
 
     // 文件冲突检测（P1: mtime 检查）
     if (params.checkConflict && context.fileTimestamps) {
       const prevTimestamp = context.fileTimestamps[filePath];
       if (prevTimestamp) {
         try {
-          const current = fs.statSync(resolvedPath).mtimeMs;
+          const currentStat = await fsp.stat(resolvedPath);
+          const current = currentStat.mtimeMs;
           if (current > prevTimestamp) {
             return {
               conflict: true,
@@ -104,14 +130,14 @@ async function writeFile(params, context) {
 
     // 写入
     const writeMode = mode === 'append' ? 'a' : 'w';
-    fs.writeFileSync(resolvedPath, content, { encoding: 'utf8', flag: writeMode });
+    await fsp.writeFile(resolvedPath, content, { encoding: 'utf8', flag: writeMode });
 
     // 记录时间戳用于冲突检测
     if (context.fileTimestamps) {
       context.fileTimestamps[filePath] = Date.now();
     }
 
-    const stat = fs.statSync(resolvedPath);
+    const stat = await fsp.stat(resolvedPath);
     return {
       success: true,
       filePath,
@@ -143,14 +169,27 @@ async function editFile(params, context) {
   }
 
   try {
-    if (!fs.existsSync(resolvedPath)) {
-      return { error: `文件不存在: ${filePath}` };
+    let content;
+    try {
+      content = await fsp.readFile(resolvedPath, 'utf8');
+    } catch (readErr) {
+      if (readErr.code === 'ENOENT') {
+        return { error: `文件不存在: ${filePath}` };
+      }
+      throw readErr;
     }
 
-    const content = fs.readFileSync(resolvedPath, 'utf8');
+    // 单次遍历：查找所有匹配位置（替代 split 计数 + 循环查找 + 再次 indexOf 的三次扫描）
+    const positions = [];
+    let pos = 0;
+    while (true) {
+      const idx = content.indexOf(oldString, pos);
+      if (idx === -1) {break;}
+      positions.push(idx);
+      pos = idx + oldString.length;
+    }
 
-    // 计算匹配次数
-    const count = content.split(oldString).length - 1;
+    const count = positions.length;
 
     if (count === 0) {
       return {
@@ -160,16 +199,10 @@ async function editFile(params, context) {
     }
 
     if (count > 1 && !replaceAll) {
-      // 找到所有匹配位置
-      const matchLines = [];
-      let searchFrom = 0;
-      for (let i = 0; i < count; i++) {
-        const idx = content.indexOf(oldString, searchFrom);
-        if (idx === -1) {break;}
-        const lineNum = content.substring(0, idx).split('\n').length;
-        matchLines.push(lineNum);
-        searchFrom = idx + oldString.length;
-      }
+      // 找到所有匹配位置的行号
+      const matchLines = positions.map(idx =>
+        content.substring(0, idx).split('\n').length
+      );
 
       return {
         error: `找到 ${count} 处匹配（行: ${matchLines.join(', ')}）。请提供更多上下文缩小范围，或设置 replaceAll=true 替换所有`,
@@ -182,24 +215,24 @@ async function editFile(params, context) {
     let newContent;
     let replacedCount;
     if (replaceAll) {
-      newContent = content.split(oldString).join(newString);
+      newContent = content.replaceAll(oldString, newString);
       replacedCount = count;
     } else {
-      const idx = content.indexOf(oldString);
+      const idx = positions[0];
       newContent = content.substring(0, idx) + newString + content.substring(idx + oldString.length);
       replacedCount = 1;
     }
 
     // 写回文件
-    fs.writeFileSync(resolvedPath, newContent, 'utf8');
+    await fsp.writeFile(resolvedPath, newContent, 'utf8');
 
     // 记录时间戳
     if (context.fileTimestamps) {
       context.fileTimestamps[filePath] = Date.now();
     }
 
-    // 计算修改的行范围
-    const beforeLines = content.substring(0, content.indexOf(oldString)).split('\n').length;
+    // 计算修改的行范围（复用第一个匹配位置，避免再次 indexOf）
+    const beforeLines = content.substring(0, positions[0]).split('\n').length;
     const oldLines = oldString.split('\n').length;
     const newLines = newString.split('\n').length;
 
@@ -243,12 +276,14 @@ async function deleteFile(params, context) {
   }
 
   try {
-    if (!fs.existsSync(resolvedPath)) {
+    let stat;
+    try {
+      stat = await fsp.stat(resolvedPath);
+    } catch {
       return { error: `文件不存在: ${filePath}` };
     }
 
-    const stat = fs.statSync(resolvedPath);
-    fs.unlinkSync(resolvedPath);
+    await fsp.unlink(resolvedPath);
 
     return {
       success: true,
@@ -277,7 +312,7 @@ async function createDirectory(params, context) {
   }
 
   try {
-    fs.mkdirSync(resolvedPath, { recursive: true });
+    await fsp.mkdir(resolvedPath, { recursive: true });
     return { success: true, path: dirPath };
   } catch (err) {
     return { error: `创建目录失败 ${dirPath}: ${err.message}` };
@@ -304,12 +339,13 @@ async function listDirectory(params, context) {
   }
 
   try {
-    if (!fs.existsSync(resolvedPath)) {
+    let dirStat;
+    try {
+      dirStat = await fsp.stat(resolvedPath);
+    } catch {
       return { error: `目录不存在: ${dirPath}` };
     }
-
-    const stat = fs.statSync(resolvedPath);
-    if (!stat.isDirectory()) {
+    if (!dirStat.isDirectory()) {
       return { error: `不是目录: ${dirPath}` };
     }
 
@@ -317,10 +353,10 @@ async function listDirectory(params, context) {
     const recursive = params.recursive || false;
     const pattern = params.pattern;
 
-    function scanDir(dirPath, depth) {
+    const scanDir = async (dirPath, depth) => {
       if (depth > maxDepth) {return [];}
 
-      const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+      const entries = await fsp.readdir(dirPath, { withFileTypes: true });
       const result = [];
 
       for (const entry of entries) {
@@ -332,14 +368,11 @@ async function listDirectory(params, context) {
 
         // 模式过滤
         if (pattern && depth === 0) {
-          const minimatch = require('minimatch');
           if (!minimatch(entry.name, pattern)) {continue;}
         }
 
-        const entryStat = fs.statSync(fullPath);
-
         if (entry.isDirectory()) {
-          const children = recursive ? scanDir(fullPath, depth + 1) : [];
+          const children = recursive ? await scanDir(fullPath, depth + 1) : [];
           result.push({
             name: entry.name,
             path: relativePath,
@@ -351,8 +384,7 @@ async function listDirectory(params, context) {
             name: entry.name,
             path: relativePath,
             type: 'file',
-            size: entryStat.size,
-            modified: entryStat.mtimeMs,
+            size: 0,
           });
         }
       }
@@ -364,9 +396,9 @@ async function listDirectory(params, context) {
       });
 
       return result;
-    }
+    };
 
-    const entries = scanDir(resolvedPath, 0);
+    const entries = await scanDir(resolvedPath, 0);
 
     return {
       path: dirPath,
@@ -400,7 +432,7 @@ async function globFiles(params, context) {
 
   try {
     const glob = require('glob');
-    const files = glob.sync(pattern, {
+    const files = await glob.glob(pattern, {
       cwd: resolvedCwd,
       ignore: ignore || ['node_modules/**', '.git/**'],
       nodir: true,
@@ -447,14 +479,20 @@ async function searchInFiles(params, context) {
     const ctx = contextLines || 0;
     const regex = new RegExp(pattern, 'gi');
 
-    function searchFile(filePath) {
+    const searchFile = async (filePath) => {
       if (results.length >= max) {return;}
 
       // 跳过二进制文件和大文件
-      const stat = fs.statSync(filePath);
+      let stat;
+      try {
+        stat = await fsp.stat(filePath);
+      } catch { return; }
       if (stat.size > 1024 * 1024) {return;} // 跳过 >1MB
 
-      const content = fs.readFileSync(filePath, 'utf8');
+      let content;
+      try {
+        content = await fsp.readFile(filePath, 'utf8');
+      } catch { return; }
       const lines = content.split('\n');
 
       for (let i = 0; i < lines.length; i++) {
@@ -481,12 +519,15 @@ async function searchInFiles(params, context) {
         // 重置 regex lastIndex
         regex.lastIndex = 0;
       }
-    }
+    };
 
-    function walkDir(dir) {
+    const walkDir = async (dir) => {
       if (results.length >= max) {return;}
 
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      let entries;
+      try {
+        entries = await fsp.readdir(dir, { withFileTypes: true });
+      } catch { return; }
 
       for (const entry of entries) {
         if (results.length >= max) {break;}
@@ -497,20 +538,19 @@ async function searchInFiles(params, context) {
         if (entry.name === 'node_modules' || entry.name === '.git') {continue;}
 
         if (entry.isDirectory()) {
-          walkDir(fullPath);
+          await walkDir(fullPath);
         } else {
           // 文件过滤
           if (include) {
-            const minimatch = require('minimatch');
             if (!minimatch(entry.name, include)) {continue;}
           }
 
-          searchFile(fullPath);
+          await searchFile(fullPath);
         }
       }
-    }
+    };
 
-    walkDir(resolvedCwd);
+    await walkDir(resolvedCwd);
 
     return {
       pattern,
@@ -551,18 +591,25 @@ async function moveFile(params, context) {
   }
 
   try {
-    if (!fs.existsSync(resolvedSource)) {
+    try {
+      await fsp.access(resolvedSource, fs.constants.F_OK);
+    } catch {
       return { error: `源文件不存在: ${source}` };
     }
 
-    if (fs.existsSync(resolvedDest) && !overwrite) {
-      return { error: `目标已存在: ${destination}。设置 overwrite=true 覆盖` };
+    try {
+      await fsp.access(resolvedDest, fs.constants.F_OK);
+      if (!overwrite) {
+        return { error: `目标已存在: ${destination}。设置 overwrite=true 覆盖` };
+      }
+    } catch {
+      // 目标不存在，可以继续
     }
 
     // 确保目标父目录存在
-    fs.mkdirSync(path.dirname(resolvedDest), { recursive: true });
+    await fsp.mkdir(path.dirname(resolvedDest), { recursive: true });
 
-    fs.renameSync(resolvedSource, resolvedDest);
+    await fsp.rename(resolvedSource, resolvedDest);
 
     return {
       success: true,

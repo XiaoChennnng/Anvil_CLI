@@ -69,7 +69,13 @@ function unregisterMCPServerTools(toolRegistry, serverName) {
   _serverToolNames.delete(serverName);
 }
 
+let _wired = false;
+
 function wireMCPEvents(toolRegistry, mcpManager, logger) {
+  // 幂等保护：防止重复绑定事件处理器
+  if (_wired) {return;}
+  _wired = true;
+
   mcpManager.on('server_connected', ({ name, tools }) => {
     registerMCPServerTools(toolRegistry, mcpManager, name, tools);
     if (logger) {

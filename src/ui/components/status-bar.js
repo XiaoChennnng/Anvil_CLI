@@ -276,7 +276,7 @@ class StatusBar {
     statusBar += modelWidget;
 
     output += statusBar;
-    process.stdout.write(output);
+    return output;
   }
 
   /**

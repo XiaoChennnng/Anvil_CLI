@@ -356,8 +356,8 @@ class ChatEngine extends EventEmitter {
         lastSoftWarning = elapsed;
       }
 
-      // 上下文使用率检查——撑爆了先压缩，别硬撑
-      if (this.contextManager) {
+      // 上下文使用率检查——每 3 轮检查一次 + 消息数量大幅增长时额外检查
+      if (this.contextManager && (iterationCount % 3 === 1)) {
         try {
           const compLevel = this.contextManager.getCompressionLevel(this.messages);
           if (compLevel.needsCompression || compLevel.ratio > 0.85) {
@@ -490,26 +490,6 @@ class ChatEngine extends EventEmitter {
         lastUsage = recheckResult.usage || lastUsage;
       }
 
-      // 检查是否有 enter_plan_mode 请求
-      if (this._isEnterPlanModeRequest(result.toolCalls)) {
-        const planModeResult = await this.requestPlanMode('AI 主动请求');
-        if (planModeResult.requested) {
-          // 等待计划生成完成
-          const planResult = await this._agentLoop(this._currentTask);
-          if (planResult.plan) {
-            this._awaitingPlanApproval = true;
-            this._pendingPlan = planResult.plan;
-            await this.savePlanToFile(planResult.plan);
-            return {
-              thinking: fullThinking,
-              content: fullContent,
-              toolCalls: [],
-              usage: lastUsage,
-              plan: planResult.plan,
-            };
-          }
-        }
-      }
     }
 
     return {
@@ -642,31 +622,39 @@ class ChatEngine extends EventEmitter {
             args = {};
           }
 
-          // 执行工具
+          // 执行工具（含超时保护，防止某个工具卡死整个循环）
+          const TOOL_TIMEOUT = 120 * 1000; // 120s
           let result;
+          let toolTimeoutId;
           try {
             if (!this._suppressUI) {this.emit('tool_execute', { name, args });}
-            result = await this.toolRegistry.execute(name, args, {
-              projectDir: this.config.projectDir,
-              logger: this.logger,
-              fileTimestamps: this.fileTimestamps,
-              maxOutputLines: this.config.maxOutputLines || 50,
-              planModeRestricted: this._planMode && !this._planApproved,
-              chatEngine: this,  // 让工具可以访问 chatEngine（如 enter_plan_mode）
-              onOutput: (data, isError) => {
-                if (!this._suppressUI) {this.emit('command_output', data, isError);}
-              },
-              todoManager: this.todoManager,
-              onTodoChange: (todos) => this.emit('todo_change', todos),
-              onQuestion: (params) => {
-                // AskUserQuestion：暂停执行等待用户回答
-                if (this._suppressUI) {return { answers: [] };}
-                return new Promise((resolve) => {
-                  this._pendingQuestionResolve = resolve;
-                  this.emit('question', params);
-                });
-              },
-            });
+            result = await Promise.race([
+              this.toolRegistry.execute(name, args, {
+                projectDir: this.config.projectDir,
+                logger: this.logger,
+                fileTimestamps: this.fileTimestamps,
+                maxOutputLines: this.config.maxOutputLines || 50,
+                planModeRestricted: this._planMode && !this._planApproved,
+                chatEngine: this,  // 让工具可以访问 chatEngine（如 enter_plan_mode）
+                onOutput: (data, isError) => {
+                  if (!this._suppressUI) {this.emit('command_output', data, isError);}
+                },
+                todoManager: this.todoManager,
+                onTodoChange: (todos) => this.emit('todo_change', todos),
+                onQuestion: (params) => {
+                  // AskUserQuestion：暂停执行等待用户回答
+                  if (this._suppressUI) {return { answers: [] };}
+                  return new Promise((resolve) => {
+                    this._pendingQuestionResolve = resolve;
+                    this.emit('question', params);
+                  });
+                },
+              }),
+              new Promise((_, reject) => {
+                toolTimeoutId = setTimeout(() => reject(new Error(`工具执行超时(${TOOL_TIMEOUT / 1000}s)`)), TOOL_TIMEOUT);
+              }),
+            ]);
+            clearTimeout(toolTimeoutId);
             if (!this._suppressUI) {this.emit('tool_result', { name, result, toolCall });}
             // 通知上下文管理器工具调用（用于相位检测 + 文件预取）
             if (this.contextManager && typeof this.contextManager.recordToolCall === 'function') {
@@ -685,10 +673,26 @@ class ChatEngine extends EventEmitter {
           }
 
           // 将工具调用结果加入消息历史（限制大小防止撑爆上下文）
-          let resultStr = JSON.stringify(result);
+          // 先截断大字符串字段再 JSON.stringify，避免大文件/命令输出序列化阻塞 event loop
+          let resultStr;
           const MAX_RESULT_LEN = 4000;
-          if (resultStr.length > MAX_RESULT_LEN) {
-            resultStr = resultStr.slice(0, MAX_RESULT_LEN) + '... (结果过长已截断)';
+          if (result && typeof result === 'object') {
+            const truncFields = ['content', 'output', 'diff'];
+            const truncated = { ...result };
+            for (const field of truncFields) {
+              if (typeof truncated[field] === 'string' && truncated[field].length > MAX_RESULT_LEN) {
+                truncated[field] = truncated[field].slice(0, MAX_RESULT_LEN) + '... (结果过长已截断)';
+              }
+            }
+            resultStr = JSON.stringify(truncated);
+            if (resultStr.length > MAX_RESULT_LEN) {
+              resultStr = resultStr.slice(0, MAX_RESULT_LEN) + '... (结果过长已截断)';
+            }
+          } else {
+            resultStr = JSON.stringify(result);
+            if (resultStr.length > MAX_RESULT_LEN) {
+              resultStr = resultStr.slice(0, MAX_RESULT_LEN) + '... (结果过长已截断)';
+            }
           }
           this.messages.push({
             role: 'tool',
@@ -956,9 +960,9 @@ class ChatEngine extends EventEmitter {
     if (!this.contextManager?.projectDir) {return;}
     const filePath = path.join(this.contextManager.projectDir, 'Anvil.md');
     const header = `# Anvil 计划\n\n_自动生成于 ${new Date().toLocaleString('zh-CN')}_\n\n---\n\n`;
-    const fs = require('fs');
+    const fsp = require('fs/promises');
     try {
-      fs.writeFileSync(filePath, header + planContent, 'utf8');
+      await fsp.writeFile(filePath, header + planContent, 'utf8');
       this._planModeFilePath = filePath;
       this.logger?.info('计划已保存到 Anvil.md', { path: filePath });
     } catch (err) {
@@ -971,11 +975,11 @@ class ChatEngine extends EventEmitter {
    */
   async updatePlanInFile(additionalContent) {
     if (!this._planModeFilePath) {return;}
-    const fs = require('fs');
+    const fsp = require('fs/promises');
     try {
-      const current = fs.readFileSync(this._planModeFilePath, 'utf8');
+      const current = await fsp.readFile(this._planModeFilePath, 'utf8');
       const divider = `\n---\n\n_更新于 ${new Date().toLocaleString('zh-CN')}_\n\n`;
-      fs.writeFileSync(this._planModeFilePath, current + divider + additionalContent, 'utf8');
+      await fsp.writeFile(this._planModeFilePath, current + divider + additionalContent, 'utf8');
     } catch (err) {
       this.logger?.warn('更新 Anvil.md 失败', err.message);
     }
@@ -1079,15 +1083,6 @@ class ChatEngine extends EventEmitter {
       requested: true,
       message: '已开启 Plan Mode，正在生成计划...',
     };
-  }
-
-  /**
-   * 检查工具调用是否请求进入 Plan Mode
-   * @param {Array} toolCalls - 工具调用列表
-   * @returns {boolean}
-   */
-  _isEnterPlanModeRequest(toolCalls) {
-    return toolCalls?.some(tc => tc.function?.name === 'enter_plan_mode');
   }
 
   /**

@@ -8,6 +8,8 @@ class TodoManager {
     this.filePath = options.filePath || path.join(options.projectDir || '.', '.anvil', 'todos.json');
     this.todos = [];
     this.maxTodos = options.maxTodos || 20;
+    this._batchMode = 0;   // 批量模式嵌套计数
+    this._dirty = false;    // 批量模式下需要保存
     this._load();
   }
 
@@ -23,6 +25,10 @@ class TodoManager {
   }
 
   _save() {
+    if (this._batchMode > 0) {
+      this._dirty = true;
+      return;
+    }
     try {
       const dir = path.dirname(this.filePath);
       if (!fs.existsSync(dir)) {
@@ -31,6 +37,18 @@ class TodoManager {
       fs.writeFileSync(this.filePath, JSON.stringify(this.todos, null, 2), 'utf8');
     } catch {
       // 静默失败
+    }
+  }
+
+  beginBatch() {
+    this._batchMode++;
+  }
+
+  endBatch() {
+    if (this._batchMode > 0) {this._batchMode--;}
+    if (this._batchMode === 0 && this._dirty) {
+      this._dirty = false;
+      this._save();
     }
   }
 
@@ -55,9 +73,11 @@ class TodoManager {
 
     this.todos.push(todo);
 
-    // 超出限制时移除最旧的已完成任务
+    // 超出限制时移除最旧的已完成任务（合并保存，避免两次写盘）
     if (this.todos.length > this.maxTodos) {
+      this.beginBatch();
       this._cleanup();
+      this.endBatch();
     }
 
     this._save();
@@ -132,7 +152,8 @@ class TodoManager {
    * @param {Object} filter - 过滤条件
    */
   getAll(filter = {}) {
-    let result = [...this.todos];
+    // 避免无条件完整拷贝：filter 已返回新数组，无需 [...this.todos]
+    let result = this.todos;
 
     if (filter.completed !== undefined) {
       result = result.filter(t => t.completed === filter.completed);
@@ -140,6 +161,11 @@ class TodoManager {
 
     if (filter.source) {
       result = result.filter(t => t.source === filter.source);
+    }
+
+    // 无过滤时拷贝一份再排序，避免污染原始数组
+    if (result === this.todos) {
+      result = [...result];
     }
 
     // 排序：未完成在前，高优先级在前
@@ -266,19 +292,21 @@ class TodoManager {
    * 清理旧的已完成任务
    */
   _cleanup() {
-    // 移除最旧的已完成任务
+    // 移除最旧的已完成任务（直接 splice 避免 remove 触发 _save）
     const completed = this.todos.filter(t => t.completed);
     if (completed.length > 0) {
-      // 按完成时间排序，移除最旧的
       completed.sort((a, b) =>
         new Date(a.completedAt || a.createdAt) - new Date(b.completedAt || b.createdAt)
       );
 
-      // 移除直到数量限制
       while (this.todos.length > this.maxTodos && completed.length > 0) {
         const oldest = completed.shift();
-        this.remove(oldest.id);
+        const idx = this.todos.findIndex(t => t.id === oldest.id);
+        if (idx !== -1) {
+          this.todos.splice(idx, 1);
+        }
       }
+      this._dirty = true;
     }
   }
 

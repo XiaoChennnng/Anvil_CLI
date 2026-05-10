@@ -117,8 +117,21 @@ class AnvilAIClient extends EventEmitter {
     let usage = null;
     let finishReason = null;
 
+    // ─── 流空闲超时检测 ───
+    // AI 响应流可能在任意两 chunk 之间断连且不报错，导致 for-await 永远挂起
+    // 每 10 秒检查一次，超过 120 秒无新 chunk 则自动 abort 触发重试
+    const STREAM_IDLE_TIMEOUT = 120 * 1000;
+    let lastChunkTime = Date.now();
+    const idleTimer = setInterval(() => {
+      if (Date.now() - lastChunkTime > STREAM_IDLE_TIMEOUT) {
+        clearInterval(idleTimer);
+        this._abortController.abort();
+      }
+    }, 10000);
+
     try {
       for await (const chunk of stream) {
+        lastChunkTime = Date.now();
         const delta = chunk.choices?.[0]?.delta;
         const chunkFinishReason = chunk.choices?.[0]?.finish_reason;
 
@@ -166,11 +179,17 @@ class AnvilAIClient extends EventEmitter {
         }
       }
     } catch (err) {
+      clearInterval(idleTimer);
       if (err.name === 'AbortError') {
-        throw new Error('请求已被中断');
+        // 区分用户中断 vs 超时中断
+        if (combinedSignal?.aborted) {
+          throw new Error('请求已被中断');
+        }
+        throw new Error(`AI 响应超时：超过 ${STREAM_IDLE_TIMEOUT / 1000} 秒未收到数据`);
       }
       throw err;
     }
+    clearInterval(idleTimer);
 
     if (currentToolCall) {
       try {

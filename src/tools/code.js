@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const fsp = require('fs/promises');
 const path = require('path');
 
 /**
@@ -23,6 +24,22 @@ function isPathSafe(targetPath, projectDir) {
 function parseSymbols(content, filePath) {
   const lines = content.split('\n');
   const symbols = [];
+
+  // 预计算行起始位置数组（一次 O(n)），替代每符号 content.substring(0, pos).split('\n') 的 O(n*m)
+  const lineStarts = [0];
+  for (let i = 0; i < content.length; i++) {
+    if (content[i] === '\n') {lineStarts.push(i + 1);}
+  }
+
+  // 二分查找行号（O(log n)）
+  function _lineAt(pos) {
+    let lo = 0, hi = lineStarts.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (lineStarts[mid] <= pos) {lo = mid + 1;} else {hi = mid;}
+    }
+    return lo;
+  }
 
   const patterns = [
     // 函数声明: function name(...) { ... }
@@ -52,7 +69,7 @@ function parseSymbols(content, filePath) {
       const name = match[1];
       if (!name) {continue;}
 
-      const lineNum = content.substring(0, match.index).split('\n').length;
+      const lineNum = _lineAt(match.index);
       const lineContent = lines[lineNum - 1]?.trim() || '';
 
       symbols.push({
@@ -89,11 +106,13 @@ async function getDocumentSymbols(params, context) {
   }
 
   try {
-    if (!fs.existsSync(resolvedPath)) {
+    let content;
+    try {
+      content = await fsp.readFile(resolvedPath, 'utf8');
+    } catch {
       return { error: `文件不存在: ${filePath}` };
     }
 
-    const content = fs.readFileSync(resolvedPath, 'utf8');
     const symbols = parseSymbols(content, filePath);
 
     return {
@@ -107,6 +126,40 @@ async function getDocumentSymbols(params, context) {
 }
 
 /**
+ * 通用项目目录遍历（跳过 node_modules/.git，仅遍历代码文件）
+ * 异步版本 — 不阻塞 event loop
+ * @param {string} dir - 起始目录
+ * @param {number} maxDepth - 最大深度
+ * @param {function} fileCallback - (fullPath) => void
+ * @param {string} [include] - 文件类型过滤（如 ".js,.ts"）
+ */
+async function _walkProjectDir(dir, maxDepth, fileCallback, include, stopCheck) {
+  if (stopCheck && stopCheck()) {return;}
+  try {
+    const entries = await fsp.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (stopCheck && stopCheck()) {break;}
+      if (entry.name === 'node_modules' || entry.name === '.git') {continue;}
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (maxDepth > 0) {await _walkProjectDir(fullPath, maxDepth - 1, fileCallback, include, stopCheck);}
+      } else {
+        // 文件类型过滤
+        if (include) {
+          const ext = path.extname(entry.name);
+          const includeExts = include.split(',').map(e => e.trim().replace('*', ''));
+          if (!includeExts.some(e => ext === e || ext === `.${e}`)) {continue;}
+        }
+        const ext = path.extname(entry.name);
+        if (['.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs'].includes(ext)) {
+          await fileCallback(fullPath);
+        }
+      }
+    }
+  } catch {}
+}
+
+/**
  * 查找符号定义位置
  */
 async function findDefinition(params, context) {
@@ -116,9 +169,9 @@ async function findDefinition(params, context) {
   try {
     const results = [];
 
-    function searchFile(filePath) {
+    const searchFile = async (filePath) => {
       try {
-        const content = fs.readFileSync(filePath, 'utf8');
+        const content = await fsp.readFile(filePath, 'utf8');
         const symbols = parseSymbols(content, path.relative(projectDir, filePath));
 
         for (const sym of symbols) {
@@ -134,42 +187,9 @@ async function findDefinition(params, context) {
       } catch {
         // 跳过无法读取的文件
       }
-    }
+    };
 
-    function walkDir(dir, depth = 0) {
-      if (depth > 5 || results.length > 20) {return;}
-
-      try {
-        const entries = fs.readdirSync(dir, { withFileTypes: true });
-
-        for (const entry of entries) {
-          if (entry.name === 'node_modules' || entry.name === '.git') {continue;}
-
-          const fullPath = path.join(dir, entry.name);
-
-          if (entry.isDirectory()) {
-            walkDir(fullPath, depth + 1);
-          } else {
-            // 文件过滤
-            if (include) {
-              const ext = path.extname(entry.name);
-              const includeExts = include.split(',').map((e) => e.trim().replace('*', ''));
-              if (!includeExts.some((e) => ext === e || ext === `.${e}`)) {continue;}
-            }
-
-            // 只搜索代码文件
-            const ext = path.extname(entry.name);
-            if (['.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs'].includes(ext)) {
-              searchFile(fullPath);
-            }
-          }
-        }
-      } catch {
-        // 跳过无法读取的目录
-      }
-    }
-
-    walkDir(projectDir);
+    await _walkProjectDir(projectDir, 5, searchFile, include, () => results.length > 20);
 
     return {
       symbol,
@@ -193,11 +213,11 @@ async function findReferences(params, context) {
     const results = [];
     const regex = new RegExp(`\\b${escapeRegex(symbol)}\\b`, 'g');
 
-    function searchFile(filePath) {
+    const searchFile = async (filePath) => {
       if (results.length >= max) {return;}
 
       try {
-        const content = fs.readFileSync(filePath, 'utf8');
+        const content = await fsp.readFile(filePath, 'utf8');
         const lines = content.split('\n');
         const relativePath = path.relative(projectDir, filePath);
 
@@ -216,41 +236,9 @@ async function findReferences(params, context) {
       } catch {
         // 跳过无法读取的文件
       }
-    }
+    };
 
-    function walkDir(dir, depth = 0) {
-      if (depth > 5 || results.length >= max) {return;}
-
-      try {
-        const entries = fs.readdirSync(dir, { withFileTypes: true });
-
-        for (const entry of entries) {
-          if (results.length >= max) {break;}
-          if (entry.name === 'node_modules' || entry.name === '.git') {continue;}
-
-          const fullPath = path.join(dir, entry.name);
-
-          if (entry.isDirectory()) {
-            walkDir(fullPath, depth + 1);
-          } else {
-            if (include) {
-              const ext = path.extname(entry.name);
-              const includeExts = include.split(',').map((e) => e.trim().replace('*', ''));
-              if (!includeExts.some((e) => ext === e || ext === `.${e}`)) {continue;}
-            }
-
-            const ext = path.extname(entry.name);
-            if (['.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs'].includes(ext)) {
-              searchFile(fullPath);
-            }
-          }
-        }
-      } catch {
-        // 跳过无法读取的目录
-      }
-    }
-
-    walkDir(projectDir);
+    await _walkProjectDir(projectDir, 5, searchFile, include, () => results.length >= max);
 
     return {
       symbol,
@@ -276,11 +264,12 @@ async function getHoverInfo(params, context) {
   }
 
   try {
-    if (!fs.existsSync(resolvedPath)) {
+    let content;
+    try {
+      content = await fsp.readFile(resolvedPath, 'utf8');
+    } catch {
       return { error: `文件不存在: ${filePath}` };
     }
-
-    const content = fs.readFileSync(resolvedPath, 'utf8');
     const lines = content.split('\n');
 
     if (line < 1 || line > lines.length) {
@@ -341,11 +330,13 @@ async function analyzeDependencies(params, context) {
   }
 
   try {
-    if (!fs.existsSync(resolvedPath)) {
+    let content;
+    try {
+      content = await fsp.readFile(resolvedPath, 'utf8');
+    } catch {
       return { error: `文件不存在: ${filePath}` };
     }
 
-    const content = fs.readFileSync(resolvedPath, 'utf8');
     const relativePath = path.relative(projectDir, resolvedPath);
 
     // 解析 require 和 import
@@ -383,11 +374,11 @@ async function analyzeDependencies(params, context) {
     const dependents = [];
     const targetRel = relativePath.replace(/\\/g, '/').replace(/\.(js|ts|jsx|tsx)$/, '');
 
-    function searchForDependants(dir, depth = 0) {
+    const searchForDependants = async (dir, depth = 0) => {
       if (depth > 4) {return;}
 
       try {
-        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        const entries = await fsp.readdir(dir, { withFileTypes: true });
 
         for (const entry of entries) {
           if (entry.name === 'node_modules' || entry.name === '.git') {continue;}
@@ -395,10 +386,10 @@ async function analyzeDependencies(params, context) {
           const fullPath = path.join(dir, entry.name);
 
           if (entry.isDirectory()) {
-            searchForDependants(fullPath, depth + 1);
+            await searchForDependants(fullPath, depth + 1);
           } else if (/\.(js|ts|jsx|tsx)$/.test(entry.name)) {
             try {
-              const fileContent = fs.readFileSync(fullPath, 'utf8');
+              const fileContent = await fsp.readFile(fullPath, 'utf8');
               const fileRel = path.relative(projectDir, fullPath).replace(/\\/g, '/');
 
               if (fileRel === relativePath.replace(/\\/g, '/')) {continue;}
@@ -432,7 +423,7 @@ async function analyzeDependencies(params, context) {
       }
     }
 
-    searchForDependants(projectDir);
+    await searchForDependants(projectDir);
 
     return {
       file: relativePath,
@@ -463,11 +454,12 @@ async function formatCode(params, context) {
   }
 
   try {
-    if (!fs.existsSync(resolvedPath)) {
+    let content;
+    try {
+      content = await fsp.readFile(resolvedPath, 'utf8');
+    } catch {
       return { error: `文件不存在: ${filePath}` };
     }
-
-    const content = fs.readFileSync(resolvedPath, 'utf8');
 
     // 尝试使用 prettier
     try {
@@ -500,7 +492,7 @@ async function formatCode(params, context) {
         };
       }
 
-      fs.writeFileSync(resolvedPath, formatted, 'utf8');
+      await fsp.writeFile(resolvedPath, formatted, 'utf8');
 
       return {
         filePath,

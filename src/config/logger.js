@@ -25,8 +25,7 @@ class Logger {
     return this;
   }
 
-  _getStream() {
-    const now = new Date();
+  _getStream(now) {
     const dateStr = now.toISOString().split('T')[0];
 
     if (this._currentDate !== dateStr) {
@@ -41,8 +40,9 @@ class Logger {
   }
 
   _log(level, message, extra) {
-    const stream = this._getStream();
-    const timestamp = new Date().toISOString();
+    const now = new Date(); // 只创建一次 Date 对象
+    const stream = this._getStream(now);
+    const timestamp = now.toISOString();
     const levelName = LEVEL_NAMES[level] || 'UNKNOWN';
 
     let line = `[${timestamp}] [${levelName}] ${message}`;
@@ -59,7 +59,10 @@ class Logger {
     }
     line += '\n';
 
-    stream.write(line);
+    // 反压保护：write 返回 false 时丢弃（避免内存膨胀）
+    if (!stream.write(line)) {
+      this._streamDropped = (this._streamDropped || 0) + 1;
+    }
   }
 
   debug(message, extra) {
@@ -79,8 +82,9 @@ class Logger {
   }
 
   logCommandOutput(command, stdout, stderr) {
-    const stream = this._getStream();
-    const timestamp = new Date().toISOString();
+    const now = new Date();
+    const stream = this._getStream(now);
+    const timestamp = now.toISOString();
     stream.write(`\n${'='.repeat(60)}\n`);
     stream.write(`[${timestamp}] [CMD] Command: ${command}\n`);
     stream.write(`${'-'.repeat(60)}\n`);

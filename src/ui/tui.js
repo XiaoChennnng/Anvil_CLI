@@ -34,6 +34,11 @@ class TUI {
     // 思考中状态栏定时刷新（每秒更新耗时）
     this._thinkingTimer = null;
 
+    // stdout 反压检测：write() 返回 false 时标记跳过非关键渲染
+    this._stdoutBackedUp = false;
+    this._lastWriteResult = true;
+    this.MAX_RENDER_OUTPUT = 32 * 1024; // 单次渲染最大输出 32KB（防 Windows 终端阻塞）
+
     // 光标隐藏标志（避免频繁 hide/show 切换造成闪烁）
     this._cursorHidden = false;
   }
@@ -68,40 +73,39 @@ class TUI {
 
   /**
    * 完整重绘
+   * 使用 Layout 缓冲合并所有 write 为一次 + 反压检测
    */
   _fullRender() {
+    this.layout.startBuf();
     this.layout.hideCursor();
     this._cursorHidden = true;
     this.layout.clearScreen();
+    const layoutBuf = this.layout.endBuf();
 
-    // 渲染各区域
-    this.messageBox.render();
-    this.sidebar.render();
-    this.editor.render();
-    this.statusBar.render();
+    const out = layoutBuf + (this.messageBox.render() || '') + (this.sidebar.render() || '') + (this.editor.render() || '') + (this.statusBar.render() || '');
+    if (out) {this._safeWrite(out, true);}
 
-    // 无论是否处理中，都恢复光标到输入位置
     this._restoreCursorToEditor();
   }
 
   /**
    * 刷新消息区 + 侧边栏（流式输出时使用，不重绘编辑器/状态栏以减少闪烁）
+   * 合并 render 输出 + 反压检测，避免 Windows 终端缓冲区阻塞
    */
   _refreshMessages() {
-    this.messageBox.render();
-    this.sidebar.render();
+    const out = (this.messageBox.render() || '') + (this.sidebar.render() || '');
+    if (out) {this._safeWrite(out, false);}
   }
 
   /**
    * 刷新全部组件（响应结束后调用）
+   * 合并所有 render 输出 + 反压检测
    */
   _refreshAll() {
     this.layout.hideCursor();
     this._cursorHidden = true;
-    this.messageBox.render();
-    this.sidebar.render();
-    this.editor.render();
-    this.statusBar.render();
+    const out = (this.messageBox.render() || '') + (this.sidebar.render() || '') + (this.editor.render() || '') + (this.statusBar.render() || '');
+    if (out) {this._safeWrite(out, true);}
     this._restoreCursorToEditor();
   }
 
@@ -149,14 +153,16 @@ class TUI {
    * 仅刷新编辑器
    */
   _refreshEditor() {
-    this.editor.render();
+    const out = this.editor.render();
+    if (out) {this._safeWrite(out, true);}
   }
 
   /**
    * 仅刷新状态栏
    */
   _refreshStatusBar() {
-    this.statusBar.render();
+    const out = this.statusBar.render();
+    if (out) {this._safeWrite(out, true);}
   }
 
   /**
@@ -171,7 +177,8 @@ class TUI {
    * 刷新侧边栏相关的信息（Todo, Context, Cache）- 更新到状态栏
    */
   refreshSidebarInfo() {
-    this.statusBar.render();
+    const out = this.statusBar.render();
+    if (out) {this._safeWrite(out, true);}
     this._restoreCursorToEditor();
   }
 
@@ -509,6 +516,55 @@ class TUI {
       this.messageBox.renderedLines.splice(start, lineCount);
       this._planApprovalHintLines = undefined;
     }
+  }
+
+  /**
+   * 安全写入 stdout，带反压检测和输出上限
+   * 防止 Windows 终端缓冲区阻塞导致 event loop 卡死
+   * @param {string} output - 要写入的内容
+   * @param {boolean} [critical=false] - 关键渲染（强制写入，跳过上限检查）
+   */
+  _safeWrite(output, critical = false) {
+    if (!output) {return true;}
+
+    // 反压检测超时自动恢复（Windows 终端 drain 可能永不触发）
+    if (this._stdoutBackedUp) {
+      if (critical) {
+        // 关键渲染强制清标志
+        this._stdoutBackedUp = false;
+        if (this._backupTimer) { clearTimeout(this._backupTimer); this._backupTimer = null; }
+      } else {
+        return false;
+      }
+    }
+
+    // 非关键渲染做输出上限保护
+    let writeStr = output;
+    if (!critical && output.length > this.MAX_RENDER_OUTPUT) {
+      writeStr = output.slice(0, this.MAX_RENDER_OUTPUT);
+    }
+
+    this._lastWriteResult = process.stdout.write(writeStr);
+
+    // 更新反压状态
+    if (this._lastWriteResult === false) {
+      this._stdoutBackedUp = true;
+      // 监听 drain 事件恢复渲染
+      process.stdout.once('drain', () => {
+        this._stdoutBackedUp = false;
+        if (this._backupTimer) { clearTimeout(this._backupTimer); this._backupTimer = null; }
+      });
+      // 兜底定时器：500ms 后 drain 还没来就强制恢复
+      if (this._backupTimer) { clearTimeout(this._backupTimer); }
+      this._backupTimer = setTimeout(() => {
+        if (this._stdoutBackedUp) {
+          this._stdoutBackedUp = false;
+          this._backupTimer = null;
+        }
+      }, 500);
+    }
+
+    return this._lastWriteResult !== false;
   }
 
   /**

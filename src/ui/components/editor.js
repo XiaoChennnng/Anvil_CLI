@@ -30,7 +30,7 @@ class Editor {
     const promptContent = chalk.hex(t.colors.primary).bold(' >') + (this.currentInput ? ' ' + this.currentInput : '');
     output += `\x1b[${editorStartRow + 1};1H\x1b[2K${promptContent}`;
 
-    process.stdout.write(output);
+    return output;
   }
 
   /**
@@ -199,8 +199,14 @@ class Editor {
     const row = this.promptRow;
     const t = this.theme;
 
+    // 清除从输入区起始行到编辑器区域末尾的所有行（避免多行残留）
+    const editorEndRow = this.layout.editorStartRow + this.layout._height - 1;
+    for (let r = row; r <= editorEndRow; r++) {
+      this.layout.moveTo(r, 1);
+      this.layout.clearLine();
+    }
+
     this.layout.moveTo(row, 1);
-    this.layout.clearLine();
     process.stdout.write(chalk.hex(t.colors.primary).bold(' >'));
     if (this.currentInput) {
       process.stdout.write(' ' + this.currentInput);

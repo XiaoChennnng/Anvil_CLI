@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 
@@ -80,6 +81,53 @@ const COMPRESSION_LEVELS = {
   CRITICAL:   { level: 5, threshold: 0.98, label: '🚨 极限压缩' },
 };
 
+// Token 估算缓存（LRU，避免重复 O(n) 字符遍历）
+const _tokenCache = new Map();
+const TOKEN_CACHE_MAX = 500;
+let _tokenCacheSize = 0;
+
+// Token 估算缓存键（用字符串前 200 字 + 长度做键，兼顾准确和性能）
+function _makeTokenCacheKey(text) {
+  if (!text || typeof text !== 'string') {return '';}
+  if (text.length <= 200) {return text;}
+  // 长文本用前缀+后缀+长度做摘要，避免存大key
+  return text.slice(0, 100) + '|' + text.slice(-100) + '|' + text.length;
+}
+
+function _getCachedTokenCount(text) {
+  if (!text || typeof text !== 'string') {return undefined;}
+  const key = _makeTokenCacheKey(text);
+  if (!key) {return undefined;}
+  if (_tokenCache.has(key)) {
+    const val = _tokenCache.get(key);
+    // LRU 提升：删除再设置以更新顺序
+    _tokenCache.delete(key);
+    _tokenCache.set(key, val);
+    return val;
+  }
+  return undefined;
+}
+
+function _setCachedTokenCount(text, count) {
+  if (!text || typeof text !== 'string') {return;}
+  const key = _makeTokenCacheKey(text);
+  if (!key) {return;}
+  if (_tokenCache.has(key)) {
+    _tokenCache.delete(key);
+  } else {
+    _tokenCacheSize++;
+  }
+  _tokenCache.set(key, count);
+  // 超限淘汰
+  if (_tokenCacheSize > TOKEN_CACHE_MAX) {
+    const firstKey = _tokenCache.keys().next().value;
+    if (firstKey !== undefined) {
+      _tokenCache.delete(firstKey);
+      _tokenCacheSize--;
+    }
+  }
+}
+
 // Token 预算分配（占窗口 %）
 const BUDGET = {
   IMMUTABLE:    0.02,   // Tier 0: System Prompt + Tool Defs
@@ -156,12 +204,18 @@ function estimateTokenCount(text) {
   if (!text) {return 0;}
   if (typeof text !== 'string') {return 0;}
 
+  // 缓存查询
+  const cached = _getCachedTokenCount(text);
+  if (cached !== undefined) {return cached;}
+
   const segments = _segmentContentType(text);
   let total = 0;
   for (const seg of segments) {
     total += _countCharsByRatio(seg.text, seg.ratio);
   }
-  return Math.ceil(total);
+  const result = Math.ceil(total);
+  _setCachedTokenCount(text, result);
+  return result;
 }
 
 /**
@@ -254,13 +308,58 @@ function _countCharsByRatio(text, baseRatio) {
 /**
  * 估算消息列表的 token 总数
  */
+// 消息 token 缓存
+const _msgTokenCache = new Map();
+const MSG_TOKEN_CACHE_MAX = 20;
+
 function estimateMessageTokens(messages) {
-  return messages.reduce((sum, msg) => {
-    const contentTokens = estimateTokenCount(msg.content || '');
-    const reasoningTokens = estimateTokenCount(msg.reasoning_content || '');
-    // 消息结构开销 ~6 tokens (role, formatting)
-    return sum + contentTokens + reasoningTokens + 6;
-  }, 0);
+  if (!messages || !Array.isArray(messages)) {return 0;}
+
+  // 用消息列表的指纹做缓存键
+  const cacheKey = _messagesFingerprint(messages);
+  if (cacheKey) {
+    const cached = _msgTokenCache.get(cacheKey);
+    if (cached !== undefined) {return cached;}
+  }
+
+  let total = 0;
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    total += estimateTokenCount(msg.content || '');
+    total += estimateTokenCount(msg.reasoning_content || '');
+    total += 6; // 消息结构开销
+  }
+
+  if (cacheKey) {
+    // LRU
+    if (_msgTokenCache.has(cacheKey)) {
+      _msgTokenCache.delete(cacheKey);
+    }
+    _msgTokenCache.set(cacheKey, total);
+    if (_msgTokenCache.size > MSG_TOKEN_CACHE_MAX) {
+      const first = _msgTokenCache.keys().next().value;
+      if (first !== undefined) {_msgTokenCache.delete(first);}
+    }
+  }
+
+  return total;
+}
+
+/**
+ * 生成消息列表的快速指纹（用于 token 缓存键）
+ * 取最后几条消息的关键属性做哈希，避免全量遍历
+ */
+function _messagesFingerprint(messages) {
+  if (!messages || messages.length === 0) {return null;}
+  // 取长度、最后 3 条消息的内容长度、角色
+  const len = messages.length;
+  const last3 = messages.slice(-3).map(m => {
+    const c = (m.content || '').length;
+    const r = (m.reasoning_content || '').length;
+    const role = m.role || '';
+    return `${role}:${c}:${r}`;
+  }).join('|');
+  return `${len}|${last3}`;
 }
 
 // ============================================================================
@@ -284,6 +383,7 @@ class ContextManager {
 
     // 文件上下文 (LRU Map)
     this._fileContexts = new Map();
+    this._fileContextTotalTokens = 0;
 
     // 压缩统计
     this.compressionStats = {
@@ -527,13 +627,17 @@ class ContextManager {
     }
 
     try {
-      if (!fs.existsSync(resolvedPath)) {return null;}
+      // 二进制检测 + 读取内容（用 fsp 异步，不阻塞 event loop）
+      let fileHandle;
+      try {
+        fileHandle = await fsp.open(resolvedPath, 'r');
+      } catch {
+        return null; // ENOENT → 文件不存在
+      }
 
-      // 二进制检测
-      const fd = fs.openSync(resolvedPath, 'r');
       const buffer = Buffer.alloc(1024);
-      const bytesRead = fs.readSync(fd, buffer, 0, 1024, 0);
-      fs.closeSync(fd);
+      const { bytesRead } = await fileHandle.read(buffer, 0, 1024, 0);
+      await fileHandle.close();
 
       if (buffer.slice(0, bytesRead).includes(0)) {
         const result = `[二进制文件: ${path.basename(filePath)}]`;
@@ -541,8 +645,8 @@ class ContextManager {
         return result;
       }
 
-      // 读取内容
-      const raw = fs.readFileSync(resolvedPath, 'utf8');
+      // 读取全部内容
+      const raw = await fsp.readFile(resolvedPath, 'utf8');
       const lines = raw.split(/\r?\n/);
       let content;
 
@@ -580,19 +684,14 @@ class ContextManager {
    * 添加文件上下文到 LRU 缓存
    */
   _addFileContext(key, content) {
-    // 预算检查 (token 单位统一)
-    let currentSize = [...this._fileContexts.values()]
-      .reduce((sum, e) => sum + (e.tokens || 0), 0);
     const newTokens = estimateTokenCount(content);
 
-    // 超出容量，淘汰最少使用的（每次 evict 后重算 currentSize 防止死循环）
+    // 超出容量，淘汰最少使用的
     while (
       this._fileContexts.size >= FILE_CONTEXT_MAX_ENTRIES ||
-      currentSize + newTokens > FILE_CONTEXT_MAX_TOKENS
+      this._fileContextTotalTokens + newTokens > FILE_CONTEXT_MAX_TOKENS
     ) {
       this._evictLRU();
-      currentSize = [...this._fileContexts.values()]
-        .reduce((sum, e) => sum + (e.tokens || 0), 0);
     }
 
     this._fileContexts.set(key, {
@@ -602,6 +701,7 @@ class ContextManager {
       lastAccess: Date.now(),
       added: Date.now(),
     });
+    this._fileContextTotalTokens += newTokens;
   }
 
   /**
@@ -619,6 +719,7 @@ class ContextManager {
     }
 
     if (oldestKey) {
+      this._fileContextTotalTokens -= oldest ? (oldest.tokens || 0) : 0;
       this._fileContexts.delete(oldestKey);
     }
   }
@@ -628,8 +729,7 @@ class ContextManager {
    * @returns {number}
    */
   _getFileContextTokens() {
-    return [...this._fileContexts.values()]
-      .reduce((sum, e) => sum + (e.tokens || estimateTokenCount(e.content || '')), 0);
+    return this._fileContextTotalTokens;
   }
 
   // ==========================================================================
@@ -1351,9 +1451,21 @@ class ContextManager {
    * @param {number} targetTokens - 目标 token 数
    */
   _trimByImportance(messages, targetTokens) {
+    const len = messages.length;
+
+    // 预计算：消息索引、token 数、分数（一次性 O(n)，避免重复估算）
+    const msgTokenMap = new Map();
+    const msgScoreMap = new Map();
+    const msgIndexMap = new Map();
+    for (let i = 0; i < len; i++) {
+      const msg = messages[i];
+      msgIndexMap.set(msg, i);
+      msgTokenMap.set(msg, estimateTokenCount(msg.content || '') + estimateTokenCount(msg.reasoning_content || '') + 6);
+      msgScoreMap.set(msg, this._scoreMessage(msg, i, len));
+    }
+
     // 第一步：建立 tool_call_id 映射，保护 tool_call + tool_result 对不被拆散
     const toolCallMap = new Map(); // tool_call_id → { assistant, tool }
-    const isToolResult = new Set(); // tool result message 的引用，用于跳过
 
     for (const msg of messages) {
       if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
@@ -1363,7 +1475,6 @@ class ContextManager {
       } else if (msg.role === 'tool' && msg.tool_call_id) {
         if (toolCallMap.has(msg.tool_call_id)) {
           toolCallMap.get(msg.tool_call_id).tool = msg;
-          isToolResult.add(msg);
         }
       }
     }
@@ -1377,22 +1488,16 @@ class ContextManager {
       if (pair.assistant && pair.tool) {
         pairedAssistants.add(pair.assistant);
         pairedTools.add(pair.tool);
-        const totalTokens = estimateTokenCount(pair.assistant.content || '')
-          + estimateTokenCount(pair.assistant.reasoning_content || '')
-          + estimateTokenCount(pair.tool.content || '') + 12;
-        const avgScore = (this._scoreMessage(pair.assistant, messages.indexOf(pair.assistant), messages.length)
-          + this._scoreMessage(pair.tool, messages.indexOf(pair.tool), messages.length)) / 2;
+        const totalTokens = (msgTokenMap.get(pair.assistant) - 6)  // remove double-counted overhead
+          + msgTokenMap.get(pair.tool) + 6;
+        const avgScore = (msgScoreMap.get(pair.assistant) + msgScoreMap.get(pair.tool)) / 2;
         groups.push({ messages: [pair.assistant, pair.tool], tokens: totalTokens, score: avgScore });
       } else if (pair.assistant && !pair.tool) {
-        // 孤立的 tool_call（结果丢失了）—— 按 assistant 自己的分
         pairedAssistants.add(pair.assistant);
-        const tokens = estimateTokenCount(pair.assistant.content || '')
-          + estimateTokenCount(pair.assistant.reasoning_content || '') + 6;
-        groups.push({ messages: [pair.assistant], tokens, score: this._scoreMessage(pair.assistant, messages.indexOf(pair.assistant), messages.length) });
+        groups.push({ messages: [pair.assistant], tokens: msgTokenMap.get(pair.assistant), score: msgScoreMap.get(pair.assistant) });
       } else if (!pair.assistant && pair.tool) {
-        // 孤立的 tool result（tool_call 丢失了）
         pairedTools.add(pair.tool);
-        groups.push({ messages: [pair.tool], tokens: estimateTokenCount(pair.tool.content || '') + 6, score: 0.1 });
+        groups.push({ messages: [pair.tool], tokens: msgTokenMap.get(pair.tool), score: 0.1 });
       }
     }
 
@@ -1401,8 +1506,8 @@ class ContextManager {
       if (!pairedAssistants.has(msg) && !pairedTools.has(msg)) {
         groups.push({
           messages: [msg],
-          tokens: estimateTokenCount(msg.content || '') + estimateTokenCount(msg.reasoning_content || '') + 6,
-          score: this._scoreMessage(msg, messages.indexOf(msg), messages.length),
+          tokens: msgTokenMap.get(msg),
+          score: msgScoreMap.get(msg),
         });
       }
     }
@@ -1420,8 +1525,8 @@ class ContextManager {
       }
     }
 
-    // 恢复原始顺序
-    keptMsgs.sort((a, b) => messages.indexOf(a) - messages.indexOf(b));
+    // 恢复原始顺序（用预计算的 index map）
+    keptMsgs.sort((a, b) => (msgIndexMap.get(a) || 0) - (msgIndexMap.get(b) || 0));
 
     return keptMsgs;
   }
@@ -1713,6 +1818,7 @@ class ContextManager {
 
   clearFileCache() {
     this._fileContexts.clear();
+    this._fileContextTotalTokens = 0;
   }
 
   // ==========================================================================

@@ -29,6 +29,18 @@ class Sidebar {
 
     // 增量渲染缓存
     this._lastRenderedContent = [];
+    this._lastViewportHeight = 0;
+
+    // 侧边栏行构建缓存（避免状态未变时重复调 _renderLine）
+    this._renderVersion = 0;
+    this._lastRenderVersion = -1;
+    this._lastRenderedFullLines = [];
+
+    // 上下文信息缓存（避免每次 render 全量重算）
+    this._contextInfoCache = null;
+    this._contextBreakdownCache = null;
+    this._messagesVersion = 0;
+    this._todosVersion = 0;
   }
 
   setChatEngine(chatEngine) {
@@ -41,6 +53,8 @@ class Sidebar {
 
   updateMessages(messages) {
     this.messages = messages || [];
+    this._messagesVersion++;
+    this._renderVersion++;
   }
 
   updateCacheStats(usage) {
@@ -52,23 +66,28 @@ class Sidebar {
       if (cached > 0) {
         this.cacheStats.cacheHits++;
       }
+      this._renderVersion++;
     }
   }
 
   setTodos(todos) {
     this.todos = todos || [];
+    this._renderVersion++;
   }
 
   setSessionTitle(title) {
     this.sessionTitle = title || 'New Session';
+    this._renderVersion++;
   }
 
   setModifiedFiles(files) {
     this.modifiedFiles = files || [];
+    this._renderVersion++;
   }
 
   setDiagnostics(errors, warnings) {
     this.diagnostics = { errors: errors || 0, warnings: warnings || 0 };
+    this._renderVersion++;
   }
 
   /**
@@ -126,31 +145,50 @@ class Sidebar {
   }
 
   /**
-   * 渲染侧边栏（双缓冲模式，减少闪烁）
-   * 将所有输出合并为一次 write 调用
+   * 渲染侧边栏（增量渲染，只写变化的行）
+   * 降低 ANSI 输出量，避免 Windows 终端缓冲区阻塞
    */
   render() {
     const { messageStartRow, contentHeight, sidebarWidth, messageWidth } = this.layout;
     const viewportHeight = contentHeight;
 
-    // 构建完整输出字符串
+    // 如果渲染版本和 viewport 高度未变，复用行缓存（跳过 30-50 次 _renderLine 调用）
+    let newLines;
+    if (this._renderVersion === this._lastRenderVersion && this._lastRenderedFullLines.length === viewportHeight) {
+      newLines = this._lastRenderedFullLines;
+    } else {
+      newLines = [];
+      for (let i = 0; i < viewportHeight; i++) {
+        const line = this._renderLine(i, sidebarWidth - 1);
+        newLines.push(line ? this._truncateToWidth(line, sidebarWidth - 1) : '');
+      }
+      this._lastRenderedFullLines = newLines;
+      this._lastRenderVersion = this._renderVersion;
+    }
+
+    // 对比缓存，只输出变化的行
     let output = '';
+    const maxLen = Math.max(newLines.length, this._lastRenderedContent.length);
 
-    for (let i = 0; i < viewportHeight; i++) {
-      const row = messageStartRow + i;
-      const col = messageWidth + 1;
-      const line = this._renderLine(i, sidebarWidth - 1);
+    for (let i = 0; i < maxLen; i++) {
+      const newLine = i < newLines.length ? newLines[i] : '';
+      const lastLine = i < this._lastRenderedContent.length ? this._lastRenderedContent[i] : null;
 
-      if (line) {
-        const truncated = this._truncateToWidth(line, sidebarWidth - 1);
-        output += `\x1b[${row};${col}H\x1b[K${truncated}`;
-      } else {
-        output += `\x1b[${row};${col}H\x1b[K`;
+      if (newLine !== lastLine) {
+        const row = messageStartRow + i;
+        const col = messageWidth + 1;
+        if (newLine) {
+          output += `\x1b[${row};${col}H\x1b[K${newLine}`;
+        } else {
+          output += `\x1b[${row};${col}H\x1b[K`;
+        }
       }
     }
 
-    // 一次性输出
-    process.stdout.write(output);
+    // 更新缓存
+    this._lastRenderedContent = newLines;
+
+    return output;
   }
 
   /**
@@ -378,7 +416,7 @@ class Sidebar {
   }
 
   /**
-   * 获取上下文信息
+   * 获取上下文信息（带缓存，仅 messages 变化时重算）
    */
   _getContextInfo() {
     const defaultInfo = {
@@ -391,15 +429,22 @@ class Sidebar {
 
     if (!this.contextManager) {return defaultInfo;}
 
+    // 缓存检查
+    if (this._contextInfoCache && this._messagesVersion === this._contextInfoCache._ver) {
+      return this._contextInfoCache;
+    }
+
     try {
       const status = this.contextManager.getStatusReport(this.messages);
-      return {
+      this._contextInfoCache = {
         used: status.currentTokens || 0,
         total: status.windowSize || 1000000,
         percent: status.usagePercent || 0,
         compressionLevel: status.compressionLevel || 0,
         compressionLabel: status.compressionLabel || '',
+        _ver: this._messagesVersion,
       };
+      return this._contextInfoCache;
     } catch {
       return defaultInfo;
     }
@@ -431,8 +476,16 @@ class Sidebar {
    */
   _getContextBreakdown() {
     if (!this.contextManager) {return { systemPrompt: 0, projectOverview: 0, fileContexts: [], totalFileTokens: 0 };}
+
+    // 缓存检查
+    if (this._contextBreakdownCache && this._messagesVersion === this._contextBreakdownCache._ver) {
+      return this._contextBreakdownCache;
+    }
+
     try {
-      return this.contextManager.getContextBreakdown(this.messages);
+      this._contextBreakdownCache = this.contextManager.getContextBreakdown(this.messages);
+      this._contextBreakdownCache._ver = this._messagesVersion;
+      return this._contextBreakdownCache;
     } catch {
       return { systemPrompt: 0, projectOverview: 0, fileContexts: [], totalFileTokens: 0 };
     }

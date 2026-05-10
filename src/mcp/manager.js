@@ -91,8 +91,7 @@ class MCPManager extends EventEmitter {
       );
       entry.client = client;
 
-      // 处理传输关闭事件
-      transport.onclose = () => {
+        transport.onclose = () => {
         this._onTransportClose(name);
       };
 
@@ -181,6 +180,12 @@ class MCPManager extends EventEmitter {
 
     entry._closingDeliberately = true;
 
+    // 清除重连定时器
+    if (entry._reconnectTimer) {
+      clearTimeout(entry._reconnectTimer);
+      entry._reconnectTimer = null;
+    }
+
     try {
       if (entry.client) {
         await entry.client.close();
@@ -207,6 +212,18 @@ class MCPManager extends EventEmitter {
   async reconnectServer(name) {
     const entry = this._servers.get(name);
     if (!entry) {return;}
+
+    // 清除旧重连定时器
+    if (entry._reconnectTimer) {
+      clearTimeout(entry._reconnectTimer);
+      entry._reconnectTimer = null;
+    }
+
+    // 关闭旧 transport 和 client（防止泄漏）
+    try {
+      if (entry.client) {await entry.client.close();}
+      if (entry.transport) {entry.transport.close();}
+    } catch {} // 旧连接关闭失败不影响重连
 
     // 保留工具列表（断线时先清除，重连后用新列表替代）
     this.emit('server_disconnected', { name });
@@ -264,9 +281,13 @@ class MCPManager extends EventEmitter {
       this._logger.info(`[mcp] 关闭 ${this._servers.size} 个 MCP 服务器`);
     }
 
-    // 标记所有服务器为"主动关闭"
+    // 清除所有重连定时器 + 标记主动关闭
     for (const [, entry] of this._servers) {
       entry._closingDeliberately = true;
+      if (entry._reconnectTimer) {
+        clearTimeout(entry._reconnectTimer);
+        entry._reconnectTimer = null;
+      }
     }
 
     const promises = [];
@@ -279,6 +300,10 @@ class MCPManager extends EventEmitter {
             }
           })
         );
+      }
+      // 关闭 transport
+      if (entry.transport) {
+        try {entry.transport.close();} catch {}
       }
     }
 
@@ -352,8 +377,9 @@ class MCPManager extends EventEmitter {
 
     entry.status = 'disconnected';
 
-    // 延迟 2 秒后重连
-    setTimeout(() => {
+    // 延迟 2 秒后重连（保存 timer 引用供 stop/disconnect 清理）
+    entry._reconnectTimer = setTimeout(() => {
+      if (!this._servers.has(name)) {return;}
       this.reconnectServer(name).catch((err) => {
         if (this._logger) {
           this._logger.error(`[mcp] 服务器 "${name}" 重连失败: ${err.message}`);

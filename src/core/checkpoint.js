@@ -9,6 +9,7 @@ class CheckpointManager {
     this.projectDir = projectDir;
     this.checkpointDir = path.join(projectDir, '.anvil', 'checkpoints');
     this.checkpointInterval = 10;
+    this._saveCounter = 0;
     this._ensureDir();
   }
 
@@ -45,7 +46,13 @@ class CheckpointManager {
       fs.writeFileSync(filePath, JSON.stringify(checkpoint, null, 2), 'utf8');
       const latestPath = path.join(this.checkpointDir, 'latest.json');
       fs.writeFileSync(latestPath, JSON.stringify({ id, timestamp: checkpoint.timestamp }), 'utf8');
-      this._cleanup();
+
+      // 每 5 次 save 执行一次清理，避免每次全量扫描
+      this._saveCounter = (this._saveCounter + 1) % 5;
+      if (this._saveCounter === 0) {
+        this._cleanup();
+      }
+
       return id;
     } catch {
       return null;
@@ -79,8 +86,15 @@ class CheckpointManager {
       return fs.readdirSync(this.checkpointDir)
         .filter(f => f.endsWith('.json') && f !== 'latest.json')
         .map(f => {
-          const data = JSON.parse(fs.readFileSync(path.join(this.checkpointDir, f), 'utf8'));
-          return { id: data.id, timestamp: data.timestamp, messageCount: data.messageCount };
+          // 从文件名提取 id，避免 parse JSON
+          const id = f.replace('.json', '');
+          const stat = fs.statSync(path.join(this.checkpointDir, f));
+          return {
+            id,
+            timestamp: stat.mtime.toISOString(),
+            messageCount: 0,
+            _size: stat.size,
+          };
         })
         .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
     } catch {

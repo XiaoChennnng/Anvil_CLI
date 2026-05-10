@@ -4,25 +4,34 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
+// 模块级缓存 detectShell 结果，避免每次 executeCommand 都重新检测
+let _cachedShell = null;
+
 function detectShell() {
+  if (_cachedShell) {return _cachedShell;}
+
   if (process.platform !== 'win32') {
-    return process.env.SHELL || '/bin/bash';
+    _cachedShell = process.env.SHELL || '/bin/bash';
+    return _cachedShell;
   }
 
   // Git Bash
   const shell = process.env.SHELL;
   if (shell && shell.includes('bash')) {
-    return shell;
+    _cachedShell = shell;
+    return _cachedShell;
   }
 
   // PowerShell
   const psPath = path.join(process.env.SYSTEMROOT || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   if (fs.existsSync(psPath)) {
-    return psPath;
+    _cachedShell = psPath;
+    return _cachedShell;
   }
 
   // cmd.exe
-  return process.env.COMSPEC || 'cmd.exe';
+  _cachedShell = process.env.COMSPEC || 'cmd.exe';
+  return _cachedShell;
 }
 
 /**
@@ -82,20 +91,23 @@ function executeCommand(params, context) {
     const displayLines = [];
     let timedOut = false;
     const MAX_OUTPUT_LEN = 2000; // stdout/stderr 返回给 AI 的最大字符数
+    const MAX_OUTPUT_BUFFER = 100 * 1024; // 100KB — stdout/stderr 内存硬上限
 
     // 实时流式输出
     if (proc.stdout) {
       proc.stdout.on('data', (data) => {
         const text = convertEncoding(data);
-        stdout += text;
+        if (stdout.length < MAX_OUTPUT_BUFFER) {
+          stdout += text;
+        }
 
-        // 维护最近 maxDisplayLines 行
+        // 环形缓冲：slice(-n) 替代 push + shift 的 O(n²)
         const lines = text.split('\n');
         for (const line of lines) {
           displayLines.push(line);
-          if (displayLines.length > maxDisplayLines) {
-            displayLines.shift();
-          }
+        }
+        if (displayLines.length > maxDisplayLines) {
+          displayLines.splice(0, displayLines.length - maxDisplayLines);
         }
 
         // 触发输出事件
@@ -108,14 +120,16 @@ function executeCommand(params, context) {
     if (proc.stderr) {
       proc.stderr.on('data', (data) => {
         const text = convertEncoding(data);
-        stderr += text;
+        if (stderr.length < MAX_OUTPUT_BUFFER) {
+          stderr += text;
+        }
 
         const lines = text.split('\n');
         for (const line of lines) {
           displayLines.push(line);
-          if (displayLines.length > maxDisplayLines) {
-            displayLines.shift();
-          }
+        }
+        if (displayLines.length > maxDisplayLines) {
+          displayLines.splice(0, displayLines.length - maxDisplayLines);
         }
 
         if (context.onOutput) {
