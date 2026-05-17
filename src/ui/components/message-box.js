@@ -33,6 +33,9 @@ class MessageBox {
     this._wrapLineCache = new Map();
     // CJK 字符判定缓存
     this._cjkCache = new Map();
+    // 文件操作去重：追踪最后操作的文件路径，同一文件只显示一次结果
+    this._lastToolFile = null;
+    this._sameFileResultShown = false;
   }
 
   /**
@@ -182,6 +185,20 @@ class MessageBox {
   addToolResult(name, result, toolCall) {
     // 先 flush markdown 渲染器的缓冲区（避免内容被截断）
     this.flushContentBuffer();
+
+    // 文件操作工具去重：同一文件只显示一次结果（不管什么操作）
+    const filePath = this._getToolFilePath(name, toolCall);
+    if (filePath) {
+      if (this._lastToolFile === filePath && this._sameFileResultShown) {
+        return; // 跳过同一文件的重复结果
+      }
+      this._lastToolFile = filePath;
+      this._sameFileResultShown = true;
+    } else {
+      // 非文件操作，清除状态
+      this._lastToolFile = null;
+      this._sameFileResultShown = false;
+    }
 
     const maxResultHeight = 10; // 1:1复刻opencode，工具响应最多显示10行
     const lines = this.renderer.renderToolResponse(name, result, toolCall, this.layout.messageWidth - 2, maxResultHeight);
@@ -551,6 +568,27 @@ class MessageBox {
     // 渲染相关缓存
     this._visibleLengthCache.clear();
     this._wrapLineCache.clear();
+    // 文件去重状态重置
+    this._lastToolFile = null;
+    this._sameFileResultShown = false;
+  }
+
+  /**
+   * 获取工具调用的文件路径（用于去重判断）
+   */
+  _getToolFilePath(name, toolCall) {
+    // 优先从 result 获取文件路径
+    if (toolCall?.function?.arguments) {
+      try {
+        const args = typeof toolCall.function.arguments === 'string'
+          ? JSON.parse(toolCall.function.arguments)
+          : toolCall.function.arguments;
+        if (args.filePath) {return args.filePath;}
+        if (args.path) {return args.path;}
+        if (args.source) {return args.source;}
+      } catch {}
+    }
+    return null;
   }
 
   /**

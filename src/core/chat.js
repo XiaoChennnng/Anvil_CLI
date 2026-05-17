@@ -84,6 +84,10 @@ class ChatEngine extends EventEmitter {
     // AskUserQuestion 等待状态
     this._pendingQuestionResolve = null;
 
+    // 团队模式状态（Team System）
+    this.teamManager = null;
+    this.teamMode = false;
+
     // 监听 AI 客户端事件并转发（内部检查消息不转发到 UI）
     if (this.aiClient) {
       this.aiClient.on('thinking', (chunk) => {
@@ -361,7 +365,7 @@ class ChatEngine extends EventEmitter {
         try {
           const compLevel = this.contextManager.getCompressionLevel(this.messages);
           if (compLevel.needsCompression || compLevel.ratio > 0.85) {
-            const compressResult = this.compactContext({ level: 'auto', keep: ['recent', 'decisions'] });
+            const compressResult = await this.compactContext({ level: 'auto', keep: ['recent', 'decisions'] });
             if (compressResult.stats?.compressed) {
               // 使用智能任务指纹检测任务是否丢失
               if (isTaskLost(compressResult.messages, taskFingerprint)) {
@@ -760,10 +764,21 @@ class ChatEngine extends EventEmitter {
    * @param {Object} options - 见 ContextManager.compactContext
    * @returns {{ messages: Array, stats: Object }}
    */
-  compactContext(options) {
+  async compactContext(options) {
     if (!this.contextManager) {
       return { messages: this.messages, stats: { compressed: false, error: '上下文管理器未初始化' } };
     }
+
+    // AI 语义压缩：先调用 AI 生成语义摘要
+    const semanticSummary = await this._generateSemanticSummary();
+    if (semanticSummary) {
+      this.messages.push({
+        role: 'system',
+        content: `[AI 语义摘要]\n${semanticSummary}\n[/AI 语义摘要]`,
+        _semanticSummary: true,
+      });
+    }
+
     const result = this.contextManager.compactContext(this.messages, options);
     this.messages = result.messages;
     return result;
@@ -841,7 +856,17 @@ class ChatEngine extends EventEmitter {
     }
 
     try {
-      const result = this.compactContext({ level, keep });
+      // AI 语义压缩：先理解对话内容，生成语义摘要
+      const semanticSummary = await this._generateSemanticSummary();
+      if (semanticSummary) {
+        this.messages.push({
+          role: 'system',
+          content: `[AI 语义摘要]\n${semanticSummary}\n[/AI 语义摘要]`,
+          _semanticSummary: true,
+        });
+      }
+
+      const result = await this.compactContext({ level, keep });
       if (result.stats && result.stats.compressed) {
         const stats = result.stats;
         if (this.logger) {
@@ -857,6 +882,44 @@ class ChatEngine extends EventEmitter {
     } catch (err) {
       if (this.logger) {this.logger.error('手动压缩失败', err.message);}
       return { error: `压缩失败: ${err.message}` };
+    }
+  }
+
+  /**
+   * AI 语义压缩：调用 AI 生成语义摘要
+   * 在规则压缩前先用 AI 理解对话内容，生成语义级别的摘要
+   * @returns {Promise<string>} 语义摘要内容
+   */
+  async _generateSemanticSummary() {
+    if (!this.aiClient) {return '';}
+
+    try {
+      const summaryPrompt = `请用 3-5 句话总结以下对话的核心内容：
+1. 用户的主要需求是什么？
+2. 我们做了什么关键操作？
+3. 产生了哪些重要决策或文件变更？
+
+请直接输出摘要，不要解释。`;
+
+      // 提取最近 20 条消息的内容（限制长度避免 token 浪费）
+      const recentMsgs = this.messages.slice(-20);
+      const dialogueContent = recentMsgs
+        .filter(m => m.role !== 'system' || m._semanticSummary)
+        .map(m => `${m.role}: ${(m.content || '').slice(0, 300)}`)
+        .join('\n');
+
+      if (!dialogueContent.trim()) {return '';}
+
+      // 调用 AI 生成摘要（使用轻量模型，减少 token 消耗）
+      const response = await this.aiClient.chat([
+        { role: 'system', content: summaryPrompt },
+        { role: 'user', content: dialogueContent },
+      ], { model: this.model });
+
+      return response.content || '';
+    } catch (err) {
+      this.logger?.warn('AI 语义摘要生成失败', err.message);
+      return '';
     }
   }
 
@@ -1169,6 +1232,135 @@ class ChatEngine extends EventEmitter {
     }
 
     return baseStatus;
+  }
+
+  // ================================================================
+  // 团队模式管理（Team System）
+  // ================================================================
+
+  /**
+   * 懒加载并获取 TeamManager 实例
+   */
+  async _getTeamManager() {
+    if (!this.teamManager) {
+      const TeamManager = require('./team/manager');
+      this.teamManager = await TeamManager.create({
+        config: this.config,
+        logger: this.logger,
+        parentAgent: this,
+      });
+    }
+    return this.teamManager;
+  }
+
+  /**
+   * 评估任务复杂度，决定是否需要创建团队
+   * @param {string} taskDescription - 任务描述
+   * @returns {Object} 评估结果
+   */
+  async _evaluateTeamNeed(taskDescription) {
+    const teamManager = await this._getTeamManager();
+    const context = {
+      messageCount: this.messages.length,
+      toolCallCount: this.messages.reduce((count, m) => {
+        return count + (m.tool_calls?.length || 0);
+      }, 0),
+    };
+
+    return teamManager.evaluateTaskComplexity(taskDescription, context);
+  }
+
+  /**
+   * 启动团队任务
+   * @param {string} taskDescription - 任务描述
+   * @returns {Object} 执行结果
+   */
+  async _startTeamTask(taskDescription) {
+    try {
+      // 评估是否需要团队
+      const evaluation = await this._evaluateTeamNeed(taskDescription);
+
+      if (!evaluation.needsTeam) {
+        // 任务足够简单，不需要团队
+        return { needsTeam: false, reason: evaluation.reason };
+      }
+
+      this.teamMode = true;
+      this.emit('team_mode_start', {
+        complexityScore: evaluation.complexityScore,
+        suggestedAgents: evaluation.suggestedAgents,
+      });
+
+      const teamManager = await this._getTeamManager();
+      const result = await teamManager.startTeamTask(taskDescription, {
+        messageCount: this.messages.length,
+      });
+
+      return result;
+    } catch (error) {
+      this.logger?.error('团队模式执行失败', error.message);
+      this.teamMode = false;
+      return { needsTeam: false, error: error.message };
+    } finally {
+      this.teamMode = false;
+    }
+  }
+
+  /**
+   * 设置团队事件监听（供 TUI 绑定）
+   */
+  _setupTeamEventListeners() {
+    if (!this.teamManager) return;
+
+    this.teamManager.on('team_created', (data) => {
+      this.emit('team_created', data);
+    });
+
+    this.teamManager.on('agent_created', (data) => {
+      this.emit('subagent_created', data);
+    });
+
+    this.teamManager.on('agent_started', (data) => {
+      this.emit('subagent_started', data);
+    });
+
+    this.teamManager.on('agent_completed', (data) => {
+      this.emit('subagent_completed', data);
+    });
+
+    this.teamManager.on('agent_terminated', (data) => {
+      this.emit('subagent_terminated', data);
+    });
+
+    this.teamManager.on('state_changed', (data) => {
+      this.emit('team_state_changed', data);
+    });
+
+    this.teamManager.on('team_dissolved', (data) => {
+      this.emit('team_mode_end', data);
+    });
+
+    // 子Agent事件转发
+    this.teamManager.on('subagent_thinking', (data) => {
+      this.emit('subagent_thinking', data);
+    });
+
+    this.teamManager.on('subagent_content', (data) => {
+      this.emit('subagent_content', data);
+    });
+
+    this.teamManager.on('subagent_usage', (data) => {
+      this.emit('subagent_usage', data);
+    });
+  }
+
+  /**
+   * 终止团队
+   */
+  async _dissolveTeam() {
+    if (this.teamManager) {
+      await this.teamManager.dissolve();
+    }
   }
 }
 

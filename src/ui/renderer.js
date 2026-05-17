@@ -175,6 +175,8 @@ class AnvilRenderer extends EventEmitter {
     this._thinkingBuffer = '';
     // 定位光标到消息区，spinner 在此处显示
     this._moveTo(this._currentRow);
+    // 启动闪烁 spinner
+    this.spinner.start('Thinking...');
   }
 
   renderThinkingChunk(chunk) {
@@ -196,6 +198,7 @@ class AnvilRenderer extends EventEmitter {
   }
 
   renderContentStart() {
+    this.spinner.stop();  // 停止闪烁
     this.inThinking = false;
     this.inResponse = true;
 
@@ -374,7 +377,7 @@ class AnvilRenderer extends EventEmitter {
   }
 
   renderError(message, error) {
-    this.spinner.stop();
+    this.spinner.stop();  // 停止闪烁
     const t = this.theme;
     this._writeLine('');
     this._writeLine(`${t.error('✖')} ${message}`);
@@ -392,6 +395,7 @@ class AnvilRenderer extends EventEmitter {
   }
 
   reset() {
+    this.spinner.stop();  // 停止闪烁
     this.inThinking = false;
     this.inResponse = false;
     this._hasThinkingContent = false;

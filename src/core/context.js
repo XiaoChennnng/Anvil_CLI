@@ -976,7 +976,9 @@ class ContextManager {
     }
 
     // 对存档轮次生成摘要
-    const messagesOut = [...systemMsgs];
+    // 先提取并保留 AI 语义摘要消息
+    const semanticSummaryMsgs = messages.filter((m) => m._semanticSummary);
+    const messagesOut = [...systemMsgs, ...semanticSummaryMsgs];
 
     if (archivedRounds.length > 0) {
       // 按级别生成摘要
@@ -1239,13 +1241,17 @@ class ContextManager {
 
   /**
    * 分割消息为系统消息和非系统消息（辅助方法）
+   * 注意：_semanticSummary 消息会被当作普通消息处理（保留在 nonSystem 中后续压缩）
    */
   _splitMessages(messages) {
-    const systemMsgs = messages.filter((m) => m.role === 'system' && !m._archiveTier);
+    const systemMsgs = messages.filter((m) => m.role === 'system' && !m._archiveTier && !m._semanticSummary);
     const archiveMsgs = messages.filter((m) => m._archiveTier);
-    const regularNonSystem = messages.filter((m) => m.role !== 'system' && !m._archiveTier);
+    // _semanticSummary 消息要保留（不放这里，避免被压缩掉）
+    const semanticSummaryMsgs = messages.filter((m) => m._semanticSummary);
+    const regularNonSystem = messages.filter((m) => m.role !== 'system' && !m._archiveTier && !m._semanticSummary);
     return {
       systemMsgs: [...systemMsgs, ...archiveMsgs],
+      semanticSummaryMsgs,
       nonSystem: regularNonSystem,
     };
   }

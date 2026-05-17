@@ -31,7 +31,7 @@ function registerContextTools(toolRegistry, chatEngine, logger) {
       }
 
       try {
-        const result = chatEngine.compactContext({ level, keep });
+        const result = await chatEngine.compactContext({ level, keep });
 
         if (!result || !result.stats) {
           return { error: '压缩失败' };

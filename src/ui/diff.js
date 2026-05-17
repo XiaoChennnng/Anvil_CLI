@@ -245,7 +245,7 @@ function renderCodeBox(code, language, fileName, width, maxLines = 10) {
     }
 
     // 行号（可选，简化版不显示）
-    const lineStr = t.syntax.string(content);
+    const lineStr = t.text(content);  // 普通文本色，不用 string（绿色）
     result.push(`│ ${lineStr}${' '.repeat(Math.max(0, maxContentWidth - lineStr.replace(/\x1b\[\d+m/g, '').length))} │`);
   }
 

@@ -259,7 +259,7 @@ Anvil — AI-driven CLI Programming Assistant
       }
 
       try {
-        const result = chatEngine.compactContext({ level, keep });
+        const result = await chatEngine.compactContext({ level, keep });
         const stats = result.stats || {};
 
         if (stats.compressed) {

@@ -121,6 +121,10 @@ async function main() {
   // 注册 Plan Mode 工具（在 chatEngine 创建后）
   registerPlanModeTools(toolRegistry, chatEngine);
 
+  // 注册 Team Mode 工具
+  const { registerTeamTools } = require('../tools/team_tools');
+  registerTeamTools(toolRegistry, chatEngine);
+
   const tui = new TUI(config);
 
   let thinkingStarted = false;
@@ -446,6 +450,10 @@ async function main() {
     }
 
     tui.finishResponse(chatEngine.model);
+
+    // 重置状态标志，确保下次任务能正确触发 thinking 显示
+    thinkingStarted = false;
+    contentStarted = false;
 
     tui.sidebar.updateMessages(chatEngine.messages);
     tui.sidebar.setTodos(todoManager.getAll());

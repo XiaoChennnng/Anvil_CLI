@@ -469,7 +469,7 @@ class ToolRenderer {
               const ln = String(i + 1).padStart(LN_WIDTH);
               const sep = t.dim('│');
               const maxContentLen = contentWidth - LN_WIDTH - 10;
-              lines.push(`${indent}${indent}${t.dim(ln)} ${sep} ${t.syntax.string(this._truncate(displayLines[i], maxContentLen))}`);
+              lines.push(`${indent}${indent}${t.dim(ln)} ${sep} ${t.text(this._truncate(displayLines[i], maxContentLen))}`);
             }
             if (contentLines.length > maxLines) {
               const overflow = `... +${contentLines.length - maxLines} more lines`;
