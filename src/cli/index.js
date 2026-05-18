@@ -148,6 +148,16 @@ async function main() {
     tui.renderThinkingChunk(chunk);
   });
 
+  // complete 事件监听：确保任何路径结束都能清理 thinking 状态
+  // 作为 finishResponse 的保底，避免提前 return 的分支遗漏清理
+  chatEngine.on('complete', () => {
+    tui.statusBar.setThinking(false);
+    if (tui._thinkingTimer) {
+      clearInterval(tui._thinkingTimer);
+      tui._thinkingTimer = null;
+    }
+  });
+
   chatEngine.on('content', (chunk) => {
     if (!contentStarted) {
       tui.renderContentStart();

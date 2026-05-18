@@ -1065,8 +1065,7 @@ class ContextManager {
    * 策略: 按重要性评分裁剪消息 + 淘汰低频文件缓存
    */
   _lightCompress(messages) {
-    const systemMsgs = messages.filter((m) => m.role === 'system');
-    const nonSystem = messages.filter((m) => m.role !== 'system');
+    const { systemMsgs, semanticSummaryMsgs, nonSystem } = this._splitMessages(messages);
 
     // 按重要性评分保留消息，目标 75% 窗口
     const targetTokens = Math.floor(this.windowSize * 0.75);
@@ -1080,7 +1079,8 @@ class ContextManager {
       this._fileContexts.delete(key);
     }
 
-    return { messages: [...systemMsgs, ...kept], detail: '按重要性裁剪 + 文件缓存清理' };
+    // 轻度压缩：保留所有 systemMsgs 和 semanticSummaryMsgs
+    return { messages: [...systemMsgs, ...semanticSummaryMsgs, ...kept], detail: '按重要性裁剪 + 文件缓存清理' };
   }
 
   /**

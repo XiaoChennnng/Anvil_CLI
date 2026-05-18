@@ -145,7 +145,7 @@ class ChatEngine extends EventEmitter {
 
     try {
       if (this._isCompressionRequest(input)) {
-        this.messages.push({ role: 'user', content: input });
+        // 不要添加到消息历史，直接处理压缩请求
         const result = this._handleCompressionRequest(input);
         this.isProcessing = false;
         return result;
@@ -764,19 +764,21 @@ class ChatEngine extends EventEmitter {
    * @param {Object} options - 见 ContextManager.compactContext
    * @returns {{ messages: Array, stats: Object }}
    */
-  async compactContext(options) {
+  async compactContext(options, skipSemanticSummary = false) {
     if (!this.contextManager) {
       return { messages: this.messages, stats: { compressed: false, error: '上下文管理器未初始化' } };
     }
 
-    // AI 语义压缩：先调用 AI 生成语义摘要
-    const semanticSummary = await this._generateSemanticSummary();
-    if (semanticSummary) {
-      this.messages.push({
-        role: 'system',
-        content: `[AI 语义摘要]\n${semanticSummary}\n[/AI 语义摘要]`,
-        _semanticSummary: true,
-      });
+    // AI 语义压缩：先调用 AI 生成语义摘要（如果未被跳过）
+    if (!skipSemanticSummary) {
+      const semanticSummary = await this._generateSemanticSummary();
+      if (semanticSummary) {
+        this.messages.push({
+          role: 'system',
+          content: `[AI 语义摘要]\n${semanticSummary}\n[/AI 语义摘要]`,
+          _semanticSummary: true,
+        });
+      }
     }
 
     const result = this.contextManager.compactContext(this.messages, options);
@@ -866,7 +868,8 @@ class ChatEngine extends EventEmitter {
         });
       }
 
-      const result = await this.compactContext({ level, keep });
+      // 调用 compactContext，跳过语义摘要生成（已在上面生成）
+      const result = await this.compactContext({ level, keep }, true);
       if (result.stats && result.stats.compressed) {
         const stats = result.stats;
         if (this.logger) {
