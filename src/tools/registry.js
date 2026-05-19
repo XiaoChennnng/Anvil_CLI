@@ -1,8 +1,13 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
+const { loadSkillsFromDir } = require('./skill');
+
 class ToolRegistry {
   constructor() {
     this._tools = new Map();
+    this._skills = new Map();
   }
 
   register(tool) {
@@ -50,6 +55,55 @@ class ToolRegistry {
 
   list() {
     return Array.from(this._tools.keys());
+  }
+
+  // ==========================================================================
+  // Skill 管理
+  // ==========================================================================
+
+  /**
+   * 加载用户 Skills（从 .anvil/skills/ 目录）
+   * @param {string} projectDir - 项目目录
+   */
+  loadSkills(projectDir) {
+    const skillsDir = path.join(projectDir, '.anvil', 'skills');
+    const loaded = loadSkillsFromDir(skillsDir);
+
+    for (const [name, skill] of loaded) {
+      this._skills.set(name, skill);
+    }
+
+    return this._skills.size;
+  }
+
+  /**
+   * 获取 Skill
+   */
+  getSkill(name) {
+    return this._skills.get(name);
+  }
+
+  /**
+   * 检查输入是否匹配某个 Skill
+   */
+  matchSkill(input) {
+    for (const [, skill] of this._skills) {
+      if (skill.matches(input)) {
+        return skill;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 列出所有已加载的 Skills
+   */
+  listSkills() {
+    const result = [];
+    for (const [, skill] of this._skills) {
+      result.push(skill.getInfo());
+    }
+    return result;
   }
 }
 

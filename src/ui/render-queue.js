@@ -6,6 +6,7 @@ class RenderQueue {
     this._lastRender = 0;
     this._pending = false;
     this._queuedFn = null;
+    this._timerId = null;
   }
 
   requestRender(renderFn) {
@@ -23,16 +24,20 @@ class RenderQueue {
       this._pending = true;
       this._queuedFn = renderFn;
       const remaining = this._minInterval - elapsed;
-      setTimeout(() => {
+      this._timerId = setTimeout(() => {
         if (this._queuedFn) {
           this._queuedFn();
           this._lastRender = Date.now();
         }
         this._pending = false;
         this._queuedFn = null;
+        this._timerId = null;
       }, remaining);
     } else {
-      // 已经有待执行的渲染，覆盖它
+      // 已经有待执行的渲染，覆盖它，但先清除旧 Timer
+      if (this._timerId) {
+        clearTimeout(this._timerId);
+      }
       this._queuedFn = renderFn;
     }
   }

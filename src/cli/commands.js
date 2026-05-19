@@ -3,6 +3,11 @@
 const { isValidModel } = require('../ai/models');
 
 const COMMANDS = {
+  skills: {
+    name: '/skills',
+    description: '查看所有已加载的 Skills',
+    usage: '/skills',
+  },
   review: {
     name: '/review',
     description: '触发代码审查（可指定文件）',
@@ -295,6 +300,31 @@ Anvil — AI-driven CLI Programming Assistant
         }
         output += '\n';
       }
+      return { handled: true, response: output.trim() };
+    }
+
+    case 'skills': {
+      const toolRegistry = options.toolRegistry;
+      if (!toolRegistry) {
+        return { handled: true, response: '❌ 工具注册表未初始化' };
+      }
+
+      const skills = toolRegistry.listSkills();
+      if (skills.length === 0) {
+        return {
+          handled: true,
+          response: '📦 暂无已加载的 Skills\n\n将 Skills 文件放入 .anvil/skills/ 目录即可自动加载\n支持 SKILL.md 文件或 skill-name/SKILL.md 目录结构',
+        };
+      }
+
+      let output = `📦 已加载 ${skills.length} 个 Skills:\n\n`;
+      for (const skill of skills) {
+        const triggers = skill.triggers && skill.triggers.length > 0
+          ? ` (触发: ${skill.triggers.join(', ')})`
+          : '';
+        output += `  • ${skill.name}: ${skill.description || '无描述'}${triggers}\n`;
+      }
+      output += '\n提示：Skills 支持目录结构 - skill-name/SKILL.md';
       return { handled: true, response: output.trim() };
     }
 

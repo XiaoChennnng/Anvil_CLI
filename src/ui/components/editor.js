@@ -12,21 +12,54 @@ class Editor {
     this.history = [];
     this.historyIndex = -1;
     this.cursorPos = 0;  // 光标在 currentInput 中的位置（0-based）
+    this._needsRefresh = false;  // 增量渲染标志
   }
 
   /**
-   * 渲染输入区（双缓冲模式）
+   * 判断是否为 CJK 双倍宽字符
+   */
+  _isCJK(char) {
+    const code = char.charCodeAt(0);
+    return (code >= 0x1100 && code <= 0x115F) ||
+      (code >= 0x2E80 && code <= 0xA4CF) ||
+      (code >= 0xAC00 && code <= 0xD7AF) ||
+      (code >= 0xF900 && code <= 0xFAFF) ||
+      (code >= 0xFE10 && code <= 0xFE6F) ||
+      (code >= 0xFF01 && code <= 0xFF60) ||
+      (code >= 0xFFE0 && code <= 0xFFE6) ||
+      (code >= 0x3000 && code <= 0x303F);
+  }
+
+  /**
+   * 计算字符串的可见宽度（支持 CJK 双倍宽字符）
+   */
+  _visibleWidth(str) {
+    let width = 0;
+    let inEscape = false;
+    for (let i = 0; i < str.length; i++) {
+      const ch = str[i];
+      if (ch === '\x1b') { inEscape = true; continue; }
+      if (inEscape) { if (ch === 'm') {inEscape = false;} continue; }
+      width += this._isCJK(ch) ? 2 : 1;
+    }
+    return width;
+  }
+
+  /**
+   * 渲染输入区（增量渲染模式，固定位置写入，类似侧边栏）
+   * 使用 ANSI 定位确保输入框始终在正确位置，不被消息区覆盖
    */
   render() {
     const { editorStartRow, _width } = this.layout;
     const t = this.theme;
 
     let output = '';
-    // 顶部边框（用 dim 细线替代粗横线，不抢眼）
+
+    // 顶部边框（用 dim 细线）
     const borderLine = t.textMuted('─'.repeat(_width));
     output += `\x1b[${editorStartRow};1H\x1b[2K${borderLine}`;
 
-    // 输入提示符 ">"
+    // 输入提示符 ">"（使用清除到行尾确保旧内容被清除）
     const promptContent = chalk.hex(t.colors.primary).bold(' >') + (this.currentInput ? ' ' + this.currentInput : '');
     output += `\x1b[${editorStartRow + 1};1H\x1b[2K${promptContent}`;
 
@@ -206,21 +239,26 @@ class Editor {
       this.layout.clearLine();
     }
 
+    // 使用 ANSI 定位重绘（与 render() 一致）
     this.layout.moveTo(row, 1);
+    this.layout.clearToEndOfLine();
     process.stdout.write(chalk.hex(t.colors.primary).bold(' >'));
     if (this.currentInput) {
       process.stdout.write(' ' + this.currentInput);
     }
-    // 光标移到正确位置
+    this._needsRefresh = false;
     this._restoreCursor();
   }
 
   /**
    * 恢复光标到当前位置（无闪烁，不重绘内容）
+   * 使用可见宽度计算光标位置，支持 CJK 双倍宽字符
    */
   _restoreCursor() {
     this.layout.showCursor();
-    this.layout.moveTo(this.promptRow, this.promptCol + this.cursorPos);
+    const inputBeforeCursor = this.currentInput.slice(0, this.cursorPos);
+    const visualOffset = this._visibleWidth(inputBeforeCursor);
+    this.layout.moveTo(this.promptRow, this.promptCol + visualOffset);
   }
 
   /**

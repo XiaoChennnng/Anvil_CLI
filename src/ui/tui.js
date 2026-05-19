@@ -93,8 +93,15 @@ class TUI {
    * 合并 render 输出 + 反压检测，避免 Windows 终端缓冲区阻塞
    */
   _refreshMessages() {
-    const out = (this.messageBox.render() || '') + (this.sidebar.render() || '');
-    if (out) {this._safeWrite(out, false);}
+    let out = (this.messageBox.render() || '') + (this.sidebar.render() || '');
+
+    // 如果 editor 有未刷新的变化，也要重绘输入框
+    if (this.editor._needsRefresh) {
+      out += this.editor.render();
+      this.editor._needsRefresh = false;
+    }
+
+    if (out) { this._safeWrite(out, false); }
   }
 
   /**
@@ -555,12 +562,16 @@ class TUI {
         if (this._backupTimer) { clearTimeout(this._backupTimer); this._backupTimer = null; }
       });
       // 兜底定时器：500ms 后 drain 还没来就强制恢复
-      if (this._backupTimer) { clearTimeout(this._backupTimer); }
+      // 保存 Timer ID 用于清理
+      if (this._backupTimer) {
+        clearTimeout(this._backupTimer);
+        this._backupTimer = null;
+      }
       this._backupTimer = setTimeout(() => {
         if (this._stdoutBackedUp) {
           this._stdoutBackedUp = false;
-          this._backupTimer = null;
         }
+        this._backupTimer = null;
       }, 500);
     }
 

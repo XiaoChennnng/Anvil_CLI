@@ -182,6 +182,11 @@ class ResultAggregator {
     let content = '';
     const artifacts = {};
 
+    // 处理无冲突情况：_resolveConflicts 返回 { resolved: true } 时直接返回空结果
+    if (categorizedResults.resolved === true && !categorizedResults.resolvedItems) {
+      return { content: '', artifacts };
+    }
+
     switch (strategy) {
       case AggregationStrategy.SEQUENTIAL:
         content = this._mergeSequential(categorizedResults);

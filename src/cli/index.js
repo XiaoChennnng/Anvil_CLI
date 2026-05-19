@@ -62,6 +62,11 @@ async function main() {
   });
 
   const toolRegistry = new ToolRegistry();
+  // 加载用户自定义 Skills（从 .anvil/skills/ 目录）
+  const skillCount = toolRegistry.loadSkills(currentProjectDir);
+  if (skillCount > 0) {
+    logger.info(`已加载 ${skillCount} 个用户 Skills`);
+  }
   registerFileTools(toolRegistry);
   registerCommandTool(toolRegistry);
   registerCodeTools(toolRegistry);
@@ -181,17 +186,40 @@ async function main() {
   chatEngine.on('command_output', (data, isError) => {
     const t = tui.layout.theme;
     const border = chalk.hex(t.colors.primary)('┃');
-    // 按行分割输出，避免多行内容作为单行导致显示溢出
+    const MAX_LINE_LENGTH = 500; // 单行最大长度
+    const MAX_TOTAL_LINES = 100; // 每次最多处理行数
+
+    // 过滤 ANSI 转义序列的辅助函数
+    const stripAnsi = (str) => str.replace(/\x1b\[[0-9;]*[mK]/g, '');
+
+    // 截断过长的行
+    const truncateLine = (line) => {
+      if (line.length > MAX_LINE_LENGTH) {
+        return line.slice(0, MAX_LINE_LENGTH) + '... (截断)';
+      }
+      return line;
+    };
+
+    // 按行分割输出
     const lines = data.split('\n');
+    let processed = 0;
     for (const line of lines) {
-      if (line.trim()) {
+      if (processed >= MAX_TOTAL_LINES) break;
+
+      // 过滤 ANSI 并截断
+      const cleanLine = truncateLine(stripAnsi(line));
+
+      if (cleanLine.trim()) {
         tui.messageBox.renderedLines.push(
-          `${border} ${isError ? t.error(line) : line}`
+          `${border} ${isError ? t.error(cleanLine) : cleanLine}`
         );
       } else {
         tui.messageBox.renderedLines.push('');
       }
+      processed++;
     }
+
+    // 使用 _queueRender 节流，不要每次都触发渲染
     tui._queueRender();
   });
 
@@ -374,6 +402,12 @@ async function main() {
   });
 
   tui.onContextInject((text) => {
+    const MAX_PENDING_CONTEXT = 10000; // 最大 10KB
+    if (pendingContextBuffer.length + text.length > MAX_PENDING_CONTEXT) {
+      // 截断旧内容，保留最新的
+      const excess = pendingContextBuffer.length + text.length - MAX_PENDING_CONTEXT;
+      pendingContextBuffer = pendingContextBuffer.slice(excess);
+    }
     pendingContextBuffer += (pendingContextBuffer ? '\n' : '') + text;
     tui.setPendingContext(true);
     if (logger) {
@@ -408,7 +442,7 @@ async function main() {
     }
 
     if (isCommand(input)) {
-      const result = await handleCommand(input, chatEngine, { todoManager, mcpManager, chatEngine });
+      const result = await handleCommand(input, chatEngine, { todoManager, mcpManager, chatEngine, toolRegistry });
       if (result.handled) {
         if (input.startsWith('/todo')) {
             const todos = todoManager.getAll();

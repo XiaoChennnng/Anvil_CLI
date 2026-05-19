@@ -53,6 +53,9 @@ class MessageBox {
         this.scrollOffset = Math.max(0, this.scrollOffset - excess);
       }
     }
+    // 清理缓存（行位置变了，缓存的键不再有效）
+    this._visibleLengthCache.clear();
+    this._wrapLineCache.clear();
   }
 
   addUserMessage(content) {
@@ -200,8 +203,20 @@ class MessageBox {
       this._sameFileResultShown = false;
     }
 
+    // 错误结果限制：只显示前20行，避免长堆栈撑爆显示
+    let displayResult = result;
+    const MAX_RESULT_LINES = 20;
+    if (result && result.error) {
+      // 错误结果最多显示20行
+      displayResult = { ...result };
+      if (displayResult.content && displayResult.content.split('\n').length > MAX_RESULT_LINES) {
+        const lines = displayResult.content.split('\n');
+        displayResult.content = lines.slice(0, MAX_RESULT_LINES).join('\n') + `\n... (错误输出截断，共 ${lines.length} 行)`;
+      }
+    }
+
     const maxResultHeight = 10; // 1:1复刻opencode，工具响应最多显示10行
-    const lines = this.renderer.renderToolResponse(name, result, toolCall, this.layout.messageWidth - 2, maxResultHeight);
+    const lines = this.renderer.renderToolResponse(name, displayResult, toolCall, this.layout.messageWidth - 2, maxResultHeight);
     this.renderedLines.push(...lines);
     this._scrollToBottom();
   }
@@ -281,7 +296,13 @@ class MessageBox {
       this.renderedLines.length - this.scrollOffset
     );
 
-    // 构建显示行：对超长行做换行处理，避免内容侵入侧边栏
+    // 固定位置写入：清理整个消息区域，确保无残留
+    for (let i = 0; i < messageViewportHeight; i++) {
+      const row = viewportStart + i;
+      output += `\x1b[${row};1H${' '.repeat(messageWidth)}`;
+    }
+
+    // 构建显示行：对超长行做换行处理
     let displayLines = [];
     for (const line of visibleLines) {
       if (line) {
@@ -291,50 +312,27 @@ class MessageBox {
         displayLines.push('');
       }
     }
-    // 限制显示行数 ≤ viewport 高度
-    // 在底部时保留最后 viewport 行（批准组件、最新输出在末尾）
-    // 向上滚动时保留最前 viewport 行（用户在查看历史内容）
+    // 截断到 viewport 高度（底部优先）
     if (displayLines.length > messageViewportHeight) {
-      if (this.scrollOffset === 0) {
-        displayLines = displayLines.slice(displayLines.length - messageViewportHeight);
-      } else {
-        displayLines = displayLines.slice(0, messageViewportHeight);
-      }
+      displayLines = displayLines.slice(-messageViewportHeight);
     }
 
-    // 增量渲染：只更新实际变化的行
+    // 固定位置写入每行（每行都写，无增量比较）
     for (let i = 0; i < messageViewportHeight; i++) {
       const row = viewportStart + i;
       const line = i < displayLines.length ? displayLines[i] : '';
-      const lastLine = i < this._lastRenderedVisibleLines.length ? this._lastRenderedVisibleLines[i] : null;
 
-      // 只更新变化的行
-      if (line !== lastLine) {
-        if (line) {
-          // 用空格填充到 messageWidth，确保不侵入侧边栏区域
-          const visibleLen = this._visibleLength(line);
-          const padding = messageWidth - Math.min(visibleLen, messageWidth);
-          output += `\x1b[${row};1H${line}${' '.repeat(Math.max(0, padding))}`;
-        } else {
-          output += `\x1b[${row};1H${' '.repeat(messageWidth)}`;
-        }
-        // 更新缓存
-        if (i < this._lastRenderedVisibleLines.length) {
-          this._lastRenderedVisibleLines[i] = line;
-        } else {
-          this._lastRenderedVisibleLines.push(line);
-        }
-      }
-    }
-
-    // 如果新行数少于之前的缓存长度，清理多余部分并填充背景
-    if (displayLines.length < this._lastRenderedVisibleLines.length) {
-      for (let i = displayLines.length; i < this._lastRenderedVisibleLines.length; i++) {
-        const row = viewportStart + i;
+      if (line) {
+        const visibleLen = this._visibleLength(line);
+        const padding = messageWidth - Math.min(visibleLen, messageWidth);
+        output += `\x1b[${row};1H${line}${' '.repeat(Math.max(0, padding))}`;
+      } else {
         output += `\x1b[${row};1H${' '.repeat(messageWidth)}`;
       }
-      this._lastRenderedVisibleLines = this._lastRenderedVisibleLines.slice(0, displayLines.length);
     }
+
+    // 更新缓存
+    this._lastRenderedVisibleLines = displayLines.slice();
 
     return output;
   }
@@ -466,15 +464,25 @@ class MessageBox {
     let inEscape = false;
     for (let i = 0; i < str.length; i++) {
       const ch = str[i];
-      if (ch === '\x1b') { inEscape = true; continue; }
-      if (inEscape) { if (ch === 'm') {inEscape = false;} continue; }
+      if (ch === '\x1b') {
+        inEscape = true;
+        continue;
+      }
+      if (inEscape) {
+        if (ch === 'm') { inEscape = false; }
+        continue;
+      }
       len += this._isCJK(ch) ? 2 : 1;
     }
 
-    // 限制缓存大小
-    if (this._visibleLengthCache.size < 1000) {
-      this._visibleLengthCache.set(str, len);
+    // 限制缓存大小，超限时淘汰最旧的条目
+    const MAX_VISIBLE_LENGTH_CACHE = 500;
+    if (this._visibleLengthCache.size >= MAX_VISIBLE_LENGTH_CACHE) {
+      // 淘汰最旧的条目（Map 按插入顺序存储，第一个就是最早的）
+      const firstKey = this._visibleLengthCache.keys().next().value;
+      this._visibleLengthCache.delete(firstKey);
     }
+    this._visibleLengthCache.set(str, len);
     return len;
   }
 
@@ -546,10 +554,13 @@ class MessageBox {
     }
 
     if (currentLine || openAnsi) {lines.push(currentLine || openAnsi);}
-    // 存缓存
-    if (this._wrapLineCache.size < 500) {
-      this._wrapLineCache.set(cacheKey, lines);
+    // 限制缓存大小，超限时淘汰最旧的条目
+    const MAX_WRAP_LINE_CACHE = 200;
+    if (this._wrapLineCache.size >= MAX_WRAP_LINE_CACHE) {
+      const firstKey = this._wrapLineCache.keys().next().value;
+      this._wrapLineCache.delete(firstKey);
     }
+    this._wrapLineCache.set(cacheKey, lines);
     return lines;
   }
 

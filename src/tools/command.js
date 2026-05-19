@@ -94,29 +94,7 @@ function executeCommand(params, context) {
     const MAX_OUTPUT_LEN = 2000; // stdout/stderr 返回给 AI 的最大字符数
     const MAX_OUTPUT_BUFFER = 100 * 1024; // 100KB — stdout/stderr 内存硬上限
 
-    // 滚动输出状态：累积内容在同一行滚动刷新
-    let _scrollLine = '';
-    let _scrollTimer = null;
-
-    // 刷新滚动行显示
-    const flushScrollLine = () => {
-      const cols = process.stdout.columns || 80;
-      const display = _scrollLine.length > cols
-        ? _scrollLine.slice(-cols)
-        : _scrollLine;
-      process.stdout.write(`\r${display}${' '.repeat(Math.max(0, cols - display.length))}`);
-    };
-
-    // 立即刷新滚动行（防抖）
-    const scheduleFlush = () => {
-      if (_scrollTimer) {clearTimeout(_scrollTimer);}
-      _scrollTimer = setTimeout(() => {
-        flushScrollLine();
-        _scrollTimer = null;
-      }, 50);
-    };
-
-    // 实时流式输出（滚动模式）
+    // 实时流式输出（通过 onOutput 回调传递，不直接写终端）
     if (proc.stdout) {
       proc.stdout.on('data', (data) => {
         const text = convertEncoding(data);
@@ -133,27 +111,7 @@ function executeCommand(params, context) {
           displayLines.splice(0, displayLines.length - maxDisplayLines);
         }
 
-        // 滚动展示：累积到当前行，不换行
-        for (const ch of text) {
-          if (ch === '\n') {
-            // 遇到换行符：输出当前行并清空
-            if (_scrollLine) {
-              const cols = process.stdout.columns || 80;
-              process.stdout.write(`\r${_scrollLine}${' '.repeat(Math.max(0, cols - _scrollLine.length))}\n`);
-              _scrollLine = '';
-            }
-          } else {
-            _scrollLine += ch;
-            // 限制单行长度，防止刷屏
-            const maxScrollLen = (process.stdout.columns || 80) * 2;
-            if (_scrollLine.length > maxScrollLen) {
-              _scrollLine = _scrollLine.slice(-maxScrollLen);
-            }
-            scheduleFlush();
-          }
-        }
-
-        // 触发输出事件（给 AI 上下文用）
+        // 触发输出事件（给 AI 上下文用，同时给 TUI 渲染）
         if (context.onOutput) {
           context.onOutput(text, false);
         }
@@ -175,24 +133,7 @@ function executeCommand(params, context) {
           displayLines.splice(0, displayLines.length - maxDisplayLines);
         }
 
-        // stderr 也用滚动模式（红色标记）
-        for (const ch of text) {
-          if (ch === '\n') {
-            if (_scrollLine) {
-              const cols = process.stdout.columns || 80;
-              process.stdout.write(`\r${chalk.red(_scrollLine)}${' '.repeat(Math.max(0, cols - _scrollLine.length))}\n`);
-              _scrollLine = '';
-            }
-          } else {
-            _scrollLine += ch;
-            const maxScrollLen = (process.stdout.columns || 80) * 2;
-            if (_scrollLine.length > maxScrollLen) {
-              _scrollLine = _scrollLine.slice(-maxScrollLen);
-            }
-            scheduleFlush();
-          }
-        }
-
+        // stderr 也通过 onOutput 回调传递
         if (context.onOutput) {
           context.onOutput(text, true);
         }
@@ -216,14 +157,6 @@ function executeCommand(params, context) {
 
     proc.on('close', (code) => {
       if (timer) {clearTimeout(timer);}
-      if (_scrollTimer) {clearTimeout(_scrollTimer);}
-
-      // 关闭前刷新剩余的滚动内容
-      if (_scrollLine) {
-        const cols = process.stdout.columns || 80;
-        process.stdout.write(`\r${_scrollLine}${' '.repeat(Math.max(0, cols - _scrollLine.length))}\n`);
-        _scrollLine = '';
-      }
 
       // 截断 stdout/stderr 防止塞爆 AI 上下文
       const trimmedStdout = stdout.trim();

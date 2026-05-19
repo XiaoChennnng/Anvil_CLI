@@ -48,6 +48,7 @@ class Sidebar {
     if (chatEngine) {
       this.contextManager = chatEngine.contextManager;
       this.messages = chatEngine.messages || [];
+      this.toolRegistry = chatEngine.toolRegistry || null;
     }
   }
 
@@ -353,6 +354,15 @@ class Sidebar {
       }
     }
 
+    // Skills 数量
+    const skillCount = this._getSkillCount();
+    if (skillCount > 0) {
+      if (lineIndex === line) {
+        return ` ${t.textMuted('Skills:')} ${t.token(skillCount.toString())}`;
+      }
+      line++;
+    }
+
     if (lineIndex === line) {
       return '';
     }
@@ -489,6 +499,15 @@ class Sidebar {
     } catch {
       return { systemPrompt: 0, projectOverview: 0, fileContexts: [], totalFileTokens: 0 };
     }
+  }
+
+  /**
+   * 获取已加载的 Skills 数量
+   */
+  _getSkillCount() {
+    if (!this.toolRegistry) {return 0;}
+    const skills = this.toolRegistry.listSkills();
+    return skills.length;
   }
 
   /**
