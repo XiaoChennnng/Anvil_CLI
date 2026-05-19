@@ -476,7 +476,7 @@ class MessageBox {
     }
 
     // 限制缓存大小，超限时淘汰最旧的条目
-    const MAX_VISIBLE_LENGTH_CACHE = 500;
+    const MAX_VISIBLE_LENGTH_CACHE = 1000;
     if (this._visibleLengthCache.size >= MAX_VISIBLE_LENGTH_CACHE) {
       // 淘汰最旧的条目（Map 按插入顺序存储，第一个就是最早的）
       const firstKey = this._visibleLengthCache.keys().next().value;
@@ -555,7 +555,7 @@ class MessageBox {
 
     if (currentLine || openAnsi) {lines.push(currentLine || openAnsi);}
     // 限制缓存大小，超限时淘汰最旧的条目
-    const MAX_WRAP_LINE_CACHE = 200;
+    const MAX_WRAP_LINE_CACHE = 500;
     if (this._wrapLineCache.size >= MAX_WRAP_LINE_CACHE) {
       const firstKey = this._wrapLineCache.keys().next().value;
       this._wrapLineCache.delete(firstKey);

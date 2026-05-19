@@ -189,8 +189,8 @@ async function main() {
     const MAX_LINE_LENGTH = 500; // 单行最大长度
     const MAX_TOTAL_LINES = 100; // 每次最多处理行数
 
-    // 过滤 ANSI 转义序列的辅助函数
-    const stripAnsi = (str) => str.replace(/\x1b\[[0-9;]*[mK]/g, '');
+    // 过滤所有 ANSI 转义序列（CSI、OSC、SCP 等）
+    const stripAnsi = (str) => str.replace(/\x1b(\[[0-9;]*[mHK]?|\?[0-9;]*[hl]|\][^\x07]*\x07)/g, '');
 
     // 截断过长的行
     const truncateLine = (line) => {

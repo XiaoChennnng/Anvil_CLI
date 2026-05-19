@@ -50,6 +50,10 @@ class RenderQueue {
   }
 
   reset() {
+    if (this._timerId) {
+      clearTimeout(this._timerId);
+      this._timerId = null;
+    }
     this._pending = false;
     this._queuedFn = null;
     this._lastRender = 0;
