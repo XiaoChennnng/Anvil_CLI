@@ -7,7 +7,7 @@
     "anvil": "./bin/anvil.js"
   },
   "scripts": {
-    "start": "node bin/anvil.js",
+    "start": "node --title Anvil bin/anvil.js",
     "test": "jest",
     "test:unit": "jest test/unit",
     "test:integration": "jest test/integration",

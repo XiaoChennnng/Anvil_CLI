@@ -3,6 +3,7 @@
 const chalk = require('chalk');
 const { getTheme } = require('../theme');
 const { calculateCost } = require('../tokens');
+const { visibleLength } = require('../ansi');
 
 class StatusBar {
   constructor(layout) {
@@ -165,53 +166,23 @@ class StatusBar {
       planModeWidget = chalk.bgHex(t.colors.primary).hex(t.colors.background).bold(' ⎔ Plan Mode ');
     }
 
-    // ─── Token Widget ───
+    // ─── Cost Widget ───
     let tokenWidget = '';
     let tokenWidgetWidth = 0;
     const { totalInput, totalOutput, totalCacheHit } = this.tokenUsage;
-    const totalTokens = totalInput + totalOutput;
 
-    if (totalTokens > 0) {
-      // 格式化 token 数（opencode 风格）
-      let formatted = totalTokens >= 1000000
-        ? (totalTokens / 1000000).toFixed(1) + 'M'
-        : totalTokens >= 1000
-          ? (totalTokens / 1000).toFixed(1) + 'K'
-          : String(totalTokens);
-      formatted = this._cleanTokenSuffix(formatted);
-
-      // 上下文窗口百分比（opencode 在 >80% 时显示警告）
-      const contextWindow = 1000000;
-      const percentage = (totalTokens / contextWindow) * 100;
-
-      // Token 显示: "Context: 110K, Cost: ¥0.50"
-      let tokenText = ` Context: ${formatted}`;
-      if (percentage > 80) {
-        // opencode: 在 token 文本中追加 "(85%)"
-        tokenText += `(${Math.round(percentage)}%)`;
+    if (this.pricing) {
+      const cost = calculateCost(
+        totalInput - totalCacheHit,
+        totalCacheHit,
+        totalOutput,
+        this.pricing
+      );
+      if (cost > 0) {
+        const costText = `Cost: ¥${cost.toFixed(2)} `;
+        tokenWidget = chalk.bgHex(t.colors.text).hex(t.colors.backgroundSecondary)(costText);
+        tokenWidgetWidth = this._visibleLength(tokenWidget);
       }
-      tokenText += ', ';
-      if (this.pricing) {
-        const cost = calculateCost(
-          totalInput - totalCacheHit,
-          totalCacheHit,
-          totalOutput,
-          this.pricing
-        );
-        if (cost > 0) {
-          tokenText += `Cost: ¥${cost.toFixed(2)} `;
-        }
-      } else {
-        tokenText += 'Cost: ¥0.00 ';
-      }
-
-      // bg=Text(#e0e0e0), fg=BackgroundSecondary(#252525)
-      // 超过 80% 时 bg=Warning
-      const tokenStyle = percentage > 80
-        ? chalk.bgHex(t.colors.warning).hex(t.colors.background).bold
-        : chalk.bgHex(t.colors.text).hex(t.colors.backgroundSecondary);
-      tokenWidget = tokenStyle(tokenText);
-      tokenWidgetWidth = this._visibleLength(tokenWidget);
     }
 
     // ─── Diagnostics ───
@@ -243,7 +214,7 @@ class StatusBar {
     const thinkingWidth = this._visibleLength(thinkingWidget);
     const planModeWidth = this._visibleLength(planModeWidget);
     const usedWidth = this._visibleLength(helpWidget) + thinkingWidth + planModeWidth + tokenWidgetWidth + 1 + diagWidth + modelWidth;
-    const availableWidth = _width - usedWidth;
+    const availableWidth = Math.max(0, _width - usedWidth);
 
     // ─── 组装状态栏 ───
     let statusBar = helpWidget;
@@ -314,17 +285,10 @@ class StatusBar {
   }
 
   /**
-   * 计算字符串的可见长度（忽略 ANSI 转义序列）
+   * 计算字符串的可见长度（使用 ANSI_PATTERN 正则完整匹配）
    */
   _visibleLength(str) {
-    let len = 0;
-    let inEscape = false;
-    for (let i = 0; i < str.length; i++) {
-      if (str[i] === '\x1b') { inEscape = true; continue; }
-      if (inEscape) { if (str[i] === 'm') {inEscape = false;} continue; }
-      len++;
-    }
-    return len;
+    return visibleLength(str);
   }
 }
 

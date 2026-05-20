@@ -172,9 +172,17 @@ class MarkdownRenderer {
     // 合并到 lineBuffer 后再拆分处理
     this.lineBuffer += chunk;
 
-    // 如果没有换行符，全部留在 lineBuffer 中
+    // 如果没有换行符，检查是否需要超时刷新
     const newlineIdx = this.lineBuffer.indexOf('\n');
-    if (newlineIdx === -1) {return '';}
+    if (newlineIdx === -1) {
+      // buffer 超过 200 字符但没有换行符时，强制刷新避免内容延迟
+      if (this.lineBuffer.length > 200) {
+        const output = this._renderLine(this.lineBuffer, this._inCodeBlock);
+        this.lineBuffer = '';
+        return output;
+      }
+      return '';
+    }
 
     // 按换行拆分，最后一段是可能不完整的行
     const lines = this.lineBuffer.split('\n');

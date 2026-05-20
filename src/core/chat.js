@@ -868,8 +868,31 @@ class ChatEngine extends EventEmitter {
         });
       }
 
+      // 获取压缩前的 context 进度
+      const beforeStatus = this.contextManager?.getStatusReport(this.messages);
+      const beforePercent = beforeStatus?.usagePercent || 0;
+
+      // 触发动画：从当前进度 → 100%
+      this.emit('compression_animation', {
+        phase: 'start',
+        fromPercent: beforePercent,
+        toPercent: 100,
+      });
+
       // 调用 compactContext，跳过语义摘要生成（已在上面生成）
       const result = await this.compactContext({ level, keep }, true);
+
+      // 计算压缩后进度
+      const afterStatus = this.contextManager?.getStatusReport(this.messages);
+      const afterPercent = afterStatus?.usagePercent || 0;
+
+      // 触发动画：从 100% → 压缩后进度
+      this.emit('compression_animation', {
+        phase: 'end',
+        fromPercent: 100,
+        toPercent: afterPercent,
+      });
+
       if (result.stats && result.stats.compressed) {
         const stats = result.stats;
         if (this.logger) {

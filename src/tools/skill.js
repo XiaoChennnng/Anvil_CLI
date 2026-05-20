@@ -3,6 +3,23 @@
 const fs = require('fs');
 const path = require('path');
 
+// ============================================================================
+// 常量定义
+// ============================================================================
+
+// 技能分类
+const SKILL_CATEGORIES = {
+  ANALYZE: 'analyze',   // 代码分析、架构研究
+  IMPLEMENT: 'implement', // 代码生成、重构
+  DEBUG: 'debug',       // 问题诊断、修复
+  REVIEW: 'review',     // 代码审查、质量检查
+  ORCHESTRATE: 'orchestrate',  // 编排协调
+};
+
+// ============================================================================
+// Skill 类
+// ============================================================================
+
 class Skill {
   constructor(filePath) {
     this.path = filePath;
@@ -11,6 +28,8 @@ class Skill {
     this.triggers = [];
     this.content = '';
     this.tools = [];
+    this.category = SKILL_CATEGORIES.IMPLEMENT;  // 默认分类
+    this.disableModelInvocation = false;  // 是否禁用自动加载
     this._loaded = false;
   }
 
@@ -94,6 +113,19 @@ class Skill {
     this.description = metadata.description || '';
     this.triggers = Array.isArray(metadata.triggers) ? metadata.triggers : [];
     this.tools = Array.isArray(metadata.tools) ? metadata.tools : [];
+
+    // 支持 disable-model-invocation 字段
+    if (metadata.disable_model_invocation === true || metadata.disable_model_invocation === 'true') {
+      this.disableModelInvocation = true;
+    }
+
+    // 支持 category 分类
+    if (metadata.category) {
+      const cat = metadata.category.toLowerCase();
+      if (Object.values(SKILL_CATEGORIES).includes(cat)) {
+        this.category = cat;
+      }
+    }
   }
 
   /**
@@ -149,15 +181,30 @@ class Skill {
       description: this.description,
       triggers: this.triggers,
       tools: this.tools,
+      category: this.category,
+      disableModelInvocation: this.disableModelInvocation,
       path: this.path,
     };
+  }
+
+  /**
+   * 检查 Skill 是否应该自动加载
+   * disable_model_invocation 为 true 时不自动加载
+   */
+  shouldAutoLoad() {
+    return !this.disableModelInvocation;
   }
 }
 
 /**
  * 从目录加载所有 Skills
+ * @param {string} skillsDir - Skills 目录
+ * @param {Object} [options] - 加载选项
+ * @param {boolean} [options.skipDisabled=false] - 是否跳过 disable_model_invocation 的 skill
+ * @param {string} [options.category] - 按分类过滤
+ * @returns {Map<string, Skill>}
  */
-function loadSkillsFromDir(skillsDir) {
+function loadSkillsFromDir(skillsDir, options = {}) {
   const skills = new Map();
 
   if (!fs.existsSync(skillsDir)) {
@@ -177,6 +224,17 @@ function loadSkillsFromDir(skillsDir) {
           try {
             const skill = new Skill(skillFile);
             skill.load();
+
+            // 如果启用 skipDisabled 且 skill 禁用自动加载，跳过
+            if (options.skipDisabled && skill.disableModelInvocation) {
+              continue;
+            }
+
+            // 如果指定了 category，按分类过滤
+            if (options.category && skill.category !== options.category) {
+              continue;
+            }
+
             skills.set(skill.name, skill);
           } catch (err) {
             console.warn(`加载 Skill 失败: ${skillFile} - ${err.message}`);
@@ -187,6 +245,15 @@ function loadSkillsFromDir(skillsDir) {
         try {
           const skill = new Skill(fullPath);
           skill.load();
+
+          if (options.skipDisabled && skill.disableModelInvocation) {
+            continue;
+          }
+
+          if (options.category && skill.category !== options.category) {
+            continue;
+          }
+
           skills.set(skill.name, skill);
         } catch (err) {
           console.warn(`加载 Skill 失败: ${fullPath} - ${err.message}`);
@@ -200,4 +267,8 @@ function loadSkillsFromDir(skillsDir) {
   return skills;
 }
 
-module.exports = { Skill, loadSkillsFromDir };
+module.exports = {
+  Skill,
+  loadSkillsFromDir,
+  SKILL_CATEGORIES,
+};

@@ -8,7 +8,7 @@
  * - mcp_remove_server: 断开并移除 MCP 服务器
  * - mcp_list_servers: 列出所有 MCP 服务器状态
  *
- * 这 SB 工具让 AI 能自己管理 MCP 服务器，不用用户手动改配置
+ * 动态管理 MCP 服务器，AI 可自行连接或断开外部 MCP 服务器。
  */
 
 /**

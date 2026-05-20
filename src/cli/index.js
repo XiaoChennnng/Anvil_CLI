@@ -27,6 +27,7 @@ const ChatEngine = require('../core/chat');
 const TUI = require('../ui/tui');
 const { showLogo } = require('../ui/logo');
 const { getModel } = require('../ai/models');
+const { truncateToWidth: ansiTruncateToWidth, stripAnsi } = require('../ui/ansi');
 
 async function main() {
   const cliOptions = setupOptions();
@@ -155,12 +156,21 @@ async function main() {
 
   // complete 事件监听：确保任何路径结束都能清理 thinking 状态
   // 作为 finishResponse 的保底，避免提前 return 的分支遗漏清理
-  chatEngine.on('complete', () => {
+  chatEngine.on('complete', (data) => {
     tui.statusBar.setThinking(false);
     if (tui._thinkingTimer) {
       clearInterval(tui._thinkingTimer);
       tui._thinkingTimer = null;
     }
+    // 如果有 usage 数据，先更新再刷新状态栏
+    if (data && data.usage) {
+      const modelInfo = getModel(chatEngine.model);
+      const pricing = modelInfo?.pricing || config.pricing?.[chatEngine.model] || { input: 0.001, output: 0.002 };
+      tui.renderTokenUsage(data.usage, pricing);
+      tui.sidebar.updateCacheStats(data.usage);
+    }
+    // 刷新状态栏，确保 Context 和 Cost 显示最新值
+    tui._refreshStatusBar();
   });
 
   chatEngine.on('content', (chunk) => {
@@ -172,55 +182,24 @@ async function main() {
   });
 
   chatEngine.on('tool_calls', (toolCalls) => {
-    if (!contentStarted) {
-      tui.renderContentStart();
-      contentStarted = true;
-    }
+    if (!contentStarted) { tui.renderContentStart(); contentStarted = true; }
     tui.renderToolCall(toolCalls);
   });
 
-  chatEngine.on('tool_result', ({ name, result, toolCall }) => {
-    tui.renderToolResult(name, result, toolCall);
+  // 收集实时输出到缓冲，等 tool_result 统一渲染
+  let _cmdBuf = [];
+  chatEngine.on('command_output', (data, isError) => {
+    const lines = data.replace(/\r/g, '').split('\n').filter(l => l.trim());
+    _cmdBuf.push(...lines);
   });
 
-  chatEngine.on('command_output', (data, isError) => {
-    const t = tui.layout.theme;
-    const border = chalk.hex(t.colors.primary)('┃');
-    const MAX_LINE_LENGTH = 500; // 单行最大长度
-    const MAX_TOTAL_LINES = 100; // 每次最多处理行数
-
-    // 过滤所有 ANSI 转义序列（CSI、OSC、SCP 等）
-    const stripAnsi = (str) => str.replace(/\x1b(\[[0-9;]*[mHK]?|\?[0-9;]*[hl]|\][^\x07]*\x07)/g, '');
-
-    // 截断过长的行
-    const truncateLine = (line) => {
-      if (line.length > MAX_LINE_LENGTH) {
-        return line.slice(0, MAX_LINE_LENGTH) + '... (截断)';
-      }
-      return line;
-    };
-
-    // 按行分割输出
-    const lines = data.split('\n');
-    let processed = 0;
-    for (const line of lines) {
-      if (processed >= MAX_TOTAL_LINES) break;
-
-      // 过滤 ANSI 并截断
-      const cleanLine = truncateLine(stripAnsi(line));
-
-      if (cleanLine.trim()) {
-        tui.messageBox.renderedLines.push(
-          `${border} ${isError ? t.error(cleanLine) : cleanLine}`
-        );
-      } else {
-        tui.messageBox.renderedLines.push('');
-      }
-      processed++;
+  chatEngine.on('tool_result', ({ name, result, toolCall }) => {
+    // 合并缓冲输出到 result
+    if (_cmdBuf.length > 0 && (name === 'execute_command' || name === 'bash')) {
+      result = { ...result, stdout: _cmdBuf.join('\n') };
+      _cmdBuf = [];
     }
-
-    // 使用 _queueRender 节流，不要每次都触发渲染
-    tui._queueRender();
+    tui.renderToolResult(name, result, toolCall);
   });
 
   chatEngine.on('usage', (usage) => {
@@ -258,6 +237,13 @@ async function main() {
     const completed = todos.filter(t => t.completed).length;
     tui.statusBar.setTodoStats(todos.length, completed);
     tui.refreshSidebarInfo();
+  });
+
+  chatEngine.on('compression_animation', (data) => {
+    // 动画阶段1：从 fromPercent → toPercent (通常是压缩前 → 100%)
+    // 动画阶段2：从 100% → toPercent (通常是 100% → 压缩后)
+    const duration = 600; // 动画持续时间 ms
+    tui.sidebar.startProgressAnimation(data.fromPercent, data.toPercent, duration);
   });
 
   chatEngine.on('check_pending_context', () => {

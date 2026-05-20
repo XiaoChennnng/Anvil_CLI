@@ -3,6 +3,7 @@
 const chalk = require('chalk');
 const { getTheme } = require('../theme');
 const MessageRenderer = require('./message');
+const { visibleLength, isCJK } = require('../ansi');
 
 class MessageBox {
   constructor(layout) {
@@ -100,9 +101,8 @@ class MessageBox {
       this.renderedLines.push(this._thinkingBuffer);
       this._thinkingBuffer = '';
     }
-    if (this._hasThinkingContent) {
-      this.renderedLines.push('');
-    }
+    // 不添加空行，让后续内容紧贴思考内容
+    this._scrollToBottom();
   }
 
   /**
@@ -179,6 +179,10 @@ class MessageBox {
       const lines = this.renderer.renderToolCall(call, this.layout.messageWidth - 2);
       this.renderedLines.push(...lines);
     }
+    // 移除工具调用行后所有空行，让结果紧贴工具调用
+    while (this.renderedLines.length > 0 && this.renderedLines[this.renderedLines.length - 1].trim() === '') {
+      this.renderedLines.pop();
+    }
     this._scrollToBottom();
   }
 
@@ -186,6 +190,10 @@ class MessageBox {
    * 添加工具结果
    */
   addToolResult(name, result, toolCall) {
+    // 移除工具调用和结果之间的所有空行
+    while (this.renderedLines.length > 0 && this.renderedLines[this.renderedLines.length - 1].trim() === '') {
+      this.renderedLines.pop();
+    }
     // 先 flush markdown 渲染器的缓冲区（避免内容被截断）
     this.flushContentBuffer();
 
@@ -215,7 +223,7 @@ class MessageBox {
       }
     }
 
-    const maxResultHeight = 10; // 1:1复刻opencode，工具响应最多显示10行
+    const maxResultHeight = 50; // 最多显示50行，超出滚动查看
     const lines = this.renderer.renderToolResponse(name, displayResult, toolCall, this.layout.messageWidth - 2, maxResultHeight);
     this.renderedLines.push(...lines);
     this._scrollToBottom();
@@ -227,14 +235,13 @@ class MessageBox {
   finishResponse(model) {
     const t = this.theme;
 
-    // flush 剩余 markdown 缓冲
+    // flush 剩余 markdown 缓冲（AI的响应由AI自己决定，代码不添加硬编码提示）
     const remaining = this.renderer.markdown.flush();
     if (remaining) {
       const lines = remaining.split('\n');
       for (const line of lines) {
-        if (line.trim() === '') {continue;} // 跳过空行
+        if (line.trim() === '') {continue;}
 
-        // 只有第一个内容块加 ● 前缀
         if (this._firstContentBlock) {
           const marker = chalk.hex(t.colors.primary)('●');
           this.renderedLines.push(` ${marker} ${line}`);
@@ -245,13 +252,10 @@ class MessageBox {
       }
     }
 
-    // 过滤掉末尾的空行（避免多余空行）
+    // 过滤掉末尾的空行
     while (this.renderedLines.length > 0 && this.renderedLines[this.renderedLines.length - 1].trim() === '') {
       this.renderedLines.pop();
     }
-
-    // 空行分隔
-    this.renderedLines.push('');
     this._scrollToBottom();
   }
 
@@ -296,12 +300,6 @@ class MessageBox {
       this.renderedLines.length - this.scrollOffset
     );
 
-    // 固定位置写入：清理整个消息区域，确保无残留
-    for (let i = 0; i < messageViewportHeight; i++) {
-      const row = viewportStart + i;
-      output += `\x1b[${row};1H${' '.repeat(messageWidth)}`;
-    }
-
     // 构建显示行：对超长行做换行处理
     let displayLines = [];
     for (const line of visibleLines) {
@@ -325,7 +323,9 @@ class MessageBox {
       if (line) {
         const visibleLen = this._visibleLength(line);
         const padding = messageWidth - Math.min(visibleLen, messageWidth);
-        output += `\x1b[${row};1H${line}${' '.repeat(Math.max(0, padding))}`;
+        // 确保 ANSI 样式被关闭，防止污染 padding 空格
+        const safeLine = line.includes('\x1b') ? line + '\x1b[0m' : line;
+        output += `\x1b[${row};1H${safeLine}${' '.repeat(Math.max(0, padding))}`;
       } else {
         output += `\x1b[${row};1H${' '.repeat(messageWidth)}`;
       }
@@ -451,6 +451,7 @@ class MessageBox {
 
   /**
    * 计算字符串的可见长度（支持 CJK 双倍宽字符，带缓存）
+   * 使用 ANSI_PATTERN 正则完整匹配，替代逐字符检测
    */
   _visibleLength(str) {
     if (!str) {return 0;}
@@ -460,20 +461,7 @@ class MessageBox {
       return this._visibleLengthCache.get(str);
     }
 
-    let len = 0;
-    let inEscape = false;
-    for (let i = 0; i < str.length; i++) {
-      const ch = str[i];
-      if (ch === '\x1b') {
-        inEscape = true;
-        continue;
-      }
-      if (inEscape) {
-        if (ch === 'm') { inEscape = false; }
-        continue;
-      }
-      len += this._isCJK(ch) ? 2 : 1;
-    }
+    const len = visibleLength(str);
 
     // 限制缓存大小，超限时淘汰最旧的条目
     const MAX_VISIBLE_LENGTH_CACHE = 1000;
@@ -509,37 +497,47 @@ class MessageBox {
       }
       return result;
     }
+
     const lines = [];
     let visibleWidth = 0;
     let currentLine = '';
-    let openAnsi = '';
+    let openAnsi = '';  // 追踪未关闭的 ANSI 序列
     let i = 0;
+
+    // 完整的 ANSI 序列正则（包括 24-bit 真彩色）
+    const ANSI_SEQ_PATTERN = /^(\x1b\[[0-9;]*[mHKhlA-Za-z=]|\x1b\?[0-9;]*[hl]|\x1b\][^\x07]*\x07|\x1b\\|\x1b\[\?1049[hl]|\x1b\[38;2;\d+;\d+;\d+m|\x1b\[48;2;\d+;\d+;\d+m)/;
 
     while (i < str.length) {
       // 捕获 ANSI 转义序列
       if (str[i] === '\x1b') {
-        const start = i;
-        i++;
-        while (i < str.length && str[i] !== 'm') {i++;}
-        if (i < str.length) {i++;}
-        const seq = str.slice(start, i);
-        currentLine += seq;
+        const rest = str.slice(i);
+        const match = rest.match(ANSI_SEQ_PATTERN);
+        if (match) {
+          const seq = match[0];
+          currentLine += seq;
 
-        if (/^\x1b\[0[;m]/.test(seq) || seq === '\x1b[m') {
-          openAnsi = '';
-        } else if (seq.endsWith('m')) {
-          openAnsi += seq;
+          // 重置样式序列清除 openAnsi
+          if (/^\x1b\[0[;m]*$/.test(seq) || seq === '\x1b[m') {
+            openAnsi = '';
+          } else if (seq.includes('m')) {
+            openAnsi += seq;
+          }
+          i += seq.length;
+          continue;
         }
-        continue;
       }
 
+      // 使用缓存的 _isCJK 方法
       const charWidth = this._isCJK(str[i]) ? 2 : 1;
 
       // 达到最大宽度，换行
       if (visibleWidth + charWidth > maxWidth) {
-        if (openAnsi) {currentLine += '\x1b[0m';}
-        lines.push(currentLine);
-        currentLine = openAnsi;
+        // 如果当前行有实际内容才添加 reset + 换行
+        if (currentLine.trim()) {
+          if (openAnsi) {currentLine += '\x1b[0m';}
+          lines.push(currentLine);
+        }
+        currentLine = openAnsi;  // 只携带未关闭的 ANSI 状态
         visibleWidth = 0;
         // 如果当前字符宽度 > maxWidth（极端情况），跳过
         if (charWidth > maxWidth) {
@@ -553,7 +551,16 @@ class MessageBox {
       i++;
     }
 
-    if (currentLine || openAnsi) {lines.push(currentLine || openAnsi);}
+    // 推送最后一行（只有 ANSI 序列而无实际内容时不推送）
+    const stripped = currentLine.replace(/\x1b\[[0-9;]*[mHKhlA-Za-z=]|\x1b\?[0-9;]*[hl]|\x1b\][^\x07]*\x07|\x1b\\|\x1b\[\?1049[hl]|\x1b\[38;2;\d+;\d+;\d+m|\x1b\[48;2;\d+;\d+;\d+m/g, '');
+    if (stripped.trim()) {
+      if (openAnsi) {currentLine += '\x1b[0m';}
+      lines.push(currentLine);
+    } else if (lines.length > 0) {
+      // 如果最后只有 ANSI 状态没有内容，关闭它避免样式泄漏
+      lines.push('\x1b[0m');
+    }
+
     // 限制缓存大小，超限时淘汰最旧的条目
     const MAX_WRAP_LINE_CACHE = 500;
     if (this._wrapLineCache.size >= MAX_WRAP_LINE_CACHE) {

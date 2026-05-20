@@ -6,51 +6,16 @@ const path = require('path');
 const crypto = require('crypto');
 
 /**
- * ============================================================================
- * 精密上下文管理系统 — 默认 1M 上下文窗口
- * ============================================================================
+ * 上下文管理系统 — 默认 1M 上下文窗口
  *
- * 架构设计:
- * ┌─────────────────────────────────────────────────────────────┐
- * │  Tier 0: 不可驱逐层 (Immutable)                               │
- * │  System Prompt + Tool Definitions (~3-5K)                    │
- * ├─────────────────────────────────────────────────────────────┤
- * │  Tier 1: 静态缓存友好层 (Cache-Friendly)                      │
- * │  Project Overview: 目录树 + 关键文件摘要 (~10-20K)            │
- * │  放在消息最前端 → 最大化 DeepSeek 硬盘缓存命中 → 1/10 费用    │
- * ├─────────────────────────────────────────────────────────────┤
- * │  Tier 2: 工作记忆层 (Working Memory)                          │
- * │  最近 N 轮对话 (动态分配, ~100K-150K)                         │
- * │  包含 reasoning_content + tool_calls 完整保留               │
- * ├─────────────────────────────────────────────────────────────┤
- * │  Tier 3: 文件上下文层 (File Context)                          │
- * │  按需加载的文件内容 (~30K-50K)                                │
- * │  LRU 淘汰 + 使用频率追踪                                      │
- * ├─────────────────────────────────────────────────────────────┤
- * │  Tier 4: 压缩存档层 (Compressed Archive)                      │
- * │  历史对话的多级压缩版本 (~10K-20K)                            │
- * │  L1: 详细摘要 | L2: 概要摘要 | L3: 仅关键决策                 │
- * ├─────────────────────────────────────────────────────────────┤
- * │  Tier 5: 瞬时层 (Transient)                                   │
- * │  工具调用结果 (执行完立即清理，不占持久空间)                   │
- * └─────────────────────────────────────────────────────────────┘
+ * 分层架构：
+ * - Tier 0: System Prompt + Tool Definitions
+ * - Tier 1: Project Overview (目录树 + 关键文件摘要)
+ * - Tier 2: Working Memory (最近对话轮次)
+ * - Tier 3: File Contexts (按需加载，LRU淘汰)
+ * - Tier 4: 工具调用结果 (执行完立即清理)
  *
- * 窗口配置:
- * - STANDARD (1M):   默认上下文窗口（模型支持 1M）
- * - EXTENDED (1M):   复杂项目分析
- * - MAXIMUM (1M):    极限场景（大量文件审查、超长对话）
- *
- * 压缩触发线 (占窗口 %):
- * - 级别 0  SOFT_WARN:  70% — 控制台提示
- * - 级别 1  LIGHT_COMP: 80% — 轻度裁剪文件上下文
- * - 级别 2  MED_COMP:   90% — 压缩早期对话为 L1 详细摘要
- * - 级别 3  HEAVY_COMP: 95% — 压缩为 L2 概要摘要
- * - 级别 4  CRITICAL:   98% — L3 仅保留关键决策 + 最近 2 轮
- *
- * 缓存命中优化:
- * - Tier 0 + Tier 1 始终在消息列表最前端（前缀固定 → 最大化缓存命中）
- * - 消息顺序严格保持: [System] [ProjectOverview] [Archive] [History...] [User]
- * - 相同前缀在不同请求间可复用硬盘缓存 → 输入费用降至 1/10
+ * 压缩警告阈值：70%/80%/90%/95%/98%
  */
 
 // ============================================================================
@@ -64,14 +29,14 @@ const IGNORED_DIRS = new Set([
   'venv', 'env', '.svn', 'coverage',
 ]);
 
-// 窗口大小配置（真正分层：EXTENDED 开大点给复杂项目，MAXIMUM 极限全量）
+// 窗口大小配置
 const WINDOW_SIZES = {
-  STANDARD: 1_000_000,  // 1M — 默认（模型支持 1M 上下文）
-  EXTENDED: 1_200_000,  // 1.2M — 复杂项目分析
-  MAXIMUM:  1_500_000,  // 1.5M — 极限场景（大量文件审查、超长对话）
+  STANDARD: 1_000_000,  // 1M — 默认
+  EXTENDED: 1_200_000, // 1.2M — 复杂项目分析
+  MAXIMUM:  1_500_000, // 1.5M — 极限场景
 };
 
-// 压缩级别及触发阈值（占当前窗口 %）
+// 压缩级别（保留用于警告提示，不执行实际压缩）
 const COMPRESSION_LEVELS = {
   NONE:       { level: 0, threshold: 0.00, label: '正常' },
   SOFT_WARN:  { level: 1, threshold: 0.70, label: '⚠ 上下文偏高' },
@@ -81,7 +46,7 @@ const COMPRESSION_LEVELS = {
   CRITICAL:   { level: 5, threshold: 0.98, label: '🚨 极限压缩' },
 };
 
-// Token 估算缓存（LRU，避免重复 O(n) 字符遍历）
+// Token 估算缓存（LRU）
 const _tokenCache = new Map();
 const TOKEN_CACHE_MAX = 500;
 let _tokenCacheSize = 0;
@@ -130,12 +95,11 @@ function _setCachedTokenCount(text, count) {
 
 // Token 预算分配（占窗口 %）
 const BUDGET = {
-  IMMUTABLE:    0.02,   // Tier 0: System Prompt + Tool Defs
-  CACHE_FRIENDLY: 0.08, // Tier 1: Project Overview (静态，最大化缓存命中)
-  WORKING_MEM:  0.50,   // Tier 2: Recent Rounds
-  FILE_CONTEXT: 0.25,   // Tier 3: File Contexts
-  ARCHIVE:      0.10,   // Tier 4: Compressed Archive
-  RESERVE:      0.05,   // 安全余量
+  IMMUTABLE:      0.02,   // Tier 0: System Prompt + Tool Defs
+  CACHE_FRIENDLY: 0.08,   // Tier 1: Project Overview
+  WORKING_MEM:    0.55,   // Tier 2: Recent Rounds（对话历史，由调用方管理）
+  FILE_CONTEXT:   0.30,   // Tier 3: File Contexts（L RU 缓存）
+  RESERVE:        0.05,   // 安全余量
 };
 
 // 文件上下文 LRU 配置
@@ -795,50 +759,72 @@ class ContextManager {
    * @returns {{ messages: Array, stats: Object }}
    */
   compactContext(messages, options = {}) {
-    const { level = 'auto', keep = ['recent', 'decisions'], keepRounds } = options;
+    const { level = 'auto' } = options;
     const totalTokens = estimateMessageTokens(messages);
-
-    // 1. 确定压缩级别
-    let compLevel;
     const autoLevel = this.getCompressionLevel(messages, totalTokens);
+
+    // 确定压缩级别
+    let compressLevel;
     if (level === 'auto') {
-      compLevel = Math.max(autoLevel.level, COMPRESSION_LEVELS.LIGHT_COMP.level);
+      compressLevel = autoLevel.level;
+    } else if (level === 'light') {
+      compressLevel = COMPRESSION_LEVELS.LIGHT_COMP.level;
+    } else if (level === 'medium') {
+      compressLevel = COMPRESSION_LEVELS.MED_COMP.level;
+    } else if (level === 'heavy') {
+      compressLevel = COMPRESSION_LEVELS.HEAVY_COMP.level;
+    } else if (level === 'critical') {
+      compressLevel = COMPRESSION_LEVELS.CRITICAL.level;
     } else {
-      const levelMap = { light: 2, medium: 3, heavy: 4, critical: 5 };
-      compLevel = levelMap[level] || COMPRESSION_LEVELS.LIGHT_COMP.level;
-    }
-    compLevel = Math.min(compLevel, COMPRESSION_LEVELS.CRITICAL.level);
-
-    // 2. 确定保留方面
-    const preserveList = Array.isArray(keep) ? keep : [keep];
-    const preserve = new Set(preserveList.map(k => k.toLowerCase().trim()));
-
-    // 3. 执行压缩
-    let result;
-    if (preserve.has('all')) {
-      result = this._compressByLevel(messages, compLevel);
-    } else {
-      result = this._selectiveCompress(messages, compLevel, preserve, keepRounds);
+      compressLevel = autoLevel.level;
     }
 
-    // 4. 统计
-    const afterTokens = estimateMessageTokens(result.messages);
+    // 检查是否需要压缩
+    if (compressLevel < COMPRESSION_LEVELS.LIGHT_COMP.level) {
+      return {
+        messages,
+        stats: {
+          compressed: false,
+          level: 0,
+          name: 'NONE',
+          warning: 'normal',
+          message: 'Context usage normal',
+          beforeTokens: totalTokens,
+          afterTokens: totalTokens,
+          savedPercent: 0,
+        },
+      };
+    }
+
     this.compressionStats.totalCompressions++;
-    this.compressionStats.totalTokensSaved += totalTokens - afterTokens;
     this.compressionStats.lastCompression = new Date().toISOString();
+
+    // 执行实际压缩
+    let result;
+    if (options.keep && options.keep.length > 0) {
+      // 聚焦保留模式
+      const preserve = new Set(Array.isArray(options.keep) ? options.keep : [options.keep]);
+      result = this._selectiveCompress(messages, compressLevel, preserve, options.keepRounds);
+    } else {
+      // 普通压缩模式
+      result = this._compressByLevel(messages, compressLevel);
+    }
+
+    const afterTokens = estimateMessageTokens(result.messages);
+    const savedPercent = totalTokens > 0 ? Math.round((1 - afterTokens / totalTokens) * 100) : 0;
 
     return {
       messages: result.messages,
       stats: {
         compressed: true,
-        level: compLevel,
-        name: Object.entries(COMPRESSION_LEVELS).find(([,c]) => c.level === compLevel)?.[0] || 'UNKNOWN',
+        level: compressLevel,
+        name: Object.entries(COMPRESSION_LEVELS).find(([,c]) => c.level === compressLevel)?.[0] || 'MED_COMP',
+        warning: autoLevel.label,
+        message: result.message || '',
         beforeTokens: totalTokens,
         afterTokens,
-        savedTokens: totalTokens - afterTokens,
-        savedPercent: Math.round((1 - afterTokens / Math.max(totalTokens, 1)) * 100),
-        preserved: preserveList,
-        message: result.message || '',
+        savedPercent,
+        preserved: options.keep || ['recent', 'decisions'],
       },
     };
   }
@@ -1028,34 +1014,24 @@ class ContextManager {
     const totalTokens = estimateMessageTokens(messages);
     const { level, name } = this.getCompressionLevel(messages, totalTokens);
 
+    // 对话历史压缩由调用方管理，只返回警告信息
     if (level < COMPRESSION_LEVELS.LIGHT_COMP.level) {
-      return { messages, stats: { compressed: false, level: 0 } };
+      return { messages, stats: { compressed: false, level: 0, warning: 'normal' } };
     }
 
-    let result;
-    switch (name) {
-      case 'LIGHT_COMP':  result = this._lightCompress(messages); break;
-      case 'MED_COMP':    result = this._mediumCompress(messages); break;
-      case 'HEAVY_COMP':  result = this._heavyCompress(messages); break;
-      case 'CRITICAL':    result = this._criticalCompress(messages); break;
-      default:            result = { messages }; break;
-    }
-
-    const afterTokens = estimateMessageTokens(result.messages);
+    // 仅返回警告信息，不执行实际压缩
     this.compressionStats.totalCompressions++;
-    this.compressionStats.totalTokensSaved += totalTokens - afterTokens;
     this.compressionStats.lastCompression = new Date().toISOString();
 
     return {
-      messages: result.messages,
+      messages,
       stats: {
-        compressed: true,
+        compressed: false,
         level,
         name,
+        warning: 'compression_recommended',
+        message: `Context at ${Math.round(level * 10)}% — consider running /compact or similar external compression`,
         beforeTokens: totalTokens,
-        afterTokens,
-        savedTokens: totalTokens - afterTokens,
-        savedPercent: Math.round((1 - afterTokens / totalTokens) * 100),
       },
     };
   }

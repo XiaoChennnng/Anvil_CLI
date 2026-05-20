@@ -314,7 +314,7 @@ class ToolRenderer {
   }
 
   /**
-   * 渲染工具响应（参考任务列表样式：层级缩进 + ⎿ 续行标记）
+   * 渲染工具响应（任务列表样式：层级缩进 + ⎿ 续行标记）
    * @param {string} name - 工具名
    * @param {Object} result - 工具结果
    * @param {Object} toolCall - 原始工具调用（用于获取参数）
@@ -327,13 +327,13 @@ class ToolRenderer {
 
     const t = this.theme;
     const indent = '  ';  // 二级缩进
-    const cont = chalk.hex(t.colors.textMuted)('⎿');  // 续行标记
+    const branch = chalk.hex(t.colors.primary)('└─');  // 树状分支符号
 
     // 错误情况
     if (result.error) {
       const errText = `Error: ${result.error}`.replace(/\n/g, ' ');
       const truncated = this._truncate(errText, width - 4);
-      return [`${indent}${cont} ${t.error(truncated)}`];
+      return [`${indent}${branch} ${t.error(truncated)}`];
     }
 
     const lines = [];
@@ -344,24 +344,34 @@ class ToolRenderer {
       case 'bash': {
         // 显示超时警告
         if (result.warning) {
-          lines.push(`${indent}${cont} ${t.warning(result.warning)}`);
+          lines.push(`${indent}${branch} ${t.warning(result.warning)}`);
         }
-        const output = result.output || result.content || '';
+        const output = result.stdout || result.output || result.content || '';
         if (output) {
-          const outputLines = output.split('\n');
-          const displayLines = outputLines.slice(0, maxLines);
-          for (const line of displayLines) {
-            const isError = /\b(error|failed|exception|cannot|unable)\b/i.test(line);
-            const styled = isError ? t.error(this._truncate(line, contentWidth)) : t.dim(this._truncate(line, contentWidth));
-            lines.push(`${indent}${cont} ${styled}`);
-          }
-          if (outputLines.length > maxLines) {
-            const overflow = `... +${outputLines.length - maxLines} more lines`;
-            const pad = Math.max(0, Math.floor((contentWidth - overflow.length) / 2));
-            lines.push(`${indent}${' '.repeat(pad)}${t.textMuted(overflow)}`);
+          const outputLines = output.split('\n').filter(l => l.trim());
+          if (outputLines.length === 0) {
+            lines.push(`${indent}${branch} ${t.success('✓')} Command executed successfully`);
+          } else {
+            const displayCount = maxLines > 0 ? Math.min(outputLines.length, maxLines) : outputLines.length;
+            const contIndent = indent + '   ';
+            for (let i = 0; i < displayCount; i++) {
+              const line = outputLines[i];
+              const isError = /\b(error|failed|exception|cannot|unable)\b/i.test(line);
+              const trimmed = line.replace(/^\s+/, '');
+              const styled = isError ? t.error(this._truncate(trimmed, contentWidth)) : t.dim(this._truncate(trimmed, contentWidth));
+              if (i === 0) {
+                lines.push(`${indent}${branch} ${styled}`);
+              } else {
+                lines.push(`${contIndent}${styled}`);
+              }
+            }
+            if (maxLines > 0 && outputLines.length > maxLines) {
+              const overflow = `... ↑ 滚动查看更多 (共 ${outputLines.length} 行)`;
+              lines.push(`${contIndent}${t.textMuted(overflow)}`);
+            }
           }
         } else if (result.success) {
-          lines.push(`${indent}${cont} ${t.success('✓')} Command executed successfully`);
+          lines.push(`${indent}${branch} ${t.success('✓')} Command executed successfully`);
         }
         break;
       }
@@ -379,7 +389,7 @@ class ToolRenderer {
           if (add > 0) {statParts.push(`Added ${add} line${add > 1 ? 's' : ''}`);}
           if (rem > 0) {statParts.push(`removed ${rem} line${rem > 1 ? 's' : ''}`);}
           const summary = statParts.length > 0 ? statParts.join(', ') : 'No changes';
-          lines.push(`${indent}${cont} ${t.dim(summary)}`);
+          lines.push(`${indent}${branch} ${t.dim(summary)}`);
 
           // 渲染 diff 行（无 hunk header，对齐格式: NNNNNN -/+ content）
           let lineCount = 0;
@@ -409,9 +419,9 @@ class ToolRenderer {
           const statParts = [];
           if (add > 0) {statParts.push(`Added ${add} line${add > 1 ? 's' : ''}`);}
           if (rem > 0) {statParts.push(`removed ${rem} line${rem > 1 ? 's' : ''}`);}
-          lines.push(`${indent}${cont} ${t.dim(statParts.join(', '))}`);
+          lines.push(`${indent}${branch} ${t.dim(statParts.join(', '))}`);
         } else if (result.success) {
-          lines.push(`${indent}${cont} ${t.success('✓')} Updated ${this._formatPath(result.filePath || '')}`);
+          lines.push(`${indent}${branch} ${t.success('✓')} Updated ${this._formatPath(result.filePath || '')}`);
         }
         break;
       }
@@ -434,9 +444,9 @@ class ToolRenderer {
         const endLine = Math.min(startLine + limit - 1, totalLines);
 
         if (totalLines > 0) {
-          lines.push(`${indent}${cont} ${t.dim(`Lines ${startLine}-${endLine} of ${filePath} (${totalLines} total)`)}`);
+          lines.push(`${indent}${branch} ${t.dim(`Lines ${startLine}-${endLine} of ${filePath} (${totalLines} total)`)}`);
         } else {
-          lines.push(`${indent}${cont} ${t.dim(filePath)}`);
+          lines.push(`${indent}${branch} ${t.dim(filePath)}`);
         }
         break;
       }
@@ -457,7 +467,7 @@ class ToolRenderer {
 
           // 显示摘要：新建/覆盖 + 文件路径 + 大小
           const modeLabel = result.mode === 'append' ? 'Appended to' : 'Written to';
-          lines.push(`${indent}${cont} ${t.success('✓')} ${modeLabel} ${filePath}${t.dim(size)}`);
+          lines.push(`${indent}${branch} ${t.success('✓')} ${modeLabel} ${filePath}${t.dim(size)}`);
 
           // 展示写入的内容（正常颜色+行号，不用全绿）
           const content = args.content || '';
@@ -484,7 +494,7 @@ class ToolRenderer {
       case 'delete_file':
       case 'delete': {
         if (result.success) {
-          lines.push(`${indent}${cont} ${t.success('✓')} Deleted ${this._formatPath(result.filePath || '')}`);
+          lines.push(`${indent}${branch} ${t.success('✓')} Deleted ${this._formatPath(result.filePath || '')}`);
         }
         break;
       }
@@ -492,14 +502,14 @@ class ToolRenderer {
       case 'create_directory':
       case 'mkdir': {
         if (result.success) {
-          lines.push(`${indent}${cont} ${t.success('✓')} Created ${this._formatPath(result.path || '')}`);
+          lines.push(`${indent}${branch} ${t.success('✓')} Created ${this._formatPath(result.path || '')}`);
         }
         break;
       }
 
       case 'move_file': {
         if (result.success) {
-          lines.push(`${indent}${cont} ${t.success('✓')} Moved to ${this._formatPath(result.destination || '')}`);
+          lines.push(`${indent}${branch} ${t.success('✓')} Moved to ${this._formatPath(result.destination || '')}`);
         }
         break;
       }
@@ -515,7 +525,7 @@ class ToolRenderer {
           const outputLines = output.split('\n').filter(l => l.trim());
           const displayLines = outputLines.slice(0, maxLines);
           for (const line of displayLines) {
-            lines.push(`${indent}${cont} ${t.dim(this._truncate(line, contentWidth))}`);
+            lines.push(`${indent}${branch} ${t.dim(this._truncate(line, contentWidth))}`);
           }
           if (outputLines.length > maxLines) {
             const overflow = `... +${outputLines.length - maxLines} more`;
@@ -539,7 +549,7 @@ class ToolRenderer {
           if (!desc && todoId) {desc = `id=${todoId.substring(0, 10)}...`;}
           // 如果有 todo 完整对象，优先使用其 text
           if (!desc && result.todo?.text) {desc = this._truncate(result.todo.text, 40);}
-          lines.push(`${indent}${cont} ${t.success('✓')} ${action}${desc ? ': ' + t.dim(desc) : ''}`);
+          lines.push(`${indent}${branch} ${t.success('✓')} ${action}${desc ? ': ' + t.dim(desc) : ''}`);
         }
         break;
       }
@@ -551,25 +561,25 @@ class ToolRenderer {
       case 'list_todos': {
         if (result.todos && result.todos.length > 0) {
           const completed = result.todos.filter(td => td.completed).length;
-          lines.push(`${indent}${cont} ${t.dim(`Tasks (${completed}/${result.todos.length})`)}`);
+          lines.push(`${indent}${branch} ${t.dim(`Tasks (${completed}/${result.todos.length})`)}`);
           for (const todo of result.todos.slice(0, maxLines - 1)) {
             const status = todo.completed ? t.success('✔') : t.textMuted('◻');
             const text = todo.text || '';
             lines.push(`${indent}${indent}${status} ${t.text(this._truncate(text, contentWidth - 4))}`);
           }
         } else if (result.todos && result.todos.length === 0) {
-          lines.push(`${indent}${cont} ${t.textMuted('No tasks')}`);
+          lines.push(`${indent}${branch} ${t.textMuted('No tasks')}`);
         }
         break;
       }
 
       default: {
         if (result.success) {
-          lines.push(`${indent}${cont} ${t.success('✓')} Done`);
+          lines.push(`${indent}${branch} ${t.success('✓')} Done`);
         } else if (result.output || result.content) {
           const output = (result.output || result.content || '').split('\n').filter(l => l.trim()).slice(0, maxLines);
           for (const line of output) {
-            lines.push(`${indent}${cont} ${t.dim(this._truncate(line, contentWidth))}`);
+            lines.push(`${indent}${branch} ${t.dim(this._truncate(line, contentWidth))}`);
           }
         }
       }

@@ -232,8 +232,8 @@ class Editor {
     const row = this.promptRow;
     const t = this.theme;
 
-    // 清除从输入区起始行到编辑器区域末尾的所有行（避免多行残留）
-    const editorEndRow = this.layout.editorStartRow + this.layout._height - 1;
+    // 清除从输入区起始行到终端最后一行的所有行（避免多行残留）
+    const editorEndRow = this.layout._height;
     for (let r = row; r <= editorEndRow; r++) {
       this.layout.moveTo(r, 1);
       this.layout.clearLine();

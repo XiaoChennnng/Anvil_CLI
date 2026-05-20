@@ -11,6 +11,7 @@ const ResultAggregator = require('./result-aggregator');
 const TeamCommunication = require('./team-communication');
 const TaskStateManager = require('./task-state');
 const TeamErrorHandler = require('./error-handler');
+const { ResearchContext } = require('../research-context');
 const {
   TeamState,
   TaskPriority,
@@ -82,6 +83,20 @@ class TeamManager extends EventEmitter {
 
     // 任务指纹（用于去重检测）
     this._taskFingerprint = null;
+
+    // 研究上下文隔离机制
+    // 代码分析、架构研究等使用独立 context，不污染主 context
+    this._researchContext = new ResearchContext({
+      projectDir: options.projectDir || process.cwd(),
+      logger: options.logger,
+    });
+
+    // 动态复杂度阈值（根据 context 使用情况调整）
+    this._complexityThreshold = {
+      low: 25,    // 无团队
+      medium: 50, // 简单团队
+      high: 75,   // 复杂团队
+    };
   }
 
   // ================================================================
@@ -186,11 +201,11 @@ class TeamManager extends EventEmitter {
     if (context.messageCount > 20) complexityScore += 10;
     if (context.toolCallCount > 10) complexityScore += 10;
 
-    // 决策阈值
+    // 决策阈值（使用动态阈值，根据 context 使用情况调整）
     const THRESHOLD = {
-      TEAM_NOT_NEEDED: 25,
-      SIMPLE_TEAM: 50,
-      COMPLEX_TEAM: 75,
+      TEAM_NOT_NEEDED: this._complexityThreshold.low,
+      SIMPLE_TEAM: this._complexityThreshold.medium,
+      COMPLEX_TEAM: this._complexityThreshold.high,
     };
 
     let needsTeam = false;
@@ -233,13 +248,99 @@ class TeamManager extends EventEmitter {
     };
   }
 
+  // ================================================================
+  // 研究隔离机制
+  // ================================================================
+
   /**
-   * 启动团队执行任务
-   * @param {string} task - 任务描述
-   * @param {Object} context - 上下文
-   * @returns {Promise<Object>} 执行结果
+   * 在独立研究 context 中执行研究任务
+   * 不污染主 context，只返回摘要
+   *
+   * @param {string} researchType - 研究类型 ('file', 'pattern', 'architecture')
+   * @param {Object} params - 研究参数
+   * @returns {Promise<ResearchResult>} 研究结果摘要
    */
-  async startTeamTask(task, context = {}) {
+  async runResearchInIsolation(researchType, params) {
+    switch (researchType) {
+      case 'file':
+        return await this._researchContext.analyzeFile(params.filePath, params.options);
+
+      case 'files':
+        return await this._researchContext.analyzeFiles(params.filePaths, params.options);
+
+      case 'pattern':
+        return await this._researchContext.searchPattern(
+          params.pattern,
+          params.extensions,
+          params.maxResults
+        );
+
+      case 'architecture':
+        return await this._researchContext.analyzeArchitecture();
+
+      default:
+        return { summary: `Unknown research type: ${researchType}`, keyFindings: [] };
+    }
+  }
+
+  /**
+   * 使用 ResearchContext 进行代码分析（不污染主 context）
+   * @param {string} codeSnippet - 代码片段
+   * @returns {Object} 分析结果
+   */
+  analyzeCodeInIsolation(codeSnippet) {
+    const findings = [];
+
+    // 检测函数定义
+    const funcMatches = codeSnippet.matchAll(/(?:export\s+)?(?:async\s+)?function\s+(\w+)/g);
+    for (const match of funcMatches) {
+      findings.push({ type: 'function', name: match[1] });
+    }
+
+    // 检测类定义
+    const classMatches = codeSnippet.matchAll(/class\s+(\w+)/g);
+    for (const match of classMatches) {
+      findings.push({ type: 'class', name: match[1] });
+    }
+
+    // 检测 import
+    const importMatches = codeSnippet.matchAll(/import\s+(?:\{([^}]+)\}|(\w+))/g);
+    for (const match of importMatches) {
+      findings.push({ type: 'import', name: match[1] || match[2] });
+    }
+
+    return {
+      summary: `Found ${findings.length} code elements`,
+      keyFindings: findings.slice(0, 10),
+      metadata: { type: 'code_analysis' },
+    };
+  }
+
+  /**
+   * 根据 context 使用情况调整复杂度阈值
+   * @param {number} contextUsagePercent - Context 使用百分比 (0-100)
+   */
+  adjustComplexityThreshold(contextUsagePercent) {
+    // 高 context 使用时，降低阈值，优先使用研究隔离而非完整团队
+    if (contextUsagePercent > 80) {
+      this._complexityThreshold.low = 20;
+      this._complexityThreshold.medium = 40;
+      this._complexityThreshold.high = 60;
+    } else if (contextUsagePercent > 60) {
+      this._complexityThreshold.low = 25;
+      this._complexityThreshold.medium = 50;
+      this._complexityThreshold.high = 75;
+    } else {
+      // 正常阈值
+      this._complexityThreshold.low = 25;
+      this._complexityThreshold.medium = 50;
+      this._complexityThreshold.high = 75;
+    }
+  }
+
+  /**
+   * 获取团队状态
+   */
     if (this.state !== TeamState.IDLE && this.state !== TeamState.DISSOLVED) {
       throw new Error(`团队当前状态为 ${this.state}，无法启动新任务`);
     }

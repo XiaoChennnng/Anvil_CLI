@@ -7,6 +7,7 @@ const Sidebar = require('./components/sidebar');
 const Editor = require('./components/editor');
 const StatusBar = require('./components/status-bar');
 const QuestionPanel = require('./components/question-panel');
+const { visibleLength, truncateToWidth, isCJK } = require('./ansi');
 
 class TUI {
   constructor(config) {
@@ -19,6 +20,7 @@ class TUI {
     this.questionPanel = new QuestionPanel(this.layout);
     this.questionPanel.messageBox = this.messageBox;  // 注入消息区引用
     this.questionPanel._refreshDisplay = () => this._refreshMessages();  // 注入刷新回调
+    this._cmdNeedBranch = true;  // 下一个命令输出的第一行用 └─ 分支符号
     this._isRunning = false;
     this._onSend = null;
     this._onExit = null;
@@ -93,6 +95,7 @@ class TUI {
    * 合并 render 输出 + 反压检测，避免 Windows 终端缓冲区阻塞
    */
   _refreshMessages() {
+    this.layout.startBuf();
     let out = (this.messageBox.render() || '') + (this.sidebar.render() || '');
 
     // 如果 editor 有未刷新的变化，也要重绘输入框
@@ -102,6 +105,7 @@ class TUI {
     }
 
     if (out) { this._safeWrite(out, false); }
+    this.layout.endBuf();
   }
 
   /**
@@ -136,7 +140,7 @@ class TUI {
   _queueRender() {
     if (!this._renderQueue) {
       const RenderQueue = require('./render-queue');
-      this._renderQueue = new RenderQueue(50);  // 50ms 节流，减少闪烁
+      this._renderQueue = new RenderQueue(20);  // 20ms 节流（约50fps），减少闪烁
     }
     this._renderQueue.requestRender(() => {
       this._refreshMessages();
@@ -304,11 +308,11 @@ class TUI {
   }
 
   /**
-   * 响应内容（使用节流渲染）
+   * 响应内容（立即渲染，避免闪烁）
    */
   renderContentChunk(chunk) {
     this.messageBox.addContentChunk(chunk);
-    this._queueRender();
+    this._forceRender();
   }
 
   /**
@@ -541,8 +545,19 @@ class TUI {
         this._stdoutBackedUp = false;
         if (this._backupTimer) { clearTimeout(this._backupTimer); this._backupTimer = null; }
       } else {
-        return false;
+        // 反压期间：累积计数，超过阈值后强制恢复避免消息区完全停止
+        this._backupRenderCount = (this._backupRenderCount || 0) + 1;
+        if (this._backupRenderCount >= 3) {
+          // 强制写入，跳过内容上限检查
+          this._stdoutBackedUp = false;
+          this._backupRenderCount = 0;
+          if (this._backupTimer) { clearTimeout(this._backupTimer); this._backupTimer = null; }
+        } else {
+          return false;
+        }
       }
+    } else {
+      this._backupRenderCount = 0;
     }
 
     // 非关键渲染做输出上限保护
@@ -579,34 +594,24 @@ class TUI {
   }
 
   /**
-   * 计算字符串可见长度（忽略 ANSI）
+   * 计算字符串可见长度（使用 ANSI_PATTERN 正则完整匹配）
    */
   _visibleLength(str) {
-    let len = 0;
-    let inEscape = false;
-    for (let i = 0; i < str.length; i++) {
-      if (str[i] === '\x1b') { inEscape = true; continue; }
-      if (inEscape) { if (str[i] === 'm') {inEscape = false;} continue; }
-      len++;
-    }
-    return len;
+    return visibleLength(str);
+  }
+
+  /**
+   * 判断是否为 CJK 双倍宽字符
+   */
+  _isCJK(char) {
+    return isCJK(char);
   }
 
   /**
    * 按可见长度截断 ANSI 字符串
    */
   _truncateAnsi(str, maxLen) {
-    let visible = 0;
-    let result = '';
-    let inEscape = false;
-    for (let i = 0; i < str.length; i++) {
-      if (str[i] === '\x1b') { inEscape = true; result += str[i]; continue; }
-      if (inEscape) { result += str[i]; if (str[i] === 'm') {inEscape = false;} continue; }
-      if (visible >= maxLen) { result += chalk.dim('...'); break; }
-      result += str[i];
-      visible++;
-    }
-    return result;
+    return truncateToWidth(str, maxLen, chalk.dim('...'));
   }
 
   /**

@@ -40,8 +40,8 @@ class Layout {
     this.editorHeight = Math.max(this.editorMinHeight, Math.floor(this._height * 0.1));
     this.contentHeight = this._height - this.editorHeight - this.statusBarHeight;
 
-    // 消息区滚动区域 (减去 header 3 行: 空行+标题行+空行)
-    this.messageViewportHeight = this.contentHeight - 3;
+    // 消息区滚动区域 (减去 header 3 行: 空行+标题行+空行)，保底至少 1 行
+    this.messageViewportHeight = Math.max(1, this.contentHeight - 3);
   }
 
   /**
@@ -118,9 +118,10 @@ class Layout {
 
   /**
    * 清屏（一次性清屏，避免逐行清除造成的闪烁）
+   * 使用 Home + Erase Below 替代 2J（更好的跨终端兼容性）
    */
   clearScreen() {
-    this.write('\x1b[2J');
+    this.write('\x1b[H\x1b[J');
     this.hideCursor();
   }
 

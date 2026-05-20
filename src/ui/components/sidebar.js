@@ -41,6 +41,16 @@ class Sidebar {
     this._contextBreakdownCache = null;
     this._messagesVersion = 0;
     this._todosVersion = 0;
+
+    // 进度条动画状态
+    this._progressAnimation = {
+      active: false,
+      from: 0,
+      to: 0,
+      startTime: 0,
+      duration: 0,
+    };
+    this._progressAnimationTimer = null;
   }
 
   setChatEngine(chatEngine) {
@@ -254,8 +264,10 @@ class Sidebar {
     // 进度条
     if (lineIndex === line) {
       const contextInfo = this._getContextInfo();
-      const progressBar = this._renderProgressBar(contextInfo.percent, width - 4);
-      const percentText = `${contextInfo.percent}%`;
+      // 动画进度优先于实际进度
+      const displayPercent = this._getAnimationProgress() ?? contextInfo.percent;
+      const progressBar = this._renderProgressBar(displayPercent, width - 4);
+      const percentText = `${Math.round(displayPercent)}%`;
       return ` ${progressBar} ${t.text(percentText)}`;
     }
     line++;
@@ -558,6 +570,66 @@ class Sidebar {
     if (count >= 1000000) {return (count / 1000000).toFixed(1) + 'M';}
     if (count >= 1000) {return (count / 1000).toFixed(1) + 'K';}
     return String(count);
+  }
+
+  /**
+   * 启动进度条动画
+   * @param {number} fromPercent - 起始进度 %
+   * @param {number} toPercent - 目标进度 %
+   * @param {number} durationMs - 动画时长 ms
+   */
+  startProgressAnimation(fromPercent, toPercent, durationMs) {
+    // 清除之前的动画
+    if (this._progressAnimationTimer) {
+      clearInterval(this._progressAnimationTimer);
+      this._progressAnimationTimer = null;
+    }
+
+    this._progressAnimation = {
+      active: true,
+      from: fromPercent,
+      to: toPercent,
+      startTime: Date.now(),
+      duration: durationMs,
+    };
+
+    const tick = () => {
+      const elapsed = Date.now() - this._progressAnimation.startTime;
+      const progress = Math.min(elapsed / this._progressAnimation.duration, 1);
+
+      // 计算当前进度
+      const currentPercent = this._progressAnimation.from +
+        (this._progressAnimation.to - this._progressAnimation.from) * progress;
+
+      // 更新渲染
+      this._renderVersion++;
+      this.layout.tui?.render();
+
+      // 动画结束
+      if (progress >= 1) {
+        this._progressAnimation.active = false;
+        if (this._progressAnimationTimer) {
+          clearInterval(this._progressAnimationTimer);
+          this._progressAnimationTimer = null;
+        }
+      }
+    };
+
+    this._progressAnimationTimer = setInterval(tick, 30);
+    tick(); // 立即执行一次
+  }
+
+  /**
+   * 获取当前动画进度（用于渲染）
+   */
+  _getAnimationProgress() {
+    if (!this._progressAnimation.active) {return null;}
+
+    const elapsed = Date.now() - this._progressAnimation.startTime;
+    const progress = Math.min(elapsed / this._progressAnimation.duration, 1);
+
+    return this._progressAnimation.from +
+      (this._progressAnimation.to - this._progressAnimation.from) * progress;
   }
 
   /**

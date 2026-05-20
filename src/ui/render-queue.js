@@ -34,11 +34,21 @@ class RenderQueue {
         this._timerId = null;
       }, remaining);
     } else {
-      // 已经有待执行的渲染，覆盖它，但先清除旧 Timer
+      // 已经有待执行的渲染，覆盖它，但先清除旧 Timer 并重新设置
       if (this._timerId) {
         clearTimeout(this._timerId);
       }
       this._queuedFn = renderFn;
+      // 重新设置 Timer（使用最小间隔）
+      this._timerId = setTimeout(() => {
+        if (this._queuedFn) {
+          this._queuedFn();
+          this._lastRender = Date.now();
+        }
+        this._pending = false;
+        this._queuedFn = null;
+        this._timerId = null;
+      }, this._minInterval);
     }
   }
 
