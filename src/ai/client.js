@@ -51,7 +51,7 @@ class AnvilAIClient extends EventEmitter {
     }
 
     if (thinkingMode) {
-      requestOptions.reasoning_effort = 'high';
+      requestOptions.reasoning_effort = 'max';
       requestOptions.extra_body = {
         thinking: { type: 'enabled' },
       };

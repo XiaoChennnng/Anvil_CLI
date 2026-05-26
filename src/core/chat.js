@@ -229,13 +229,19 @@ class ChatEngine extends EventEmitter {
 
       this.isProcessing = false;
 
-      // 添加最终助手消息到历史
-      this.messages.push({
-        role: 'assistant',
-        content: result.content || '',
-        reasoning_content: result.thinking || null,
-        toolCalls: result.toolCalls || null,
-      });
+      // 添加最终助手消息到历史（避免重复：_agentLoop 已推入则跳过）
+      const lastMsg = this.messages[this.messages.length - 1];
+      const isDuplicate = lastMsg && lastMsg.role === 'assistant'
+        && lastMsg.content === (result.content || '')
+        && JSON.stringify(lastMsg.tool_calls || null) === JSON.stringify(result.toolCalls || null);
+      if (!isDuplicate) {
+        this.messages.push({
+          role: 'assistant',
+          content: result.content || '',
+          reasoning_content: result.thinking || null,
+          toolCalls: result.toolCalls || null,
+        });
+      }
 
       // 主动后台压缩（非阻塞）
       if (this.contextManager && typeof this.contextManager.proactiveCompress === 'function') {
@@ -388,12 +394,18 @@ class ChatEngine extends EventEmitter {
         }
       }
 
-      // 将当前结果加入历史（tool_calls 已在 _sendAndProcess 中加入，此处不重复）
-      this.messages.push({
-        role: 'assistant',
-        content: result.content || '',
-        reasoning_content: result.thinking || '',
-      });
+      // 将当前结果加入历史（避免重复：_sendAndProcess 在工具调用时已推入）
+      const lastMsg = this.messages[this.messages.length - 1];
+      const isDuplicate = lastMsg && lastMsg.role === 'assistant'
+        && lastMsg.content === (result.content || '')
+        && JSON.stringify(lastMsg.tool_calls || null) === JSON.stringify(result.toolCalls || null);
+      if (!isDuplicate) {
+        this.messages.push({
+          role: 'assistant',
+          content: result.content || '',
+          reasoning_content: result.thinking || '',
+        });
+      }
 
       // 检查是否有待注入的用户上下文
       const injectedContext = await this._checkPendingContext();
@@ -434,6 +446,13 @@ class ChatEngine extends EventEmitter {
         const parsed = parseTaskCompleteResult(lastToolMsg?.content || '');
         if (parsed.complete === true) {
           this.logger?.info('任务完成', { reason: parsed.reason, iterationCount });
+          // 补发被抑制的 UI 事件（检查阶段的完整总结内容从未渲染到 UI）
+          this.emit('content', checkResult.content || '');
+          if (checkResult.thinking) {
+            this.emit('thinking', checkResult.thinking);
+          }
+          // 使用检查结果作为最终返回值，而非上一轮的旧内容
+          result = checkResult;
           break;
         }
         // 有未完成或不确定，继续执行
@@ -449,9 +468,7 @@ class ChatEngine extends EventEmitter {
         content: getAgentContinuePrompt(),
       });
 
-      this._suppressUI = true;
       result = await this._sendAndProcess();
-      this._suppressUI = false;
       fullContent += result.content || '';
       fullThinking += result.thinking || '';
       lastUsage = result.usage || lastUsage;
@@ -471,9 +488,7 @@ class ChatEngine extends EventEmitter {
                    '不要只回复文字，用行动回答。',
         });
 
-        this._suppressUI = true;
         const recheckResult = await this._sendAndProcess();
-        this._suppressUI = false;
 
         if (recheckResult.toolCalls?.some(tc => tc.function?.name === 'task_complete')) {
           break;
@@ -499,7 +514,7 @@ class ChatEngine extends EventEmitter {
     return {
       thinking: fullThinking,
       content: fullContent,
-      toolCalls: [],
+      toolCalls: result.toolCalls || [],
       usage: lastUsage,
     };
   }
@@ -771,12 +786,14 @@ class ChatEngine extends EventEmitter {
 
     // AI 语义压缩：先调用 AI 生成语义摘要（如果未被跳过）
     if (!skipSemanticSummary) {
-      const semanticSummary = await this._generateSemanticSummary();
+      const budget = this._calculateSummaryBudget();
+      const semanticSummary = await this._generateSemanticSummary(budget);
       if (semanticSummary) {
         this.messages.push({
           role: 'system',
           content: `[AI 语义摘要]\n${semanticSummary}\n[/AI 语义摘要]`,
           _semanticSummary: true,
+          _compressedAt: new Date().toISOString(),
         });
       }
     }
@@ -859,12 +876,14 @@ class ChatEngine extends EventEmitter {
 
     try {
       // AI 语义压缩：先理解对话内容，生成语义摘要
-      const semanticSummary = await this._generateSemanticSummary();
+      const budget = this._calculateSummaryBudget();
+      const semanticSummary = await this._generateSemanticSummary(budget);
       if (semanticSummary) {
         this.messages.push({
           role: 'system',
           content: `[AI 语义摘要]\n${semanticSummary}\n[/AI 语义摘要]`,
           _semanticSummary: true,
+          _compressedAt: new Date().toISOString(),
         });
       }
 
@@ -912,31 +931,89 @@ class ChatEngine extends EventEmitter {
   }
 
   /**
+   * 查找最后一条语义摘要消息在消息数组中的索引
+   * @returns {number} 索引，-1 表示没有现有摘要
+   */
+  _findLastSemanticSummaryIndex() {
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      if (this.messages[i]._semanticSummary) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * 计算语义摘要的 Token 预算
+   * 基于待摘要的消息数量和窗口大小动态分配
+   * @returns {number} 可用预算（tokens）
+   */
+  _calculateSummaryBudget() {
+    const windowSize = this.contextManager?.windowSize || 1_000_000;
+
+    // 计算待摘要的非系统消息数量（上次语义摘要之后的新消息）
+    const lastSemanticIdx = this._findLastSemanticSummaryIndex();
+    const newMsgs = this.messages.slice(lastSemanticIdx + 1)
+      .filter(m => m.role !== 'system');
+
+    // 每 2 条消息估一轮
+    const roundsToSummarize = Math.ceil(newMsgs.length / 2);
+
+    // 预算公式：至少 200 tokens，最多窗口的 3%，每轮 80 tokens
+    const maxBudget = Math.floor(windowSize * 0.03);
+    const budget = Math.max(200, Math.min(maxBudget, roundsToSummarize * 80));
+
+    return budget;
+  }
+
+  /**
    * AI 语义压缩：调用 AI 生成语义摘要
    * 在规则压缩前先用 AI 理解对话内容，生成语义级别的摘要
+   * 使用动态 Token 预算替代固定句子数限制，对话越长摘要越详细
+   * @param {number} budget - 可用的 Token 预算
    * @returns {Promise<string>} 语义摘要内容
    */
-  async _generateSemanticSummary() {
+  async _generateSemanticSummary(budget = 200) {
     if (!this.aiClient) {return '';}
 
     try {
-      const summaryPrompt = `请用 3-5 句话总结以下对话的核心内容：
-1. 用户的主要需求是什么？
-2. 我们做了什么关键操作？
-3. 产生了哪些重要决策或文件变更？
+      // 获取上次摘要之后的新消息（增量摘要），最多取 60 条防止 Token 浪费
+      const lastSemanticIdx = this._findLastSemanticSummaryIndex();
+      const newMsgsStart = Math.max(lastSemanticIdx + 1, this.messages.length - 60);
+      const newMsgs = this.messages.slice(newMsgsStart)
+        .filter(m => m.role !== 'system' || m._semanticSummary);
 
-请直接输出摘要，不要解释。`;
-
-      // 提取最近 20 条消息的内容（限制长度避免 token 浪费）
-      const recentMsgs = this.messages.slice(-20);
-      const dialogueContent = recentMsgs
-        .filter(m => m.role !== 'system' || m._semanticSummary)
+      const dialogueContent = newMsgs
         .map(m => `${m.role}: ${(m.content || '').slice(0, 300)}`)
         .join('\n');
 
       if (!dialogueContent.trim()) {return '';}
 
-      // 调用 AI 生成摘要（使用轻量模型，减少 token 消耗）
+      // 带预算的结构化摘要指令
+      const summaryPrompt = `你最多可以使用 ${budget} tokens 来生成以下对话的语义摘要。
+根据预算大小决定详细程度：
+- 预算充裕（>1000 tokens）：逐轮详细记录，保留问题、工具调用、结果、决策
+- 预算适中（300-1000 tokens）：每组轮次概要 + 关键操作列表
+- 预算紧张（<300 tokens）：只保留核心需求、关键操作、重要决策
+
+必须使用以下结构化格式输出，不要额外解释：
+
+## 用户核心需求
+{概括用户的目标和意图}
+
+## 关键操作记录
+{按时间顺序列出关键操作，包括工具调用、文件读写、命令执行等}
+
+## 文件变更清单
+{所有创建/修改/删除的文件及变更要点}
+
+## 重要决策
+{架构选择、方案取舍、关键判断等}
+
+## 当前状态
+{任务进度、待办事项、下一步方向}`;
+
+      // 调用 AI 生成摘要
       const response = await this.aiClient.chat([
         { role: 'system', content: summaryPrompt },
         { role: 'user', content: dialogueContent },
@@ -1336,7 +1413,7 @@ class ChatEngine extends EventEmitter {
    * 设置团队事件监听（供 TUI 绑定）
    */
   _setupTeamEventListeners() {
-    if (!this.teamManager) return;
+    if (!this.teamManager) {return;}
 
     this.teamManager.on('team_created', (data) => {
       this.emit('team_created', data);

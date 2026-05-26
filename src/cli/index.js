@@ -479,14 +479,33 @@ async function main() {
       }
     }
 
-    tui.finishResponse(chatEngine.model);
-
-    // 重置状态标志，确保下次任务能正确触发 thinking 显示
-    thinkingStarted = false;
-    contentStarted = false;
-
     tui.sidebar.updateMessages(chatEngine.messages);
     tui.sidebar.setTodos(todoManager.getAll());
+
+    // 检查是否有 task_complete 调用来决定是否显示完成提示
+    const hadTaskComplete = chatEngine.messages.some(m =>
+      m.role === 'tool' && m.content?.includes('"complete": true')
+    );
+
+    // 如果检测到 task_complete，显示完成摘要
+    if (hadTaskComplete) {
+      const taskCompleteMsg = [...chatEngine.messages].reverse().find(m =>
+        m.role === 'tool' && m.content?.includes('"complete": true')
+      );
+      if (taskCompleteMsg) {
+        try {
+          const result = JSON.parse(taskCompleteMsg.content);
+          if (result.summary) {
+            tui.messageBox.renderedLines.push('');
+            tui.messageBox.renderedLines.push(` ${chalk.green('✓')} ${chalk.bold('任务完成摘要')}`);
+            const summaryLines = result.summary.split('\n').filter(l => l.trim());
+            for (const line of summaryLines.slice(0, 8)) {
+              tui.messageBox.renderedLines.push(`   ${chalk.dim(line)}`);
+            }
+          }
+        } catch {}
+      }
+    }
 
     try {
       const contextStatus = chatEngine.contextManager?.getStatusReport(chatEngine.messages);
@@ -498,6 +517,8 @@ async function main() {
         );
       }
     } catch {}
+
+    tui.finishResponse(chatEngine.model);
   }
 
   process.stdin.on('data', async (buf) => {

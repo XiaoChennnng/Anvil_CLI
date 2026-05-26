@@ -1065,7 +1065,7 @@ class ContextManager {
    * 保留最近 N 轮（自适应相位）
    */
   _mediumCompress(messages) {
-    const { systemMsgs, nonSystem } = this._splitMessages(messages);
+    const { systemMsgs, semanticSummaryMsgs, nonSystem } = this._splitMessages(messages);
 
     const keepRounds = Math.floor(this._getKeepCountForPhase() / 2);
     const keepCount = keepRounds * 2;
@@ -1089,7 +1089,7 @@ class ContextManager {
       _compressedAt: new Date().toISOString(),
     };
 
-    return { messages: [...systemMsgs, archiveMsg, ...recent] };
+    return { messages: [...systemMsgs, ...semanticSummaryMsgs, archiveMsg, ...recent] };
   }
 
   /**
@@ -1097,7 +1097,7 @@ class ContextManager {
    * 策略: 早期对话 → L2 概要摘要，保留最近 4 轮
    */
   _heavyCompress(messages) {
-    const { systemMsgs, nonSystem } = this._splitMessages(messages);
+    const { systemMsgs, semanticSummaryMsgs, nonSystem } = this._splitMessages(messages);
 
     const keepCount = 8;
     const recent = nonSystem.slice(-keepCount);
@@ -1122,7 +1122,7 @@ class ContextManager {
       _compressedAt: new Date().toISOString(),
     };
 
-    return { messages: [...systemMsgs, archiveMsg, ...recent] };
+    return { messages: [...systemMsgs, ...semanticSummaryMsgs, archiveMsg, ...recent] };
   }
 
   /**
@@ -1130,7 +1130,7 @@ class ContextManager {
    * 策略: 全部历史 → L3 仅关键决策点 + 保留最近 2 轮
    */
   _criticalCompress(messages) {
-    const { systemMsgs, nonSystem } = this._splitMessages(messages);
+    const { systemMsgs, semanticSummaryMsgs, nonSystem } = this._splitMessages(messages);
 
     const keepCount = 4;
     const recent = nonSystem.slice(-keepCount);
@@ -1156,7 +1156,7 @@ class ContextManager {
       _compressedAt: new Date().toISOString(),
     };
 
-    return { messages: [...systemMsgs, archiveMsg, ...recent] };
+    return { messages: [...systemMsgs, ...semanticSummaryMsgs, archiveMsg, ...recent] };
   }
 
   /**

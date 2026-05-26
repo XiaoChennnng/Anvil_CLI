@@ -379,28 +379,25 @@ class ToolRenderer {
       case 'edit_file':
       case 'edit': {
         if (result.diff) {
-          // 原子编辑 diff 显示（用户要求格式）
+          // 只显示修改片段（diff 格式：上下文行 + 变更行，NNNNNN -/+ content）
           const parsed = parseUnifiedDiff(result.diff);
-
-          // 统计摘要: Added N lines, removed N lines
           const add = result.additions || 0;
           const rem = result.removals || 0;
           const statParts = [];
-          if (add > 0) {statParts.push(`Added ${add} line${add > 1 ? 's' : ''}`);}
-          if (rem > 0) {statParts.push(`removed ${rem} line${rem > 1 ? 's' : ''}`);}
-          const summary = statParts.length > 0 ? statParts.join(', ') : 'No changes';
-          lines.push(`${indent}${branch} ${t.dim(summary)}`);
+          if (add > 0) {statParts.push(`+${add}`);}
+          if (rem > 0) {statParts.push(`-${rem}`);}
+          lines.push(`${indent}${branch} ${t.dim(statParts.join(' ') || 'No changes')}  ${this._formatPath(result.filePath || '')}`);
 
-          // 渲染 diff 行（无 hunk header，对齐格式: NNNNNN -/+ content）
+          const LN_WIDTH = 6;
           let lineCount = 0;
-          const LN_WIDTH = 6; // 行号宽度
+          const diffMax = Math.min(8, maxLines);
           for (const hunk of parsed.hunks) {
-            if (lineCount >= maxLines) {break;}
+            if (lineCount >= diffMax) {break;}
             for (const diffLine of hunk.lines) {
-              if (lineCount >= maxLines) {break;}
+              if (lineCount >= diffMax) {break;}
               const ln = diffLine.kind === 'removed' ? diffLine.oldLineNo : diffLine.newLineNo;
               const lnStr = String(ln || 0).padStart(LN_WIDTH);
-              const maxContentLen = contentWidth - LN_WIDTH - 4; // 行号 + 前缀 + 缩进
+              const maxContentLen = contentWidth - LN_WIDTH - 4;
               let styledLine;
               if (diffLine.kind === 'removed') {
                 styledLine = t.diff.removed(`${lnStr} - ${this._truncate(diffLine.content, maxContentLen)}`);
@@ -413,13 +410,13 @@ class ToolRenderer {
               lineCount++;
             }
           }
+          if (parsed.hunks.reduce((c, h) => c + h.lines.length, 0) > diffMax) {
+            lines.push(`${indent}${indent}${t.textMuted(`... ${parsed.hunks.reduce((c, h) => c + h.lines.length, 0) - diffMax} more lines`)}`);
+          }
         } else if (result.additions > 0 || result.removals > 0) {
           const add = result.additions || 0;
           const rem = result.removals || 0;
-          const statParts = [];
-          if (add > 0) {statParts.push(`Added ${add} line${add > 1 ? 's' : ''}`);}
-          if (rem > 0) {statParts.push(`removed ${rem} line${rem > 1 ? 's' : ''}`);}
-          lines.push(`${indent}${branch} ${t.dim(statParts.join(', '))}`);
+          lines.push(`${indent}${branch} ${t.dim(`+${add} -${rem}`)}  ${this._formatPath(result.filePath || '')}`);
         } else if (result.success) {
           lines.push(`${indent}${branch} ${t.success('✓')} Updated ${this._formatPath(result.filePath || '')}`);
         }
@@ -550,6 +547,24 @@ class ToolRenderer {
           // 如果有 todo 完整对象，优先使用其 text
           if (!desc && result.todo?.text) {desc = this._truncate(result.todo.text, 40);}
           lines.push(`${indent}${branch} ${t.success('✓')} ${action}${desc ? ': ' + t.dim(desc) : ''}`);
+        }
+        break;
+      }
+
+      case 'task_complete': {
+        if (result.complete) {
+          lines.push(`${indent}${branch} ${t.success('✓')} ${t.bold('任务已完成')}`);
+          if (result.summary) {
+            const summaryLines = result.summary.split('\n').filter(l => l.trim());
+            for (const line of summaryLines.slice(0, 5)) {
+              lines.push(`${indent}   ${t.dim(this._truncate(line, contentWidth))}`);
+            }
+          }
+        } else {
+          lines.push(`${indent}${branch} ${t.warning('⚠')} 任务未完成`);
+          if (result.reason) {
+            lines.push(`${indent}   ${t.textMuted(result.reason)}`);
+          }
         }
         break;
       }

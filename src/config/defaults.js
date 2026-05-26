@@ -4,7 +4,7 @@ const DEFAULTS = {
   defaultModel: 'deepseek-v4-flash',
   baseURL: 'https://api.deepseek.com',
   thinkingMode: true,
-  reasoningEffort: 'high',
+  reasoningEffort: 'max',
   timeout: 60000,
   retryCount: 2,
 
