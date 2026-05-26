@@ -80,7 +80,7 @@ class TaskStateManager {
    */
   updateProgress(taskId, progress) {
     const task = this.tasks.get(taskId);
-    if (!task) return;
+    if (!task) {return;}
 
     task.progress = Math.min(Math.max(progress, 0), 100);
     this.tasks.set(taskId, task);
@@ -91,7 +91,7 @@ class TaskStateManager {
    */
   completeTask(taskId, result) {
     const task = this.tasks.get(taskId);
-    if (!task) return;
+    if (!task) {return;}
 
     task.state = TASK_STATE.COMPLETED;
     task.completedAt = new Date().toISOString();
@@ -109,7 +109,7 @@ class TaskStateManager {
    */
   failTask(taskId, error) {
     const task = this.tasks.get(taskId);
-    if (!task) return;
+    if (!task) {return;}
 
     task.state = TASK_STATE.FAILED;
     task.completedAt = new Date().toISOString();
@@ -125,7 +125,7 @@ class TaskStateManager {
    */
   cancelTask(taskId) {
     const task = this.tasks.get(taskId);
-    if (!task) return;
+    if (!task) {return;}
 
     task.state = TASK_STATE.CANCELLED;
     task.completedAt = new Date().toISOString();
@@ -170,7 +170,7 @@ class TaskStateManager {
 
   _startTimeoutMonitor(taskId) {
     const task = this.tasks.get(taskId);
-    if (!task) return;
+    if (!task) {return;}
 
     // 设置超时警告（80%时间）
     const warningTimeout = task.timeout * this.warningThreshold;
@@ -237,7 +237,7 @@ class TaskStateManager {
 
   _checkAndStartIfReady(taskId) {
     const task = this.tasks.get(taskId);
-    if (!task || task.state !== TASK_STATE.WAITING_DEP) return;
+    if (!task || task.state !== TASK_STATE.WAITING_DEP) {return;}
 
     const allDepsCompleted = task.dependencies.every(depId => {
       const dep = this.tasks.get(depId);

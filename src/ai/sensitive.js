@@ -51,7 +51,7 @@ const SENSITIVE_PATTERNS = [
  * 用字符串方法检测并替换 PRIVATE KEY 块（避免正则灾难性回溯）
  */
 function _redactPrivateKeys(text) {
-  let sanitized = text;
+  const sanitized = text;
   let count = 0;
   let result = '';
   let lastPos = 0;

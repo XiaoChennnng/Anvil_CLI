@@ -3,7 +3,6 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-const chalk = require('chalk');
 
 // 模块级缓存 detectShell 结果，避免每次 executeCommand 都重新检测
 let _cachedShell = null;

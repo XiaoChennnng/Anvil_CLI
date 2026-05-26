@@ -598,8 +598,6 @@ class Sidebar {
       const progress = Math.min(elapsed / this._progressAnimation.duration, 1);
 
       // 计算当前进度
-      const currentPercent = this._progressAnimation.from +
-        (this._progressAnimation.to - this._progressAnimation.from) * progress;
 
       // 更新渲染
       this._renderVersion++;

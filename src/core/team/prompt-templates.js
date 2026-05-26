@@ -24,7 +24,6 @@ class DynamicPromptGenerator {
       constraints = [],
       projectContext = '',
       teamSharedContext = null,
-      previousResults = null,
     } = context;
 
     let prompt = '';

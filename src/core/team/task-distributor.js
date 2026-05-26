@@ -43,7 +43,7 @@ class TaskDependencyGraph {
     const result = [];
 
     const visit = (nodeId) => {
-      if (visited.has(nodeId)) return;
+      if (visited.has(nodeId)) {return;}
       visited.add(nodeId);
 
       const node = this.nodes.get(nodeId);

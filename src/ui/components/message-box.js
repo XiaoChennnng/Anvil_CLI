@@ -3,7 +3,7 @@
 const chalk = require('chalk');
 const { getTheme } = require('../theme');
 const MessageRenderer = require('./message');
-const { visibleLength, isCJK } = require('../ansi');
+const { visibleLength } = require('../ansi');
 
 class MessageBox {
   constructor(layout) {

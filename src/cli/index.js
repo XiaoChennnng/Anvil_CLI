@@ -27,7 +27,7 @@ const ChatEngine = require('../core/chat');
 const TUI = require('../ui/tui');
 const { showLogo } = require('../ui/logo');
 const { getModel } = require('../ai/models');
-const { truncateToWidth: ansiTruncateToWidth, stripAnsi } = require('../ui/ansi');
+
 
 async function main() {
   const cliOptions = setupOptions();

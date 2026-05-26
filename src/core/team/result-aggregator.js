@@ -216,7 +216,7 @@ class ResultAggregator {
     const sections = [];
 
     for (const [category, items] of Object.entries(categorizedResults)) {
-      if (items.length === 0) continue;
+      if (items.length === 0) {continue;}
 
       sections.push(`## ${this._formatCategoryName(category)}`);
 
@@ -379,7 +379,7 @@ class ResultAggregator {
     const duplicates = [];
 
     for (const item of items) {
-      if (!item) continue;
+      if (!item) {continue;}
       const key = typeof item === 'string' ? item : JSON.stringify(item);
       if (seen.has(key)) {
         duplicates.push(item);

@@ -39,7 +39,6 @@ class AgentSpawner extends EventEmitter {
       role,
       teamId,
       parentAgent,
-      customPrompt,
       model,
     } = options;
 
@@ -94,7 +93,6 @@ class AgentSpawner extends EventEmitter {
       systemPrompt,
       tasks,
       timeout = this.defaultTimeout,
-      priority = 2,
     } = options;
 
     const startTime = Date.now();
@@ -320,7 +318,7 @@ class AgentSpawner extends EventEmitter {
    */
   getAgentStatus(agentId) {
     const agent = this.activeAgents.get(agentId);
-    if (!agent) return null;
+    if (!agent) {return null;}
 
     return {
       agentId: agent.agentId,

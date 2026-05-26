@@ -138,12 +138,23 @@ async function writeFile(params, context) {
     }
 
     const stat = await fsp.stat(resolvedPath);
+
+    // 追加模式时计算已有行数，用于 UI 显示真实行号
+    let appendStartLine = 0;
+    if (writeMode === 'a') {
+      const existingContent = await fsp.readFile(resolvedPath, 'utf8');
+      const linesWithoutNewContent = existingContent.slice(0, -content.length);
+      appendStartLine = linesWithoutNewContent.split('\n').length - 1;
+      if (appendStartLine < 0) { appendStartLine = 0; }
+    }
+
     return {
       success: true,
       filePath,
       mode: writeMode === 'a' ? 'append' : 'overwrite',
       size: stat.size,
       timestamp: stat.mtimeMs,
+      appendStartLine,
     };
   } catch (err) {
     return { error: `写入文件失败 ${filePath}: ${err.message}` };

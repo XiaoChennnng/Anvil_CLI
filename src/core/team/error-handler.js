@@ -26,7 +26,7 @@ class TeamErrorHandler {
    * @returns {Object}
    */
   handleError(error, context) {
-    const { type, taskId, agentId, originalTask } = context;
+    const { type, taskId } = context;
 
     // 记录错误
     this._recordError(taskId);
@@ -60,7 +60,7 @@ class TeamErrorHandler {
    * Agent崩溃处理
    */
   _handleAgentCrash(error, context, errorCount) {
-    const { teamManager, taskId, originalTask } = context;
+    const { teamManager, originalTask } = context;
 
     if (errorCount < this.maxRetries) {
       // 重试：创建新的Agent
@@ -90,7 +90,7 @@ class TeamErrorHandler {
    * 任务超时处理
    */
   _handleTaskTimeout(error, context, errorCount) {
-    const { taskId, teamManager } = context;
+    const { taskId } = context;
 
     if (errorCount < this.maxRetries) {
       // 重试一次，给予更短的超时
@@ -120,7 +120,7 @@ class TeamErrorHandler {
    * 工具执行失败处理
    */
   _handleToolFailure(error, context, errorCount) {
-    const { toolName, taskId } = context;
+    const { toolName } = context;
 
     // 区分可重试和不可重试的错误
     const nonRetryableErrors = [

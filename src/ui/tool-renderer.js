@@ -395,7 +395,7 @@ class ToolRenderer {
             if (lineCount >= diffMax) {break;}
             for (const diffLine of hunk.lines) {
               if (lineCount >= diffMax) {break;}
-              const ln = diffLine.kind === 'removed' ? diffLine.oldLineNo : diffLine.newLineNo;
+              const ln = diffLine.kind === 'added' ? diffLine.newLineNo : diffLine.oldLineNo;
               const lnStr = String(ln || 0).padStart(LN_WIDTH);
               const maxContentLen = contentWidth - LN_WIDTH - 4;
               let styledLine;
@@ -472,8 +472,9 @@ class ToolRenderer {
             const contentLines = content.split('\n');
             const displayLines = contentLines.slice(0, maxLines);
             const LN_WIDTH = 6;
+            const lineOffset = result.mode === 'append' ? (result.appendStartLine || 0) : 0;
             for (let i = 0; i < displayLines.length; i++) {
-              const ln = String(i + 1).padStart(LN_WIDTH);
+              const ln = String(lineOffset + i + 1).padStart(LN_WIDTH);
               const sep = t.dim('│');
               const maxContentLen = contentWidth - LN_WIDTH - 10;
               lines.push(`${indent}${indent}${t.dim(ln)} ${sep} ${t.text(this._truncate(displayLines[i], maxContentLen))}`);

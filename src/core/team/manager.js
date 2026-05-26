@@ -15,7 +15,6 @@ const { ResearchContext } = require('../research-context');
 const {
   TeamState,
   TaskPriority,
-  TeamErrorType,
 } = require('./constants');
 
 // 工具函数
@@ -24,7 +23,7 @@ function generateTeamId() {
 }
 
 function generateTaskFingerprint(task) {
-  if (!task) return { keyWords: [], full: '' };
+  if (!task) {return { keyWords: [], full: '' };}
   const words = task.split(/[\s,.，、。]+/).filter(w => w.length > 1);
   const stopWords = new Set(['的', '了', '和', '与', '或', '一个', '一些', '相关', '以及']);
   const keyWords = words.filter(w => !stopWords.has(w) && w.length > 2);
@@ -198,8 +197,8 @@ class TeamManager extends EventEmitter {
     }
 
     // 基于上下文补充评估
-    if (context.messageCount > 20) complexityScore += 10;
-    if (context.toolCallCount > 10) complexityScore += 10;
+    if (context.messageCount > 20) {complexityScore += 10;}
+    if (context.toolCallCount > 10) {complexityScore += 10;}
 
     // 决策阈值（使用动态阈值，根据 context 使用情况调整）
     const THRESHOLD = {
@@ -339,8 +338,12 @@ class TeamManager extends EventEmitter {
   }
 
   /**
-   * 获取团队状态
+   * 启动团队任务
+   * @param {string} task - 任务描述
+   * @param {Object} context - 上下文信息
+   * @returns {Promise<Object>} 团队任务执行结果
    */
+  async startTeamTask(task, context = {}) {
     if (this.state !== TeamState.IDLE && this.state !== TeamState.DISSOLVED) {
       throw new Error(`团队当前状态为 ${this.state}，无法启动新任务`);
     }
@@ -440,7 +443,7 @@ class TeamManager extends EventEmitter {
 
     for (const [agentId, tasks] of Object.entries(taskPlan.assignments)) {
       const agentInfo = this.agents.get(agentId);
-      if (!agentInfo) continue;
+      if (!agentInfo) {continue;}
 
       assignments.set(agentId, {
         agent: agentInfo,

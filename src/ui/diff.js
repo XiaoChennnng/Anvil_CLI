@@ -324,12 +324,107 @@ function formatDiff(diffText, width, maxLines = 10) {
  * @param {string} fileName - 文件名
  * @returns {Object} { diff, additions, removals }
  */
+/**
+ * LCS 计算中间区域的编辑脚本
+ */
+function _computeMiddleDiff(oldLines, newLines) {
+  const m = oldLines.length;
+  const n = newLines.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      if (oldLines[i] === newLines[j]) {
+        dp[i][j] = 1 + dp[i + 1][j + 1];
+      } else {
+        dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+      }
+    }
+  }
+
+  const result = [];
+  let i = 0, j = 0;
+  while (i < m || j < n) {
+    if (i < m && j < n && oldLines[i] === newLines[j]) {
+      result.push({ type: 'same', line: oldLines[i] });
+      i++; j++;
+    } else if (j >= n || (i < m && dp[i + 1][j] >= dp[i][j + 1])) {
+      result.push({ type: 'remove', line: oldLines[i] });
+      i++;
+    } else {
+      result.push({ type: 'add', line: newLines[j] });
+      j++;
+    }
+  }
+  return result;
+}
+
+/**
+ * 将编辑脚本格式化为 unified diff 行，在变更前后保留上下文行
+ */
+function _formatDiffWithContext(entries, contextSize) {
+  const result = [];
+  let i = 0;
+
+  // 将 entries 分组为 same / change 块
+  const groups = [];
+  while (i < entries.length) {
+    const type = entries[i].type;
+    const start = i;
+    while (i < entries.length && entries[i].type === type) {i++;}
+    groups.push({ type, lines: entries.slice(start, i).map(e => e.line) });
+  }
+
+  for (let g = 0; g < groups.length; g++) {
+    const group = groups[g];
+
+    if (group.type === 'same') {
+      const hasPrevChange = g > 0 && groups[g - 1].type !== 'same';
+      const hasNextChange = g < groups.length - 1 && groups[g + 1].type !== 'same';
+
+      if (!hasPrevChange && !hasNextChange) {
+        // 孤立同块，全部保留
+        for (const line of group.lines) {
+          result.push(` ${line}`);
+        }
+      } else if (hasPrevChange && hasNextChange) {
+        // 前后都有变更 — 取前后各 contextSize 行
+        for (let k = 0; k < contextSize && k < group.lines.length; k++) {
+          result.push(` ${group.lines[k]}`);
+        }
+        for (let k = Math.max(0, group.lines.length - contextSize); k < group.lines.length; k++) {
+          result.push(` ${group.lines[k]}`);
+        }
+      } else if (hasPrevChange) {
+        // 只有前有变更 — 取尾部 contextSize 行
+        const start = Math.max(0, group.lines.length - contextSize);
+        for (let k = start; k < group.lines.length; k++) {
+          result.push(` ${group.lines[k]}`);
+        }
+      } else {
+        // 只有后有变更 — 取头部 contextSize 行
+        for (let k = 0; k < contextSize && k < group.lines.length; k++) {
+          result.push(` ${group.lines[k]}`);
+        }
+      }
+    } else if (group.type === 'remove') {
+      for (const line of group.lines) {
+        result.push(`-${line}`);
+      }
+    } else {
+      for (const line of group.lines) {
+        result.push(`+${line}`);
+      }
+    }
+  }
+
+  return result;
+}
+
 function generateDiff(oldContent, newContent, fileName) {
   const oldLines = oldContent.split('\n');
   const newLines = newContent.split('\n');
 
-  // 简单的 diff 生成：逐行比较
-  const diffLines = [];
   let additions = 0;
   let removals = 0;
 
@@ -337,7 +432,6 @@ function generateDiff(oldContent, newContent, fileName) {
   let commonPrefix = 0;
   while (commonPrefix < oldLines.length && commonPrefix < newLines.length &&
          oldLines[commonPrefix] === newLines[commonPrefix]) {
-    diffLines.push(` ${oldLines[commonPrefix]}`);
     commonPrefix++;
   }
 
@@ -349,29 +443,40 @@ function generateDiff(oldContent, newContent, fileName) {
     commonSuffix++;
   }
 
-  // 处理中间的差异部分
+  // 若完全相同，直接返回
+  if (commonPrefix === oldLines.length && commonPrefix === newLines.length) {
+    const diff = `--- a/${fileName}\n+++ b/${fileName}\n@@ -1,${oldLines.length} +1,${newLines.length} @@`;
+    return { diff, additions: 0, removals: 0 };
+  }
+
+  // 仅对中间差异区域运行 LCS diff
   const oldMiddle = oldLines.slice(commonPrefix, oldLines.length - commonSuffix);
   const newMiddle = newLines.slice(commonPrefix, newLines.length - commonSuffix);
+  const midEntries = _computeMiddleDiff(oldMiddle, newMiddle);
+  const midFormatted = _formatDiffWithContext(midEntries, 3);
 
-  // 标记删除的行
-  for (const line of oldMiddle) {
-    diffLines.push(`-${line}`);
-    removals++;
+  // 统计增删行数
+  for (const entry of midEntries) {
+    if (entry.type === 'remove') {removals++;}
+    else if (entry.type === 'add') {additions++;}
   }
 
-  // 标记新增的行
-  for (const line of newMiddle) {
-    diffLines.push(`+${line}`);
-    additions++;
+  // 组装：前缀（最多 3 行上下文）+ 中间 diff + 后缀（最多 3 行上下文）
+  const prefixContext = Math.min(commonPrefix, 3);
+  const suffixContext = Math.min(commonSuffix, 3);
+  const result = [];
+
+  for (let i = commonPrefix - prefixContext; i < commonPrefix; i++) {
+    if (i >= 0) {result.push(` ${oldLines[i]}`);}
+  }
+  for (const line of midFormatted) {
+    result.push(line);
+  }
+  for (let i = oldLines.length - suffixContext; i < oldLines.length; i++) {
+    if (i >= commonPrefix) {result.push(` ${oldLines[i]}`);}
   }
 
-  // 添加共同后缀
-  for (let i = commonSuffix - 1; i >= 0; i--) {
-    diffLines.push(` ${oldLines[oldLines.length - 1 - i]}`);
-  }
-
-  // 构建 unified diff 格式
-  const diff = `--- a/${fileName}\n+++ b/${fileName}\n@@ -1,${oldLines.length} +1,${newLines.length} @@\n${diffLines.join('\n')}`;
+  const diff = `--- a/${fileName}\n+++ b/${fileName}\n@@ -1,${oldLines.length} +1,${newLines.length} @@\n${result.join('\n')}`;
 
   return { diff, additions, removals };
 }
