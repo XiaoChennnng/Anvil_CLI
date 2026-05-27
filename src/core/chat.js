@@ -317,15 +317,44 @@ class ChatEngine extends EventEmitter {
       };
     }
 
-    // 2. Plan Mode 下调了其他工具（非 request_plan_approval、非只读工具） → 提示 AI 先请求批准
-    if (this._planMode && result.hadToolCalls) {
-      // 检查是否只是调了 request_plan_approval（上面已经处理了）
+    // 2. Plan Mode下调了非规划工具 → 重新引导 AI 先提交计划
+    if (this._planMode && !this._planApproved && !this._awaitingPlanApproval && result.hadToolCalls) {
       const requestedApproval = result.toolCalls?.some(
         tc => tc.function?.name === 'request_plan_approval'
       );
       if (!requestedApproval) {
-        // 其他工具调用（读操作允许，写操作已在工具层拦截）→ 不暂停，让 AI 继续
-        this.logger?.info('Plan Mode: AI 调用了其他工具（非 request_plan_approval），继续执行');
+        this.logger?.info('Plan Mode: AI 调用了非规划工具，重新引导');
+
+        // 将 AI 当前回复加入历史
+        this.messages.push({
+          role: 'assistant',
+          content: result.content || '',
+          reasoning_content: result.thinking || '',
+        });
+
+        // 注入引导消息
+        this.messages.push({
+          role: 'user',
+          content: '[系统提示] 你在 Plan Mode 下，必须先输出结构化计划方案并调用 request_plan_approval 工具请求批准，然后才能执行其他操作。请立即回到规划阶段。',
+        });
+
+        // 重新请求
+        result = await this._sendAndProcess();
+        fullContent += result.content || '';
+        fullThinking += result.thinking || '';
+        lastUsage = result.usage || lastUsage;
+
+        // 重新检查是否已调用 request_plan_approval
+        if (this._planMode && this._awaitingPlanApproval) {
+          this.logger?.info('Plan Mode: AI 在重新引导后调用了 request_plan_approval');
+          return {
+            thinking: fullThinking,
+            content: fullContent,
+            toolCalls: [],
+            usage: lastUsage,
+            plan: this._pendingPlan,
+          };
+        }
       }
     }
 

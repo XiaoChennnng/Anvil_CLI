@@ -108,9 +108,19 @@ ${taskDescription}
    * 生成约束条件块
    */
   _generateConstraintsBlock(constraints) {
-    const constraintList = constraints.map((c, i) =>
-      `${i + 1}. ${c.description || c}`
-    ).join('\n');
+    const SEVERITY_LABELS = {
+      must: '【必须】',
+      should: '【建议】',
+      suggestion: '【可选】',
+    };
+
+    const constraintList = constraints.map((c, i) => {
+      const desc = c.description || c;
+      const severity = c.severity || 'must';
+      const label = SEVERITY_LABELS[severity] || '';
+      const reason = c.reason ? ` （原因：${c.reason}）` : '';
+      return `${i + 1}. ${label} ${desc}${reason}`;
+    }).join('\n');
 
     return `
 ## 约束条件
@@ -147,14 +157,22 @@ ${constraintList}
     return `
 ## 协作规范
 
-1. **进度报告**：每完成一个阶段，向协调者（主Agent）发送状态更新
-2. **问题升级**：遇到无法解决的问题时，说明已尝试的方案和困难点
-3. **结果提交**：完成后调用 task_complete 工具，附上产出摘要
-4. **消息格式**：
-   - 状态更新：发送 \`{type: 'status_report', status: '进度/完成/阻塞', progress: 0-100}\`
-   - 结果提交：发送 \`{type: 'result_submit', result: {...}}\`
-5. **避免重复**：在开始前检查是否已有其他Agent处理类似任务
-6. **保持简洁**：不要在消息中重复已分享过的上下文
+### 进度与通信
+1. **进度报告**：每完成一个独立步骤就汇报一次（不要攒到全部做完才报）。报告内容包括：做了什么、结果如何、下一步计划
+2. **问题升级**：遇到阻塞超过 3 分钟无法解决时，必须上报。说明：已尝试的方案、失败原因、需要的帮助
+3. **结果提交**：完成后调用 task_complete 工具，附上产出摘要（工作内容 + 关键结果 + 遗留问题）
+4. **保持简洁**：不要在消息中重复已分享过的上下文，只说增量信息
+
+### 依赖与等待
+5. **等待上游**：如果任务依赖其他Agent的产出，先检查依赖是否就绪。未就绪时不要空等，先做不依赖的部分或主动请求依赖
+6. **避免重复**：在开始前检查是否已有其他Agent处理过类似任务，不要重复造轮子
+
+### 冲突处理
+7. **方案冲突**：如果发现自己的方案与其他Agent的产出矛盾：
+   - 先分析矛盾根源（设计理念不同？对需求理解不同？）
+   - 如果时间允许，准备两种方案的优缺点对比
+   - 上报给协调者裁决，不自作主张覆盖他人工作
+8. **结果验证**：提交前自我验证产出质量，不要交半成品给协调者
 
 `;
   }

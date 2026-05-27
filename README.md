@@ -64,6 +64,7 @@ npm start
 | `/compact`       | 手动压缩上下文   | <br /> | <br />  | <br /> |
 | `/undo /redo`    | 撤销/重做     | <br /> | <br />  | <br /> |
 | `/mcp`           | 查看 MCP 状态 | <br /> | <br />  | <br /> |
+| `/skill [name]`  | 技能系统管理   | <br /> | <br />  | <br /> |
 
 ## 模型
 
@@ -125,6 +126,24 @@ ANVIL_PROJECT_DIR    # 默认工作目录
 AI 自动调用 mcp_add_server / mcp_remove_server
 ```
 
+### 团队协作模式
+
+支持多 Agent 并行工作，自动分解任务并协同完成：
+
+- **自动任务分解**：复杂任务自动拆分为子任务，分配给多个 Agent 并行执行
+- **结果聚合**：各 Agent 结果自动汇总，形成完整解决方案
+- **错误处理**：支持重试和降级策略，保证任务可靠性
+- **使用方式**：输入 `/team` 命令开启团队模式
+
+### 技能系统
+
+支持自定义技能（slash commands）：
+
+- **技能文件**：放在 `.anvil/skills/` 目录下
+- **独立文件**：每个技能是独立的 JS 文件
+- **注册机制**：启动时自动扫描并注册可用技能
+- **使用方式**：输入 `/skill` 查看可用技能列表
+
 ## 架构
 
 ```
@@ -143,7 +162,8 @@ src/
 │   ├── chat.js          对话引擎 + 自主 Agent 循环
 │   ├── context.js       智能上下文管理（压缩 + 相位检测）
 │   ├── session.js       会话持久化
-│   └── todo.js          Todo 管理器
+│   ├── todo.js          Todo 管理器
+│   └── team/            团队协作模式
 ├── tools/               工具系统
 │   ├── registry.js      工具注册中心
 │   ├── file.js          文件读写/编辑/删除
@@ -153,7 +173,8 @@ src/
 │   ├── question.js      用户提问工具
 │   ├── task_complete.js 任务完成声明
 │   ├── context.js       上下文压缩工具
-│   └── mcp.js           MCP 管理工具
+│   ├── mcp.js           MCP 管理工具
+│   └── skill.js         技能系统
 ├── mcp/                 MCP 服务器管理
 │   ├── manager.js       连接/断开/重试
 │   ├── transport.js     传输层（stdio/SSE/HTTP）
