@@ -40,7 +40,7 @@ function registerMCPServerTools(toolRegistry, mcpManager, serverName, tools) {
           return { error: result.content || '工具执行失败' };
         }
         return {
-          result: result.content || '',
+          content: result.content || '',
           _meta: result._meta || undefined,
         };
       },

@@ -3,7 +3,7 @@
 function registerTaskCompleteTool(registry, todoManager) {
   registry.register({
     name: 'task_complete',
-    description: '声明当前任务已完成。当你确认所有工作都做完时，必须调用此工具正式结束任务。不要只在文字中说"完成"，必须调用此工具。',
+    description: '声明当前任务已完成。调用此工具后，回复内容应直接结束，不要再重复说"任务已完成"或类似的总结性话语。',
     parameters: {
       type: 'object',
       properties: {

@@ -426,8 +426,13 @@ class MCPManager extends EventEmitter {
       }
     }
 
+    const rawContent = textParts.join('\n');
+
+    // 检测并格式化搜索结果 JSON
+    const formattedContent = this._formatSearchResults(rawContent);
+
     const formatted = {
-      content: textParts.join('\n'),
+      content: formattedContent,
       isError: result.isError || false,
     };
 
@@ -436,6 +441,71 @@ class MCPManager extends EventEmitter {
     }
 
     return formatted;
+  }
+
+  /**
+   * 检测并格式化搜索结果 JSON 为可读文本
+   * @param {string} text - 原始文本
+   * @returns {string} 格式化后的文本
+   */
+  _formatSearchResults(text) {
+    try {
+      const trimmed = text.trim();
+      if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+        return text;
+      }
+
+      const data = JSON.parse(trimmed);
+
+      // 识别搜索结果结构
+      let items = null;
+      if (data.organic && Array.isArray(data.organic)) {
+        items = data.organic;
+      } else if (data.results && Array.isArray(data.results)) {
+        items = data.results;
+      } else if (data.items && Array.isArray(data.items)) {
+        items = data.items;
+      } else if (Array.isArray(data)) {
+        items = data;
+      }
+
+      if (!items || items.length === 0) {
+        return text;
+      }
+
+      // 格式化：多行可读格式，用 [SEARCH_RESULTS] 标记开头
+      const lines = [];
+      lines.push(`[SEARCH_RESULTS:${items.length}]`);
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const title = item.title || '';
+        const snippet = item.snippet || '';
+        const date = item.date || '';
+        let link = item.link || '';
+
+        // 提取域名
+        let domain = '';
+        if (link) {
+          try {
+            domain = new URL(link).hostname.replace(/^www\./, '');
+          } catch {}
+        }
+
+        // 清理摘要中的多余空白
+        const cleanSnippet = snippet.replace(/\s+/g, ' ').trim();
+
+        // 组装单个结果
+        lines.push(`  标题: ${title}`);
+        if (cleanSnippet) {lines.push(`  摘要: ${cleanSnippet}`);}
+        if (date) {lines.push(`  日期: ${date}`);}
+        if (domain) {lines.push(`  链接: ${domain}`);}
+      }
+
+      return lines.join('\n');
+    } catch {
+      return text;
+    }
   }
 }
 

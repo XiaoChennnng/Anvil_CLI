@@ -241,6 +241,11 @@ class MessageBox {
       const lines = remaining.split('\n');
       for (const line of lines) {
         if (line.trim() === '') {continue;}
+        // 去重：跳过与最后渲染行相同的行
+        if (line === this._lastRenderedLine) {
+          continue;
+        }
+        this._lastRenderedLine = line;
 
         if (this._firstContentBlock) {
           const marker = chalk.hex(t.colors.primary)('●');

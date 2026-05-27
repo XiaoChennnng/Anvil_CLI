@@ -125,7 +125,7 @@ class ToolRenderer {
     const content = `${nameStyle}${paramsStyled}`;
 
     if (nested) {
-      const prefix = chalk.hex(t.colors.primary)('└ ');
+      const prefix = chalk.hex(t.colors.primary)('└─');
       result.push(`${prefix}${content}`);
     } else if (withMarker) {
       result.push(`${marker} ${content}`);
@@ -346,7 +346,7 @@ class ToolRenderer {
         if (result.warning) {
           lines.push(`${indent}${branch} ${t.warning(result.warning)}`);
         }
-        const output = result.stdout || result.output || result.content || '';
+        const output = result.stdout || result.content || result.output || result.result || result.summary || result.message || '';
         if (output) {
           const outputLines = output.split('\n').filter(l => l.trim());
           if (outputLines.length === 0) {
@@ -553,18 +553,15 @@ class ToolRenderer {
       }
 
       case 'task_complete': {
-        if (result.complete) {
-          lines.push(`${indent}${branch} ${t.success('✓')} ${t.bold('任务已完成')}`);
-          if (result.summary) {
-            const summaryLines = result.summary.split('\n').filter(l => l.trim());
-            for (const line of summaryLines.slice(0, 5)) {
-              lines.push(`${indent}   ${t.dim(this._truncate(line, contentWidth))}`);
-            }
+        if (result.complete && result.summary) {
+          const summaryLines = result.summary.split('\n').filter(l => l.trim());
+          for (const line of summaryLines.slice(0, 5)) {
+            lines.push(`${indent}${branch} ${t.dim(this._truncate(line, contentWidth))}`);
           }
         } else {
           lines.push(`${indent}${branch} ${t.warning('⚠')} 任务未完成`);
           if (result.reason) {
-            lines.push(`${indent}   ${t.textMuted(result.reason)}`);
+            lines.push(`${indent}${branch} ${t.textMuted(result.reason)}`);
           }
         }
         break;
@@ -590,13 +587,21 @@ class ToolRenderer {
       }
 
       default: {
-        if (result.success) {
-          lines.push(`${indent}${branch} ${t.success('✓')} Done`);
-        } else if (result.output || result.content) {
-          const output = (result.output || result.content || '').split('\n').filter(l => l.trim()).slice(0, maxLines);
-          for (const line of output) {
-            lines.push(`${indent}${branch} ${t.dim(this._truncate(line, contentWidth))}`);
+        const outputText = result.content || result.output || result.result || result.summary || result.message || '';
+        if (outputText) {
+          // 检测是否为搜索结果格式（由 MCP manager 预处理过）
+          if (outputText.includes('[SEARCH_RESULTS:')) {
+            // 搜索结果：整个作为一整个分支显示
+            lines.push(...this._renderSearchResultsBlock(outputText, indent, branch, contentWidth, t));
+          } else {
+            // 普通文本：按行渲染，每行一个分支
+            const outputLines = outputText.split('\n').filter(l => l.trim()).slice(0, maxLines);
+            for (const line of outputLines) {
+              lines.push(`${indent}${branch} ${t.dim(this._truncate(line, contentWidth))}`);
+            }
           }
+        } else if (result.success) {
+          lines.push(`${indent}${branch} ${t.success('✓')} Done`);
         }
       }
     }
@@ -613,6 +618,66 @@ class ToolRenderer {
     if (bytes < 1024) {return bytes + 'B';}
     if (bytes < 1024 * 1024) {return (bytes / 1024).toFixed(1) + 'KB';}
     return (bytes / (1024 * 1024)).toFixed(1) + 'MB';
+  }
+
+  /**
+   * 渲染搜索结果块（整体一个分支）
+   * @param {string} text - 预处理后的搜索结果文本
+   * @param {string} indent - 缩进
+   * @param {string} branch - 分支符号
+   * @param {number} contentWidth - 内容宽度
+   * @param {Object} t - 主题对象
+   * @returns {string[]} 渲染后的行数组
+   */
+  _renderSearchResultsBlock(text, indent, branch, contentWidth, t) {
+    const lines = [];
+    const subIndent = indent + '  ';
+
+    // 解析行
+    const rawLines = text.split('\n');
+    let isFirst = true;
+
+    for (const rawLine of rawLines) {
+      if (!rawLine.trim()) {continue;}
+
+      // 检测是否为 [SEARCH_RESULTS: 开头的行（标题行）
+      const match = rawLine.match(/^\[SEARCH_RESULTS:(\d+)\]$/);
+      if (match) {
+        lines.push(`${indent}${branch} ${t.primary('搜索结果')} ${t.dim(`(${match[1]} 条)`)}`);
+        isFirst = false;
+        continue;
+      }
+
+      // 子内容行（以两个空格开头）
+      if (rawLine.startsWith('  ')) {
+        const content = rawLine.slice(2);
+        const colonIndex = content.indexOf(':');
+        if (colonIndex > 0) {
+          const key = content.slice(0, colonIndex);
+          const value = content.slice(colonIndex + 1).trim();
+
+          // 根据字段类型选择样式
+          let styledLine;
+          if (key === '标题') {
+            styledLine = `${t.text(this._truncate(value, contentWidth - 6))}`;
+          } else if (key === '摘要') {
+            styledLine = `${t.dim(this._truncate(value, contentWidth - 6))}`;
+          } else if (key === '链接') {
+            styledLine = `${t.textMuted(this._truncate(value, contentWidth - 6))}`;
+          } else {
+            styledLine = `${t.textMuted(this._truncate(content, contentWidth - 6))}`;
+          }
+          lines.push(`${subIndent}${t.dim('│')} ${styledLine}`);
+        } else {
+          lines.push(`${subIndent}${t.dim('│')} ${t.dim(this._truncate(content, contentWidth - 6))}`);
+        }
+      } else {
+        // 普通行
+        lines.push(`${indent}${branch} ${t.dim(this._truncate(rawLine, contentWidth - 4))}`);
+      }
+    }
+
+    return lines;
   }
 }
 

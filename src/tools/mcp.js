@@ -194,6 +194,7 @@ function registerMCPTools(toolRegistry, mcpManager, config, logger) {
           servers: [],
           total: 0,
           summary: '当前没有配置任何 MCP 服务器',
+          content: '当前没有配置任何 MCP 服务器',
         };
       }
 
@@ -214,6 +215,7 @@ function registerMCPTools(toolRegistry, mcpManager, config, logger) {
         connected,
         totalTools,
         summary: `共 ${statusList.length} 个 MCP 服务器，${connected} 个已连接，${totalTools} 个工具`,
+        content: `共 ${statusList.length} 个 MCP 服务器，${connected} 个已连接，${totalTools} 个工具`,
       };
     },
   });
