@@ -103,7 +103,6 @@ function isCJK(char) {
 
 module.exports = {
   ANSI_PATTERN,
-  stripAnsi,
   visibleLength,
   truncateToWidth,
   isCJK,

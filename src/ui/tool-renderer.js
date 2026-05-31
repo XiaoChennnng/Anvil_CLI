@@ -378,17 +378,18 @@ class ToolRenderer {
 
       case 'edit_file':
       case 'edit': {
+        const add = result.additions || 0;
+        const rem = result.removals || 0;
+        const filePath = this._formatPath(result.filePath || '');
+        const LN_WIDTH = 6;
+
         if (result.diff) {
-          // 只显示修改片段（diff 格式：上下文行 + 变更行，NNNNNN -/+ content）
           const parsed = parseUnifiedDiff(result.diff);
-          const add = result.additions || 0;
-          const rem = result.removals || 0;
           const statParts = [];
           if (add > 0) {statParts.push(`+${add}`);}
           if (rem > 0) {statParts.push(`-${rem}`);}
-          lines.push(`${indent}${branch} ${t.dim(statParts.join(' ') || 'No changes')}  ${this._formatPath(result.filePath || '')}`);
+          lines.push(`${indent}${branch} ${t.dim(statParts.join(' ') || 'No changes')}  ${filePath}`);
 
-          const LN_WIDTH = 6;
           let lineCount = 0;
           const diffMax = Math.min(8, maxLines);
           for (const hunk of parsed.hunks) {
@@ -413,12 +414,33 @@ class ToolRenderer {
           if (parsed.hunks.reduce((c, h) => c + h.lines.length, 0) > diffMax) {
             lines.push(`${indent}${indent}${t.textMuted(`... ${parsed.hunks.reduce((c, h) => c + h.lines.length, 0) - diffMax} more lines`)}`);
           }
-        } else if (result.additions > 0 || result.removals > 0) {
-          const add = result.additions || 0;
-          const rem = result.removals || 0;
-          lines.push(`${indent}${branch} ${t.dim(`+${add} -${rem}`)}  ${this._formatPath(result.filePath || '')}`);
+        } else if (add > 0 || rem > 0) {
+          // diff 为空时，直接显示 oldString -> newString
+          lines.push(`${indent}${branch} ${t.dim(`+${add} -${rem}`)}  ${filePath}`);
+
+          // 尝试从 result 获取 oldString/newString
+          const oldContent = result.oldContent || result.oldString || '';
+          const newContent = result.newContent || result.newString || '';
+
+          if (oldContent || newContent) {
+            const maxContentLen = contentWidth - LN_WIDTH - 8;
+            if (oldContent) {
+              const oldLines = oldContent.split('\n');
+              for (let i = 0; i < oldLines.length && i < maxLines; i++) {
+                const lnStr = String(i + 1).padStart(LN_WIDTH);
+                lines.push(`${indent}${indent}${t.diff.removed(`${lnStr} - ${this._truncate(oldLines[i], maxContentLen)}`)}`);
+              }
+            }
+            if (newContent) {
+              const newLines = newContent.split('\n');
+              for (let i = 0; i < newLines.length && i < maxLines; i++) {
+                const lnStr = String(i + 1).padStart(LN_WIDTH);
+                lines.push(`${indent}${indent}${t.diff.added(`${lnStr} + ${this._truncate(newLines[i], maxContentLen)}`)}`);
+              }
+            }
+          }
         } else if (result.success) {
-          lines.push(`${indent}${branch} ${t.success('✓')} Updated ${this._formatPath(result.filePath || '')}`);
+          lines.push(`${indent}${branch} ${t.success('✓')} Updated ${filePath}`);
         }
         break;
       }
@@ -552,20 +574,9 @@ class ToolRenderer {
         break;
       }
 
-      case 'task_complete': {
-        if (result.complete && result.summary) {
-          const summaryLines = result.summary.split('\n').filter(l => l.trim());
-          for (const line of summaryLines.slice(0, 5)) {
-            lines.push(`${indent}${branch} ${t.dim(this._truncate(line, contentWidth))}`);
-          }
-        } else {
-          lines.push(`${indent}${branch} ${t.warning('⚠')} 任务未完成`);
-          if (result.reason) {
-            lines.push(`${indent}${branch} ${t.textMuted(result.reason)}`);
-          }
-        }
+      case 'task_complete':
+        // 任务完成摘要已由 AI 文字回复输出，不再重复渲染
         break;
-      }
 
       case 'ask_user_question':
         // 用户已回答，不需要重复展示结果

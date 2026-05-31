@@ -140,4 +140,4 @@ function containsSensitiveContent(text) {
   return detections.length > 0;
 }
 
-module.exports = { detectAndReplace, containsSensitiveContent, SENSITIVE_PATTERNS };
+module.exports = { detectAndReplace, SENSITIVE_PATTERNS };

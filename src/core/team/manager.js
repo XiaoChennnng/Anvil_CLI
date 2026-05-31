@@ -618,7 +618,7 @@ class TeamManager extends EventEmitter {
       [TeamState.IDLE]: [TeamState.PLANNING],
       [TeamState.PLANNING]: [TeamState.EXECUTING, TeamState.FAILED, TeamState.IDLE],
       [TeamState.EXECUTING]: [TeamState.AGGREGATING, TeamState.FAILED],
-      [TeamState.AGGREGATING]: [TeamState.COMPLETE, TeamState.FAILED],
+      [TeamState.AGGREGATING]: [TeamState.COMPLETE, TeamState.FAILED, TeamState.DISSOLVED],
       [TeamState.COMPLETE]: [TeamState.DISSOLVED],
       [TeamState.FAILED]: [TeamState.DISSOLVED],
       [TeamState.DISSOLVED]: [],

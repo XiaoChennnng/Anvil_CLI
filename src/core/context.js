@@ -99,6 +99,7 @@ const BUDGET = {
   CACHE_FRIENDLY: 0.08,   // Tier 1: Project Overview
   WORKING_MEM:    0.55,   // Tier 2: Recent Rounds（对话历史，由调用方管理）
   FILE_CONTEXT:   0.30,   // Tier 3: File Contexts（L RU 缓存）
+  ARCHIVE:        0.05,   // Tier 4: Compressed Archives
   RESERVE:        0.05,   // 安全余量
 };
 
@@ -872,6 +873,7 @@ class ContextManager {
       olderRounds = rounds.slice(0, rounds.length - keepCount);
     } else if (preserve.has('decisions') || preserve.has('tools')) {
       // 如果没保留 recent，但仍然要保留 decisions/tools → 按重要性保留
+      // 目标：只保留最关键的消息（文件写入、重要决策），激进压缩
       const scored = nonSystem.map((msg, i) => ({
         msg,
         score: this._scoreMessage(msg, i, nonSystem.length),
@@ -879,8 +881,8 @@ class ContextManager {
       }));
       scored.sort((a, b) => b.score - a.score);
 
-      // 保留高分数消息
-      const targetTokens = Math.floor(this.windowSize * 0.60);
+      // 保留高分数消息：只用 25% 窗口（比 recent 的 60% 更激进）
+      const targetTokens = Math.floor(this.windowSize * 0.25);
       let current = 0;
       const keptMsgs = [];
       const olderMsgs = [];
@@ -1003,37 +1005,6 @@ class ContextManager {
     if (archivedRounds.length > 0) {detail.push(`${archivedRounds.length} 轮已压缩为摘要`);}
 
     return { messages: messagesOut, message: detail.join('，') };
-  }
-
-  /**
-   * 主压缩入口 — 根据当前使用率选择压缩策略
-   * @param {Array} messages - 完整消息列表
-   * @returns {{ messages: Array, stats: Object }} 压缩后的消息和统计信息
-   */
-  compressContext(messages) {
-    const totalTokens = estimateMessageTokens(messages);
-    const { level, name } = this.getCompressionLevel(messages, totalTokens);
-
-    // 对话历史压缩由调用方管理，只返回警告信息
-    if (level < COMPRESSION_LEVELS.LIGHT_COMP.level) {
-      return { messages, stats: { compressed: false, level: 0, warning: 'normal' } };
-    }
-
-    // 仅返回警告信息，不执行实际压缩
-    this.compressionStats.totalCompressions++;
-    this.compressionStats.lastCompression = new Date().toISOString();
-
-    return {
-      messages,
-      stats: {
-        compressed: false,
-        level,
-        name,
-        warning: 'compression_recommended',
-        message: `Context at ${Math.round(level * 10)}% — consider running /compact or similar external compression`,
-        beforeTokens: totalTokens,
-      },
-    };
   }
 
   /**

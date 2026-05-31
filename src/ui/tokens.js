@@ -30,37 +30,4 @@ function calculateCost(cacheMissTokens, cacheHitTokens, outputTokens, pricing) {
   return missCost + hitCost + outputCost;
 }
 
-function formatTokenUsage(usage, pricing) {
-  if (!usage) {return '';}
-
-  const roundTokens = (usage.roundInput || 0) + (usage.roundOutput || 0);
-  const totalTokens = (usage.totalInput || 0) + (usage.totalOutput || 0);
-  const cacheHit = usage.roundCacheHit || 0;
-  const cost = calculateCost(
-    (usage.roundInput || 0) - cacheHit,
-    cacheHit,
-    usage.roundOutput || 0,
-    pricing,
-  );
-
-  const fmtRound = roundTokens.toLocaleString();
-  const fmtTotal = totalTokens.toLocaleString();
-  const fmtCost = cost.toFixed(4);
-
-  const parts = [
-    `📊 Token: +${fmtRound} (本轮)`,
-    `总计: ${fmtTotal}`,
-  ];
-
-  // 显示缓存命中率
-  if (cacheHit > 0) {
-    const hitRate = Math.round((cacheHit / (usage.roundInput || 1)) * 100);
-    parts.splice(1, 0, `💾 命中: ${cacheHit.toLocaleString()} (${hitRate}%)`);
-  }
-
-  parts.push(`💰 ~¥${fmtCost}`);
-
-  return parts.join(' | ');
-}
-
-module.exports = { estimateTokens, calculateCost, formatTokenUsage };
+module.exports = { estimateTokens, calculateCost };

@@ -466,6 +466,13 @@ function generateDiff(oldContent, newContent, fileName) {
   const suffixContext = Math.min(commonSuffix, 3);
   const result = [];
 
+  // 计算 hunk 头的实际行号（基于文件的真实位置）
+  // 注意：当 commonPrefix < prefixContext 时，前缀会被截断到文件开头
+  const hunkOldStart = Math.max(1, commonPrefix - prefixContext + 1);
+  const hunkOldCount = oldLines.length - commonSuffix - Math.max(0, commonPrefix - prefixContext);
+  const hunkNewStart = Math.max(1, commonPrefix - prefixContext + 1);
+  const hunkNewCount = newLines.length - commonSuffix - Math.max(0, commonPrefix - prefixContext);
+
   for (let i = commonPrefix - prefixContext; i < commonPrefix; i++) {
     if (i >= 0) {result.push(` ${oldLines[i]}`);}
   }
@@ -476,7 +483,7 @@ function generateDiff(oldContent, newContent, fileName) {
     if (i >= commonPrefix) {result.push(` ${oldLines[i]}`);}
   }
 
-  const diff = `--- a/${fileName}\n+++ b/${fileName}\n@@ -1,${oldLines.length} +1,${newLines.length} @@\n${result.join('\n')}`;
+  const diff = `--- a/${fileName}\n+++ b/${fileName}\n@@ -${hunkOldStart},${hunkOldCount} +${hunkNewStart},${hunkNewCount} @@\n${result.join('\n')}`;
 
   return { diff, additions, removals };
 }

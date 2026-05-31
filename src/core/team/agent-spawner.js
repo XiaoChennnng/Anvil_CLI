@@ -207,6 +207,7 @@ class AgentSpawner extends EventEmitter {
           break;
         }
 
+        // 非 task_complete 工具：继续循环等待 AI 处理结果
         continue;
       }
 

@@ -260,6 +260,8 @@ async function editFile(params, context) {
       additions,
       removals,
       content: newContent,
+      oldContent: oldString,
+      newContent: newString,
     };
   } catch (err) {
     return { error: `编辑文件失败 ${filePath}: ${err.message}` };

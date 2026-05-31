@@ -18,8 +18,4 @@ function loadProxy(configFromFile) {
   return proxy;
 }
 
-function hasProxy(proxy) {
-  return !!(proxy && (proxy.http || proxy.https));
-}
-
-module.exports = { loadProxy, hasProxy };
+module.exports = { loadProxy };

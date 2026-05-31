@@ -1,10 +1,10 @@
 'use strict';
 
 class SessionCache {
-  constructor(maxSize = 100, ttl = 5 * 60 * 1000) {
+  constructor(maxSize = 500, ttl = 30 * 60 * 1000) {
     this._cache = new Map();
     this._maxSize = maxSize;
-    this._ttl = ttl; // TTL 默认 5 分钟，过期条目自动失效
+    this._ttl = ttl;
   }
 
   _makeKey(question, context) {
@@ -36,6 +36,11 @@ class SessionCache {
 
   set(question, context, result) {
     const key = this._makeKey(question, context);
+
+    // LRU：删除已存在的 key，重新插入到末尾成为最新访问
+    if (this._cache.has(key)) {
+      this._cache.delete(key);
+    }
 
     if (this._cache.size >= this._maxSize) {
       const firstKey = this._cache.keys().next().value;

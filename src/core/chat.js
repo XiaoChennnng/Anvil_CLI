@@ -167,12 +167,13 @@ class ChatEngine extends EventEmitter {
       }
 
       // 构建对话上下文 hash，确保缓存感知对话状态
-      const recentMsgs = this.messages.slice(-6);
+      const recentMsgs = this.messages.slice(-12);
       const contextHash = crypto.createHash('md5')
         .update(JSON.stringify(recentMsgs.map((m) => ({
           role: m.role,
-          content: (m.content || '').slice(0, 100),
+          content: (m.content || '').slice(0, 200),
           hasTools: !!(m.tool_calls && m.tool_calls.length),
+          toolCount: m.tool_calls?.length || 0,
         }))))
         .digest('hex');
 
@@ -192,8 +193,8 @@ class ChatEngine extends EventEmitter {
         if (compLevel.needsCompression) {
 	          this.emit('status', `⚡ ${compLevel.label} — 使用率 ${Math.round(compLevel.ratio * 100)}%`);
 
-	          // 一次性调用 compressContext（修复之前调两次的 bug）
-	          const compressResult = this.contextManager.compressContext(this.messages);
+	          // 压缩上下文（实际执行压缩的方法是 compactContext）
+	          const compressResult = this.contextManager.compactContext(this.messages);
 	          this.messages = compressResult.messages;
 	          const stats = compressResult.stats;
 
@@ -250,8 +251,9 @@ class ChatEngine extends EventEmitter {
         } catch { /* 压缩失败不影响主流程 */ }
       }
 
-      // 更新缓存
-      this.cache.set(input, { model: this.model, contextHash }, {
+      // 更新缓存（带上任务指纹提高复用率）
+      const taskFingerprint = generateTaskFingerprint(input);
+      this.cache.set(input, { model: this.model, contextHash, taskFingerprint: taskFingerprint.full }, {
         thinking: result.thinking,
         content: result.content,
         toolCalls: result.toolCalls,
@@ -813,12 +815,20 @@ class ChatEngine extends EventEmitter {
       return { messages: this.messages, stats: { compressed: false, error: '上下文管理器未初始化' } };
     }
 
-    // AI 语义压缩：先调用 AI 生成语义摘要（如果未被跳过）
-    if (!skipSemanticSummary) {
+    // 先执行实际压缩（基于当前消息）
+    const result = this.contextManager.compactContext(this.messages, options);
+    this.messages = result.messages;
+
+    // 语义摘要：在压缩后生成（从压缩前的消息生成摘要，加入压缩后的消息）
+    // 这样摘要本身不参与压缩计算，避免无效开销
+    if (!skipSemanticSummary && result.stats.compressed) {
       const budget = this._calculateSummaryBudget();
       const semanticSummary = await this._generateSemanticSummary(budget);
       if (semanticSummary) {
-        this.messages.push({
+        // 找到压缩后 system 消息的位置，在那之后插入语义摘要
+        const lastSystemIdx = this.messages.findLastIndex((m) => m.role === 'system');
+        const insertIdx = lastSystemIdx >= 0 ? lastSystemIdx + 1 : 0;
+        this.messages.splice(insertIdx, 0, {
           role: 'system',
           content: `[AI 语义摘要]\n${semanticSummary}\n[/AI 语义摘要]`,
           _semanticSummary: true,
@@ -827,8 +837,6 @@ class ChatEngine extends EventEmitter {
       }
     }
 
-    const result = this.contextManager.compactContext(this.messages, options);
-    this.messages = result.messages;
     return result;
   }
 
@@ -904,18 +912,6 @@ class ChatEngine extends EventEmitter {
     }
 
     try {
-      // AI 语义压缩：先理解对话内容，生成语义摘要
-      const budget = this._calculateSummaryBudget();
-      const semanticSummary = await this._generateSemanticSummary(budget);
-      if (semanticSummary) {
-        this.messages.push({
-          role: 'system',
-          content: `[AI 语义摘要]\n${semanticSummary}\n[/AI 语义摘要]`,
-          _semanticSummary: true,
-          _compressedAt: new Date().toISOString(),
-        });
-      }
-
       // 获取压缩前的 context 进度
       const beforeStatus = this.contextManager?.getStatusReport(this.messages);
       const beforePercent = beforeStatus?.usagePercent || 0;
@@ -927,8 +923,8 @@ class ChatEngine extends EventEmitter {
         toPercent: 100,
       });
 
-      // 调用 compactContext，跳过语义摘要生成（已在上面生成）
-      const result = await this.compactContext({ level, keep }, true);
+      // 语义摘要由 compactContext 在压缩后自动生成（不再提前生成）
+      const result = await this.compactContext({ level, keep });
 
       // 计算压缩后进度
       const afterStatus = this.contextManager?.getStatusReport(this.messages);
@@ -1399,7 +1395,7 @@ class ChatEngine extends EventEmitter {
       }, 0),
     };
 
-    return teamManager.evaluateTaskComplexity(taskDescription, context);
+    return await teamManager.evaluateTaskComplexity(taskDescription, context);
   }
 
   /**

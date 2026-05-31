@@ -249,9 +249,8 @@ Todo 工具用来拆解和追踪复杂任务进度，让用户能看到当前进
 2. **检查 todo**：如果创建了 todo 子任务，确认所有子任务都已完成标记
 3. **写完成摘要**：调用 task_complete 时提供简洁摘要，说清楚改了什么文件、结果如何、怎么验证
 
-**重要：任务完成后必须明确告知用户**
-- 在调用 task_complete 工具的同一轮回复中，文字说明也要清楚告诉用户"任务已完成"，包括完成了什么、改了什么文件、结果如何
-- 不要只调用 task_complete 而不在回复中说明，那样用户看不到任何提示
+**重要：任务完成后简要说明完成结果即可**
+- 在调用 task_complete 工具的同一轮回复中，简单说明完成了什么即可，不需要强调"任务已完成"或使用特殊格式
 
 ## 团队协作模式（Team Mode）
 
@@ -314,7 +313,6 @@ Todo 工具用来拆解和追踪复杂任务进度，让用户能看到当前进
    - **做了什么**：1-2句话简要说明完成的工作
    - **改了什么**：列出修改的关键文件（最多3个）
    - **结果如何**：功能是否正常、如何验证
-   - **明确说"任务已完成"或"✓ 已完成"**
 
 ### 任务完成标准
 当用户说"帮我做X"时，完成的标准是：
@@ -355,17 +353,6 @@ Todo 工具用来拆解和追踪复杂任务进度，让用户能看到当前进
 - 内置 System Prompt，不可修改
 - 使用思考模式进行推理`;
 
-const TASK_COMPLETION_CHECK_PROMPT = `请判断当前任务是否完成。
-
-原始任务：{task}
-
-请分析：
-1. 任务描述的目标是否已实现？
-2. 代码是否已正确修改/创建？
-3. 功能是否经过验证可用？
-
-如果已完成，明确回复"任务已完成"。
-如果未完成，简述还需要做什么（不要调用工具，直接用文字说明）。`;
 
 const AGENT_CHECK_PROMPT = `## 任务完成检查
 
@@ -462,20 +449,6 @@ function getSystemPrompt(options = {}) {
   return prompt;
 }
 
-/**
- * 获取任务完成检查提示词
- * @param {string} task - 原始任务描述
- * @returns {string}
- */
-function getTaskCompletionCheckPrompt(task) {
-  return TASK_COMPLETION_CHECK_PROMPT.replace('{task}', task);
-}
-
-/**
- * 获取 Agent 检查提示词
- * @param {string} task - 原始任务描述
- * @returns {string}
- */
 function getAgentCheckPrompt(task) {
   return AGENT_CHECK_PROMPT.replace('{task}', task);
 }
@@ -488,28 +461,8 @@ function getAgentContinuePrompt() {
   return AGENT_CONTINUE_PROMPT;
 }
 
-/**
- * 获取项目分析提示词
- * @param {Object} projectInfo - 项目信息
- * @returns {string}
- */
-function getProjectContextPrompt(projectInfo) {
-  return `当前项目信息：
-目录结构：
-${projectInfo.tree || '（暂无）'}
-
-关键文件：
-${projectInfo.keyFiles || '（暂无）'}
-
-依赖：
-${projectInfo.dependencies || '（暂无）'}`;
-}
-
 module.exports = {
   getSystemPrompt,
-  getProjectContextPrompt,
-  getTaskCompletionCheckPrompt,
   getAgentCheckPrompt,
   getAgentContinuePrompt,
-  PLAN_MODE_PROMPT,
 };

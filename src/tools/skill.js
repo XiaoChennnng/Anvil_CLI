@@ -270,5 +270,4 @@ function loadSkillsFromDir(skillsDir, options = {}) {
 module.exports = {
   Skill,
   loadSkillsFromDir,
-  SKILL_CATEGORIES,
 };

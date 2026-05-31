@@ -25,10 +25,6 @@ const MODELS = {
   },
 };
 
-function getModelList() {
-  return Object.keys(MODELS);
-}
-
 function getModel(modelId) {
   return MODELS[modelId] || null;
 }
@@ -37,8 +33,4 @@ function isValidModel(modelId) {
   return !!MODELS[modelId];
 }
 
-function getDefaultModel() {
-  return 'deepseek-v4-flash';
-}
-
-module.exports = { MODELS, getModelList, getModel, isValidModel, getDefaultModel };
+module.exports = { MODELS, getModel, isValidModel };
