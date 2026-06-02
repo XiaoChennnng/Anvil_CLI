@@ -114,7 +114,7 @@ class ChatEngine extends EventEmitter {
 
     // 使用 assembleMessages 构建初始消息
     // 保证 System Prompt + Project Overview 在消息前端 → 最大化缓存命中
-    const sysPrompt = getSystemPrompt({ planMode: this._planMode });
+    const sysPrompt = this._buildSystemPrompt();
     if (this.contextManager) {
       this.messages = this.contextManager.assembleMessages(sysPrompt, []);
     } else {
@@ -1131,10 +1131,29 @@ class ChatEngine extends EventEmitter {
   }
 
   /**
-   * 更新 System Prompt（切换 Plan Mode 后重建 system 消息）
+   * 根据当前 planMode / teamMode 状态构建 System Prompt
+   *
+   * 加载策略（KISS: 按场景精确加载, 最大化 token 节省）:
+   * - 默认: core + tools    (L0+L1+L2 精简 + L3 工具详细)
+   * - planMode: core + plan  (省略 L3, plan 阶段不需要写代码细节)
+   * - teamMode: core + tools + team
+   * - planMode + teamMode: core + plan + team
+   *
+   * @returns {string} System Prompt 内容
+   */
+  _buildSystemPrompt() {
+    return getSystemPrompt({
+      planMode: this._planMode,
+      teamMode: this.teamMode,
+      includeTools: !this._planMode, // plan mode 期间不需要工具详细说明
+    });
+  }
+
+  /**
+   * 更新 System Prompt（切换 Plan Mode / Team Mode 后重建 system 消息）
    */
   _updateSystemPrompt() {
-    const sysPrompt = getSystemPrompt({ planMode: this._planMode });
+    const sysPrompt = this._buildSystemPrompt();
     // 替换第一条 system 消息
     const sysIdx = this.messages.findIndex(m => m.role === 'system');
     if (sysIdx >= 0) {
@@ -1414,6 +1433,8 @@ class ChatEngine extends EventEmitter {
       }
 
       this.teamMode = true;
+      // Team Mode 启动：注入 L4_TEAM 规则到 system prompt
+      this._updateSystemPrompt();
       this.emit('team_mode_start', {
         complexityScore: evaluation.complexityScore,
         suggestedAgents: evaluation.suggestedAgents,
@@ -1488,6 +1509,11 @@ class ChatEngine extends EventEmitter {
   async _dissolveTeam() {
     if (this.teamManager) {
       await this.teamManager.dissolve();
+    }
+    // 团队解散：移除 L4_TEAM 规则
+    if (this.teamMode) {
+      this.teamMode = false;
+      this._updateSystemPrompt();
     }
   }
 }

@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "node --title Anvil bin/anvil.js",
+    "install-global": "node scripts/install.js",
     "test": "jest",
     "test:unit": "jest test/unit",
     "test:integration": "jest test/integration",
