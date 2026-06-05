@@ -54,7 +54,7 @@ async function requestPlanApproval(params, context) {
 
   return {
     requested: true,
-    message: '已提交计划等待用户批准。用户批准后继续执行，拒绝则重新规划。',
+    message: '✅ 计划已提交并等待用户批准。**请立即停止**所有后续操作，不要再调用任何其他工具——用户的决定会通过系统消息传达给你。',
   };
 }
 

@@ -659,7 +659,28 @@ class ChatEngine extends EventEmitter {
         this.messages.push(assistantMsg);
 
         // 逐个执行工具调用：每个工具调用 → 立即显示结果，实现 1:1 对应
+        // 关键修复：AI 在同一次响应中调 request_plan_approval + 其他工具时，
+        // 必须在 request_plan_approval 执行后立即中断后续工具，避免覆盖 plan 提示
+        let awaitingPlanBreak = false;
         for (const toolCall of response.toolCalls) {
+          // request_plan_approval 已触发：跳过后续工具，但必须推入 tool result
+          // （OpenAI 协议要求每个 tool_call_id 都有对应 result，否则下一次 API 调用会 400）
+          if (awaitingPlanBreak) {
+            if (!this._suppressUI) {this.emit('tool_calls', toolCall);}
+            this.messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: JSON.stringify({
+                skipped: true,
+                reason: 'plan approval 已触发，等待用户批准后再执行',
+              }),
+            });
+            if (this.logger) {
+              this.logger.info(`工具调用被跳过: ${toolCall.function?.name || ''} (plan approval 触发)`);
+            }
+            continue;
+          }
+
           // 逐个发射工具调用事件（UI 逐个展示，与结果一一对应）
           if (!this._suppressUI) {this.emit('tool_calls', toolCall);}
           const name = toolCall.function?.name || '';
@@ -752,6 +773,11 @@ class ChatEngine extends EventEmitter {
 
           if (this.logger) {
             this.logger.info(`工具调用: ${name}`, { args, result });
+          }
+
+          // 关键检查：request_plan_approval 触发后，标记后续工具为 skipped
+          if (this._awaitingPlanApproval) {
+            awaitingPlanBreak = true;
           }
         }
 
