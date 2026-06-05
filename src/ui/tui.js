@@ -122,6 +122,7 @@ class TUI {
 
   /**
    * 恢复光标到编辑器输入位置
+   * 复用 editor 的 getCursorColumn() 计算列号（自动处理 CJK 宽度）
    */
   _restoreCursorToEditor() {
     // 只有在 cursor 当前是隐藏状态时才 show
@@ -129,9 +130,7 @@ class TUI {
       this.layout.showCursor();
       this._cursorHidden = false;
     }
-    // 使用 editor 的 cursorPos（光标可在字符间移动），不再固定在末尾
-    const cursorPos = this.editor.cursorPos ?? this.editor.currentInput?.length ?? 0;
-    this.layout.moveTo(this.editor.promptRow, this.editor.promptCol + cursorPos);
+    this.layout.moveTo(this.editor.promptRow, this.editor.getCursorColumn());
   }
 
   /**

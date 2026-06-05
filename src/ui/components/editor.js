@@ -74,7 +74,8 @@ class Editor {
   }
 
   get promptCol() {
-    return 3; // " >" + 空格分隔符
+    // 前缀 = " >"(2字符) + 空格分隔符(1字符) = 3 字符，下一字符从第 4 列开始
+    return 4;
   }
 
   /**
@@ -256,9 +257,18 @@ class Editor {
    */
   _restoreCursor() {
     this.layout.showCursor();
-    const inputBeforeCursor = this.currentInput.slice(0, this.cursorPos);
-    const visualOffset = this._visibleWidth(inputBeforeCursor);
-    this.layout.moveTo(this.promptRow, this.promptCol + visualOffset);
+    this.layout.moveTo(this.promptRow, this.getCursorColumn());
+  }
+
+  /**
+   * 计算光标当前应处的列号（公共 API，供 TUI 重绘时复用）
+   * 用可见宽度计算偏移，自动支持 CJK 双倍宽字符
+   * @returns {number} 1-based 列号
+   */
+  getCursorColumn() {
+    const pos = this.cursorPos ?? this.currentInput?.length ?? 0;
+    const inputBeforeCursor = (this.currentInput || '').slice(0, pos);
+    return this.promptCol + this._visibleWidth(inputBeforeCursor);
   }
 
   /**
