@@ -286,7 +286,6 @@ async function main() {
     const t = tui.layout.theme;
     const marker = chalk.hex(t.colors.primary)('●');
     const planText = String(plan);
-    const planLines = planText.split('\n');
 
     // 用消息框的 markdown 渲染器格式化计划内容，而不是裸 push
     // 先 flush 已有内容，然后用 markdown 渲染计划
@@ -296,26 +295,11 @@ async function main() {
     tui.messageBox.renderedLines.push(` ${marker} ${chalk.bold(t.text('📋 计划方案'))}`);
     tui.messageBox.renderedLines.push('');
 
-    // 逐行处理：## 标题加粗不加 marker，普通行加 marker
-    for (const line of planLines) {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        tui.messageBox.renderedLines.push('');
-        continue;
-      }
-      // markdown h2 标题 → 加粗，不加 ● 前缀
-      if (/^##\s+/.test(trimmed)) {
-        const header = trimmed.replace(/^##\s+/, '');
-        tui.messageBox.renderedLines.push(`   ${chalk.bold(t.text(header))}`);
-      }
-      // 一级步骤编号
-      else if (/^\d+[.、]/.test(trimmed)) {
-        tui.messageBox.renderedLines.push(`   ${t.dim(trimmed)}`);
-      }
-      // 普通内容
-      else {
-        tui.messageBox.renderedLines.push(`   ${t.textMuted(trimmed)}`);
-      }
+    // 用 markdown 渲染器一次性渲染整段 plan（支持 heading / code / list / table / blockquote / strong 等所有元素）
+    // 之前用脆弱正则只识别 ## 标题和编号列表，其他 markdown 元素全失效
+    const rendered = tui.messageBox.renderer.markdown.render(planText);
+    for (const line of rendered.split('\n')) {
+      tui.messageBox.renderedLines.push(`   ${line}`);
     }
 
     tui.messageBox.renderedLines.push('');

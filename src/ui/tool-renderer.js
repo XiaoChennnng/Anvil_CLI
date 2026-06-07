@@ -3,6 +3,7 @@
 const chalk = require('chalk');
 const { getTheme } = require('./theme');
 const { parseUnifiedDiff } = require('./diff');
+const { normalizeToMarkdownList } = require('../tools/plan_mode');
 
 const TOOL_NAME_MAP = {
   bash: 'Bash',
@@ -242,11 +243,14 @@ class ToolRenderer {
       case 'request_plan_approval':
         mainParam = this._truncate(args.summary || '', 50);
         if (args.steps) {
-          const stepCount = (args.steps.match(/^\d+[.、]/gm) || []).length || 1;
+          // 先规范化（处理 LLM 传数组 / 对象 / 字面 \n 字符串的乱象）
+          const stepsStr = normalizeToMarkdownList(args.steps, { ordered: true });
+          const stepCount = (stepsStr.match(/^\d+[.、]/gm) || []).length || 1;
           subParams.push(`${stepCount} steps`);
         }
         if (args.files) {
-          const fileCount = args.files.split('\n').filter(l => l.trim()).length;
+          const filesStr = normalizeToMarkdownList(args.files, { ordered: false });
+          const fileCount = filesStr.split('\n').filter(l => l.trim()).length;
           if (fileCount > 0) {subParams.push(`${fileCount} files`);}
         }
         break;

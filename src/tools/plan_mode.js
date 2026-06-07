@@ -20,6 +20,50 @@ async function enterPlanMode(params, context) {
 }
 
 /**
+ * 把任意类型规范化成多行 Markdown 列表字符串
+ * - 数组 → 自动加 `1. ` 或 `- ` 前缀（按 ordered 选项）
+ * - 对象 → 转 key: value 列表
+ * - 字符串 → 处理字面 `\n` / `\r\n` / `\\n` 转义；已有列表标记保持原样
+ * - 其他 → String(value)
+ * @param {*} value - 原始值
+ * @param {Object} [opts]
+ * @param {boolean} [opts.ordered=false] - 数组用 1. 2. 3. (true) 还是 - - - (false)
+ * @returns {string}
+ */
+function normalizeToMarkdownList(value, opts = {}) {
+  const { ordered = false } = opts;
+  if (value === null || value === undefined) {return '';}
+
+  // 数组：直接加列表前缀
+  if (Array.isArray(value)) {
+    return value
+      .map((item, i) => {
+        const text = typeof item === 'object' ? JSON.stringify(item) : String(item).trim();
+        if (!text) {return null;}
+        const prefix = ordered ? `${i + 1}. ` : '- ';
+        return prefix + text.replace(/\n/g, '\n  ');
+      })
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  // 对象（非数组）：转 key: value
+  if (typeof value === 'object') {
+    return Object.entries(value)
+      .map(([k, v]) => `- **${k}**: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
+      .join('\n');
+  }
+
+  // 字符串：清理转义字符
+  let str = String(value);
+  // 处理字面 `\\n` `\\r\\n` `\\t`（LLM 双重转义传过来的）
+  str = str.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').replace(/\\t/g, '  ');
+  // 处理真实 \r\n
+  str = str.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  return str.trim();
+}
+
+/**
  * AI 调用此工具来请求用户批准计划
  * 代码层检测到此工具调用 → 弹出同意/拒绝选项
  */
@@ -29,15 +73,21 @@ async function requestPlanApproval(params, context) {
     return { error: 'chatEngine 不可用' };
   }
 
-  // 拼接完整计划（展示给用户看的不只是 summary）
-  const fullPlan = [
-    params.summary ? `## 计划概述\n\n${params.summary}` : '',
-    params.steps ? `\n## 实施步骤\n\n${params.steps}` : '',
-    params.files ? `\n## 涉及文件\n\n${params.files}` : '',
-    params.notes ? `\n## 备注\n\n${params.notes}` : '',
-  ].filter(Boolean).join('\n');
+  // 规范化各字段（处理 LLM 乱传数组/字面 \n / 对象的情况）
+  const summary = normalizeToMarkdownList(params.summary);
+  const steps = normalizeToMarkdownList(params.steps, { ordered: true });
+  const files = normalizeToMarkdownList(params.files, { ordered: false });
+  const notes = normalizeToMarkdownList(params.notes);
 
-  const planText = fullPlan || params.summary || '(无描述)';
+  // 拼接完整计划（展示给用户看的不只是 summary）
+  const sections = [];
+  if (summary) {sections.push(`## 计划概述\n\n${summary}`);}
+  if (steps) {sections.push(`## 实施步骤\n\n${steps}`);}
+  if (files) {sections.push(`## 涉及文件\n\n${files}`);}
+  if (notes) {sections.push(`## 备注\n\n${notes}`);}
+  const fullPlan = sections.join('\n\n');
+
+  const planText = fullPlan || summary || '(无描述)';
 
   // 保存计划内容
   chatEngine._awaitingPlanApproval = true;
@@ -85,19 +135,25 @@ function registerPlanModeTools(registry, chatEngine) {
       properties: {
         summary: {
           type: 'string',
-          description: '计划概述：一句话说明目标和方案',
+          description: '计划概述：一段或几句话说明目标和方案（支持 Markdown）',
         },
         steps: {
-          type: 'string',
-          description: '实施步骤：编号列表，每步说明做什么、涉及哪个文件',
+          description: '实施步骤：推荐传字符串数组（每个元素是一步），也可以传多行 Markdown 字符串（每行一步，可用 "1. xxx" 或 "- xxx" 格式）。**禁止**把所有步骤挤在单行字符串里用字面 \\n 分隔。',
+          oneOf: [
+            { type: 'string' },
+            { type: 'array', items: { type: 'string' } },
+          ],
         },
         files: {
-          type: 'string',
-          description: '涉及文件列表',
+          description: '涉及文件列表：推荐传字符串数组（每个元素是一个文件路径或 "路径 - 说明"），也可以传多行 Markdown 字符串。**禁止**用逗号在一行里堆所有文件。',
+          oneOf: [
+            { type: 'string' },
+            { type: 'array', items: { type: 'string' } },
+          ],
         },
         notes: {
           type: 'string',
-          description: '额外备注或注意事项',
+          description: '额外备注或注意事项（支持 Markdown）',
         },
       },
       required: ['summary'],
@@ -106,4 +162,4 @@ function registerPlanModeTools(registry, chatEngine) {
   });
 }
 
-module.exports = { registerPlanModeTools };
+module.exports = { registerPlanModeTools, normalizeToMarkdownList };
