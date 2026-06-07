@@ -135,9 +135,4 @@ function detectAndReplace(text) {
   return { sanitized, detections };
 }
 
-function containsSensitiveContent(text) {
-  const { detections } = detectAndReplace(text);
-  return detections.length > 0;
-}
-
 module.exports = { detectAndReplace, SENSITIVE_PATTERNS };

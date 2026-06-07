@@ -646,7 +646,6 @@ class ToolRenderer {
 
     // 解析行
     const rawLines = text.split('\n');
-    let isFirst = true;
 
     for (const rawLine of rawLines) {
       if (!rawLine.trim()) {continue;}
@@ -655,7 +654,6 @@ class ToolRenderer {
       const match = rawLine.match(/^\[SEARCH_RESULTS:(\d+)\]$/);
       if (match) {
         lines.push(`${indent}${branch} ${t.primary('搜索结果')} ${t.dim(`(${match[1]} 条)`)}`);
-        isFirst = false;
         continue;
       }
 

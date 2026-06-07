@@ -86,6 +86,8 @@ DEEPSEEK_API_KEY     # API Key
 HTTP_PROXY           # HTTP 代理
 HTTPS_PROXY          # HTTPS 代理
 ANVIL_PROJECT_DIR    # 默认工作目录
+WEB_SEARCH_TIMEOUT   # 联网搜索超时（毫秒）
+WEB_SEARCH_DISABLED  # =1 禁用联网搜索
 ```
 
 配置文件（JSON）：
@@ -99,7 +101,13 @@ ANVIL_PROJECT_DIR    # 默认工作目录
   "defaultModel": "deepseek-v4-flash",
   "thinkingMode": true,
   "theme": "auto",
-  "mcpServers": {}
+  "mcpServers": {},
+  "webSearch": {
+    "enabled": true,
+    "maxResults": 8,
+    "timeout": 15000,
+    "locale": "zh-CN"
+  }
 }
 ```
 
@@ -144,6 +152,17 @@ AI 自动调用 mcp_add_server / mcp_remove_server
 - **注册机制**：启动时自动扫描并注册可用技能
 - **使用方式**：输入 `/skill` 查看可用技能列表
 
+### 联网搜索
+
+内置 `web_search` 工具，AI 可主动联网查最新版本、官方文档、新闻、库变更等实时信息：
+
+- **零配置开箱即用**：访问 Bing 公开搜索页，无需任何 API Key
+- **中文友好**：默认 `zh-CN` locale，返回结果含中文页面
+- **智能容错**：超时/反爬/解析失败均返回友好错误，AI 据此调整策略
+- **可移植**：不依赖宿主 MCP 服务，Anvil 在任何 Node 18+ 环境都能联网
+
+使用示例：在对话中问"Node.js 最新 LTS 版本是多少"，AI 会自动调用 `web_search("Node.js LTS")` 拿到答案。
+
 ## 架构
 
 ```
@@ -163,6 +182,7 @@ src/
 │   ├── context.js       智能上下文管理（压缩 + 相位检测）
 │   ├── session.js       会话持久化
 │   ├── todo.js          Todo 管理器
+│   ├── web_search.js    联网搜索核心（fetch + HTML 解析 + 重试）
 │   └── team/            团队协作模式
 ├── tools/               工具系统
 │   ├── registry.js      工具注册中心
@@ -170,6 +190,7 @@ src/
 │   ├── code.js          代码分析（符号/引用/定义）
 │   ├── command.js       命令执行
 │   ├── todo.js          Todo 工具
+│   ├── web_search.js    联网搜索（基于 Bing 公开搜索页）
 │   ├── question.js      用户提问工具
 │   ├── task_complete.js 任务完成声明
 │   ├── context.js       上下文压缩工具

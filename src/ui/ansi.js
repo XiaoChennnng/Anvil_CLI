@@ -12,16 +12,6 @@
 const ANSI_PATTERN = /\x1b\[[0-9;]*[mHKhlA-Za-z=]|\x1b\?[0-9;]*[hl]|\x1b\][^\x07]*\x07|\x1b\\|\x1b\[\?1049[hl]|\x1b\[38;2;\d+;\d+;\d+m|\x1b\[48;2;\d+;\d+;\d+m/g;
 
 /**
- * 去除字符串中的所有 ANSI 转义序列
- * @param {string} str - 输入字符串
- * @returns {string} 去除 ANSI 后的纯文本
- */
-function stripAnsi(str) {
-  if (!str) {return '';}
-  return str.replace(ANSI_PATTERN, '');
-}
-
-/**
  * 计算字符串的可见长度（去除 ANSI 后计算，支持 CJK 双倍宽字符）
  * @param {string} str - 输入字符串
  * @returns {number} 可见字符宽度

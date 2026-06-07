@@ -482,7 +482,7 @@ class MCPManager extends EventEmitter {
         const title = item.title || '';
         const snippet = item.snippet || '';
         const date = item.date || '';
-        let link = item.link || '';
+        const link = item.link || '';
 
         // 提取域名
         let domain = '';
