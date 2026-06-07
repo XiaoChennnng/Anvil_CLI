@@ -41,6 +41,8 @@ function mergeConfig(base, override) {
         result.context = { ...result.context, ...override.context };
       } else if (key === 'mcpServers' && result.mcpServers && typeof override.mcpServers === 'object') {
         result.mcpServers = { ...result.mcpServers, ...override.mcpServers };
+      } else if (key === 'webSearch' && result.webSearch && typeof override.webSearch === 'object') {
+        result.webSearch = { ...result.webSearch, ...override.webSearch };
       } else {
         result[key] = override[key];
       }
@@ -69,6 +71,17 @@ function loadConfig(cliOptions = {}) {
 
   if (process.env.DEEPSEEK_API_KEY) {
     config.apiKey = process.env.DEEPSEEK_API_KEY;
+  }
+
+  // 联网搜索环境变量覆盖（参考 DEEPSEEK_API_KEY 模式）
+  if (process.env.WEB_SEARCH_TIMEOUT) {
+    const t = parseInt(process.env.WEB_SEARCH_TIMEOUT, 10);
+    if (!Number.isNaN(t) && t > 0) {
+      config.webSearch.timeout = t;
+    }
+  }
+  if (process.env.WEB_SEARCH_DISABLED === '1') {
+    config.webSearch.enabled = false;
   }
 
   if (cliOptions.model) {

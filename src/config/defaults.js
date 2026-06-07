@@ -31,6 +31,16 @@ const DEFAULTS = {
 
   mcpServers: {},
 
+  // 联网搜索（默认 Bing 公开搜索页，零 key 模拟浏览器抓取）
+  webSearch: {
+    enabled: true,
+    endpoint: 'https://www.bing.com/search',
+    timeout: 15000,
+    maxResults: 8,
+    locale: 'zh-CN',
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  },
+
   i18n: {
     thinking: { zh: '正在思考...', en: 'Thinking...' },
     thinkingDone: { zh: '思考完成', en: 'Thinking complete' },
