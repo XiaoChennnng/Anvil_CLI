@@ -84,7 +84,6 @@ async function handleCommand(input, chatEngine, options = {}) {
 
   switch (cmd) {
     case 'review': {
-      // P1: 触发代码审查
       const fileToReview = args[0] || null;
       const reviewPrompt = fileToReview
         ? `请审查以下文件: ${fileToReview}\n从代码质量、安全性、性能、最佳实践等维度进行分析。`
@@ -114,7 +113,6 @@ async function handleCommand(input, chatEngine, options = {}) {
     }
 
     case 'undo': {
-      // P1: 撤销 - 需要在 chatEngine 中集成 undo 管理器
       return {
         handled: true,
         response: '⏳ /undo 功能开发中（P1 特性）',
@@ -241,9 +239,7 @@ Anvil — AI-driven CLI Programming Assistant
       let level = 'auto';
       let keep = ['recent', 'decisions'];
 
-      // 解析参数: /compact keep files,project 或 /compact light 或 /compact keep files
       if (/keep/.test(argStr)) {
-        // /compact keep files,project,tools
         const keepPart = argStr.replace(/keep\s*/i, '').trim();
         if (keepPart) {
           const aspects = keepPart.split(/[,，\s]+/).filter(Boolean);

@@ -156,8 +156,7 @@ async function main() {
     tui.renderThinkingChunk(chunk);
   });
 
-  // complete 事件监听：确保任何路径结束都能清理 thinking 状态
-  // 作为 finishResponse 的保底，避免提前 return 的分支遗漏清理
+  // complete 事件保底清理 thinking 状态，避免提前 return 的分支遗漏
   chatEngine.on('complete', (data) => {
     tui.statusBar.setThinking(false);
     if (tui._thinkingTimer) {
@@ -188,7 +187,7 @@ async function main() {
     tui.renderToolCall(toolCalls);
   });
 
-  // 收集实时输出到缓冲，等 tool_result 统一渲染
+  // 缓冲实时输出，等 tool_result 统一渲染
   let _cmdBuf = [];
   chatEngine.on('command_output', (data, isError) => {
     const lines = data.replace(/\r/g, '').split('\n').filter(l => l.trim());
@@ -242,9 +241,7 @@ async function main() {
   });
 
   chatEngine.on('compression_animation', (data) => {
-    // 动画阶段1：从 fromPercent → toPercent (通常是压缩前 → 100%)
-    // 动画阶段2：从 100% → toPercent (通常是 100% → 压缩后)
-    const duration = 600; // 动画持续时间 ms
+    const duration = 600;
     tui.sidebar.startProgressAnimation(data.fromPercent, data.toPercent, duration);
   });
 
@@ -287,16 +284,9 @@ async function main() {
     const marker = chalk.hex(t.colors.primary)('●');
     const planText = String(plan);
 
-    // 用消息框的 markdown 渲染器格式化计划内容，而不是裸 push
-    // 先 flush 已有内容，然后用 markdown 渲染计划
     tui.messageBox.flushContentBuffer();
-
-    // 计划标题
-    tui.messageBox.renderedLines.push(` ${marker} ${chalk.bold(t.text('📋 计划方案'))}`);
+    tui.messageBox.renderedLines.push(` ${marker} ${chalk.bold(t.text('计划方案'))}`);
     tui.messageBox.renderedLines.push('');
-
-    // 用 markdown 渲染器一次性渲染整段 plan（支持 heading / code / list / table / blockquote / strong 等所有元素）
-    // 之前用脆弱正则只识别 ## 标题和编号列表，其他 markdown 元素全失效
     const rendered = tui.messageBox.renderer.markdown.render(planText);
     for (const line of rendered.split('\n')) {
       tui.messageBox.renderedLines.push(`   ${line}`);
@@ -374,9 +364,8 @@ async function main() {
   });
 
   tui.onContextInject((text) => {
-    const MAX_PENDING_CONTEXT = 10000; // 最大 10KB
+    const MAX_PENDING_CONTEXT = 10000;
     if (pendingContextBuffer.length + text.length > MAX_PENDING_CONTEXT) {
-      // 截断旧内容，保留最新的
       const excess = pendingContextBuffer.length + text.length - MAX_PENDING_CONTEXT;
       pendingContextBuffer = pendingContextBuffer.slice(excess);
     }
@@ -448,10 +437,6 @@ async function main() {
     try {
       const response = await chatEngine.processInput(input);
 
-      if (response.error && !contentStarted) {
-      }
-
-      // 有待批准的计划时，结束当前响应（显示模型信息）但保持编辑器可用
       if (response.plan) {
         tui.finishResponse(chatEngine.model);
         tui.sidebar.updateMessages(chatEngine.messages);

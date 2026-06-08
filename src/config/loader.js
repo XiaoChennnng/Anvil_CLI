@@ -73,7 +73,7 @@ function loadConfig(cliOptions = {}) {
     config.apiKey = process.env.DEEPSEEK_API_KEY;
   }
 
-  // 联网搜索环境变量覆盖（参考 DEEPSEEK_API_KEY 模式）
+  // 联网搜索环境变量覆盖
   if (process.env.WEB_SEARCH_TIMEOUT) {
     const t = parseInt(process.env.WEB_SEARCH_TIMEOUT, 10);
     if (!Number.isNaN(t) && t > 0) {
@@ -102,7 +102,6 @@ function loadConfig(cliOptions = {}) {
 function saveMCPConfig(projectDir, mcpServers) {
   const configPath = getProjectConfigPath(projectDir);
   try {
-    // 确保 .anvil 目录存在
     const configDir = path.dirname(configPath);
     if (!fs.existsSync(configDir)) {
       fs.mkdirSync(configDir, { recursive: true });

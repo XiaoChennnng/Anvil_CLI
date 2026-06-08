@@ -114,10 +114,8 @@ function parseUnifiedDiff(diffText) {
 function renderDiffLine(line, lineWidth) {
   const t = getTheme();
 
-  // 固定行号宽度为 4 位
   const lineNumWidth = 4;
 
-  // 计算内容最大宽度
   // 格式: -001│ content -> 1(标记) + 4(行号) + 2(│ + 空格) = 7
   const prefixLen = 7;
   const maxContentWidth = Math.max(0, lineWidth - prefixLen);
@@ -141,11 +139,7 @@ function renderDiffLine(line, lineWidth) {
   // 填充内容到固定宽度
   const paddedContent = content.padEnd(maxContentWidth);
 
-  // 组合前缀: 标记 + 行号背景 + 行号 + 分隔符
-  // opencode 格式:
-  //   removed: marker=diffRemoved fg, linenumber=diffRemoved fg + diffRemovedLineNumberBg bg
-  //   added:  marker=diffAdded fg, linenumber=diffAdded fg + diffAddedLineNumberBg bg
-  //   context: marker=diffContext fg, linenumber=diffLineNumber fg + diffContextBg bg
+  // opencode 格式: 不同行类型用不同前景/背景色
   let lineStr;
   switch (line.kind) {
     case LineType.REMOVED:
@@ -213,15 +207,7 @@ function renderDiffBox(diffText, width, maxLines = 10) {
   return result;
 }
 
-/**
- * 渲染带边框的代码块
- * @param {string} code - 代码内容
- * @param {string} language - 语言标识
- * @param {string} fileName - 文件名（可选）
- * @param {number} width - 总宽度
- * @param {number} maxLines - 最大行数
- * @returns {string[]} 渲染后的行数组
- */
+// 渲染带边框的代码块
 function renderCodeBox(code, language, fileName, width, maxLines = 10) {
   const result = [];
   const t = getTheme();
@@ -260,13 +246,7 @@ function renderCodeBox(code, language, fileName, width, maxLines = 10) {
   return result;
 }
 
-/**
- * 渲染 Bash 命令输出
- * @param {string} output - 命令输出
- * @param {number} width - 总宽度
- * @param {number} maxLines - 最大行数
- * @returns {string[]} 渲染后的行数组
- */
+// 渲染 Bash 命令输出
 function renderBashBox(output, width, maxLines = 10) {
   const result = [];
   const t = getTheme();
@@ -305,13 +285,7 @@ function renderBashBox(output, width, maxLines = 10) {
   return result;
 }
 
-/**
- * 格式化 diff（兼容旧接口）
- * @param {string} diffText - unified diff 文本
- * @param {number} width - 总宽度
- * @param {number} maxLines - 最大行数
- * @returns {string} 格式化后的字符串
- */
+// 格式化 diff（兼容旧接口）
 function formatDiff(diffText, width, maxLines = 10) {
   const lines = renderDiffBox(diffText, width, maxLines);
   return lines.join('\n');
@@ -324,9 +298,7 @@ function formatDiff(diffText, width, maxLines = 10) {
  * @param {string} fileName - 文件名
  * @returns {Object} { diff, additions, removals }
  */
-/**
- * LCS 计算中间区域的编辑脚本
- */
+// LCS 计算中间区域的编辑脚本
 function _computeMiddleDiff(oldLines, newLines) {
   const m = oldLines.length;
   const n = newLines.length;
@@ -366,7 +338,6 @@ function _formatDiffWithContext(entries, contextSize) {
   const result = [];
   let i = 0;
 
-  // 将 entries 分组为 same / change 块
   const groups = [];
   while (i < entries.length) {
     const type = entries[i].type;
@@ -383,7 +354,7 @@ function _formatDiffWithContext(entries, contextSize) {
       const hasNextChange = g < groups.length - 1 && groups[g + 1].type !== 'same';
 
       if (!hasPrevChange && !hasNextChange) {
-        // 孤立同块，全部保留
+        // 孤立同块
         for (const line of group.lines) {
           result.push(` ${line}`);
         }
@@ -455,18 +426,16 @@ function generateDiff(oldContent, newContent, fileName) {
   const midEntries = _computeMiddleDiff(oldMiddle, newMiddle);
   const midFormatted = _formatDiffWithContext(midEntries, 3);
 
-  // 统计增删行数
   for (const entry of midEntries) {
     if (entry.type === 'remove') {removals++;}
     else if (entry.type === 'add') {additions++;}
   }
 
-  // 组装：前缀（最多 3 行上下文）+ 中间 diff + 后缀（最多 3 行上下文）
+  // 前缀 + 中间 diff + 后缀（最多 3 行上下文）
   const prefixContext = Math.min(commonPrefix, 3);
   const suffixContext = Math.min(commonSuffix, 3);
   const result = [];
 
-  // 计算 hunk 头的实际行号（基于文件的真实位置）
   // 注意：当 commonPrefix < prefixContext 时，前缀会被截断到文件开头
   const hunkOldStart = Math.max(1, commonPrefix - prefixContext + 1);
   const hunkOldCount = oldLines.length - commonSuffix - Math.max(0, commonPrefix - prefixContext);
@@ -488,13 +457,7 @@ function generateDiff(oldContent, newContent, fileName) {
   return { diff, additions, removals };
 }
 
-/**
- * 从文件内容生成 diff（用于展示修改）
- * @param {string} oldContent - 旧内容
- * @param {string} newContent - 新内容
- * @param {string} fileName - 文件名
- * @returns {string} unified diff 格式
- */
+// 从文件内容生成 diff
 function createDiffFromContent(oldContent, newContent, fileName) {
   const { diff } = generateDiff(oldContent, newContent, fileName);
   return diff;

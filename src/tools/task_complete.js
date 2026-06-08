@@ -28,7 +28,7 @@ function registerTaskCompleteTool(registry, todoManager) {
         };
       }
 
-      // Todo 交叉校验（默认开启，简单任务可跳过）
+      // Todo 交叉校验
       if (!skipTodoCheck && todoManager) {
         const pendingTodos = todoManager.getPending();
         if (pendingTodos.length > 0) {

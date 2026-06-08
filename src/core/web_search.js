@@ -1,19 +1,12 @@
 'use strict';
 
 /**
- * web_search 核心模块
- *
- * 访问 Bing 公开搜索页（零 key），模拟浏览器 User-Agent 抓 HTML 并解析。
- * 失败/反爬/解析异常统一返回 { error: '...' }，不 throw。
- *
- * 导出：
- *   searchBing(query, config, logger) -> Promise<{ success, query, results, ... } | { error }>
- *   parseBingHTML(html, maxResults)   -> { results, captcha }（导出便于单测）
+ * Bing 公开搜索页抓取（零 key），失败/反爬统一返回 { error }
  */
 
 const HttpsProxyAgent = require('https-proxy-agent').HttpsProxyAgent;
 
-// Bing 结果页稳定的 DOM 标识（2024-2026 验证）。改版时优先改这里。
+// Bing 结果页 DOM 标识，改版时更新
 const BING_SELECTORS = {
   resultItem: '<li class="b_algo"',
   // 标题在 h2 内的 a 标签，href 是真实 URL
@@ -75,7 +68,7 @@ function parseBingHTML(html, maxResults) {
       const url = titleMatch[1];
       const rawTitle = titleMatch[2];
       if (!url.includes('bing.com/ck/a?') && !url.startsWith('javascript:')) {
-        // 清理 title 里的 HTML 标签和实体（基础处理，足够用于展示）
+        // 清理 title 中的 HTML 标签和实体
         const title = stripHtml(rawTitle);
         if (title && url) {
           const captionMatch = segment.match(BING_SELECTORS.captionBlock);

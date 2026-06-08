@@ -1,7 +1,5 @@
 /**
- * 任务状态管理器
- * 负责管理团队中每个任务的生命周期、超时监控和依赖管理
- * @file task-state.js
+ * 任务状态管理器：管理任务生命周期、超时监控和依赖管理
  */
 
 const { TaskState: TASK_STATE, TaskPriority } = require('./constants');
@@ -164,9 +162,7 @@ class TaskStateManager {
     return summary;
   }
 
-  // ================================================================
   // 超时管理
-  // ================================================================
 
   _startTimeoutMonitor(taskId) {
     const task = this.tasks.get(taskId);
@@ -223,9 +219,7 @@ class TaskStateManager {
             Date.now() - new Date(task.startedAt).getTime() > task.timeout);
   }
 
-  // ================================================================
   // 依赖管理
-  // ================================================================
 
   _notifyDependents(completedTaskId) {
     for (const task of this.tasks.values()) {

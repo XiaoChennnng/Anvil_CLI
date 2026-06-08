@@ -36,7 +36,6 @@ async function setupWizard(options = {}) {
 
   const resolvedDir = path.resolve(dir.trim());
 
-  // Step 2: 输入 API Key
   const { apiKey } = await inquirer.prompt([
     {
       type: 'password',
@@ -54,7 +53,6 @@ async function setupWizard(options = {}) {
     },
   ]);
 
-  // Step 3: 选择默认模型
   const { model } = await inquirer.prompt([
     {
       type: 'list',

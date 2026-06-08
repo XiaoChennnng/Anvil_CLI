@@ -69,8 +69,6 @@ class ToolRenderer {
 
   /**
    * 获取工具显示名称
-   * @param {string} name - 原始工具名
-   * @returns {string}
    */
   getToolName(name) {
     return TOOL_NAME_MAP[name] || name;
@@ -78,8 +76,6 @@ class ToolRenderer {
 
   /**
    * 获取工具执行状态文本
-   * @param {string} name - 工具名
-   * @returns {string}
    */
   getToolAction(name) {
     return TOOL_ACTION_MAP[name] || 'Processing...';
@@ -87,12 +83,11 @@ class ToolRenderer {
 
   /**
    * 渲染工具调用行（单行，opencode 风格）
-   * 格式: ● View: path=src/index.js
-   * @param {Object} toolCall - 工具调用对象
-   * @param {number} width - 可用宽度
-   * @param {boolean} nested - 是否嵌套
+   * @param {Object} toolCall
+   * @param {number} width
+   * @param {boolean} nested
    * @param {boolean} withMarker - 是否显示 ● 前缀，默认 true
-   * @returns {string[]} 渲染后的行数组
+   * @returns {string[]}
    */
   renderToolCall(toolCall, width, nested = false, withMarker = true) {
     const t = this.theme;
@@ -139,9 +134,9 @@ class ToolRenderer {
 
   /**
    * 渲染工具参数
-   * @param {string} name - 工具名
-   * @param {Object} args - 参数对象
-   * @param {number} maxWidth - 最大宽度
+   * @param {string} name
+   * @param {Object} args
+   * @param {number} maxWidth
    * @returns {string}
    */
   _renderParams(name, args, maxWidth) {
@@ -285,8 +280,6 @@ class ToolRenderer {
 
   /**
    * 格式化路径（移除工作目录前缀）
-   * @param {string} path
-   * @returns {string}
    */
   _formatPath(path) {
     if (!path) {return '';}
@@ -298,8 +291,6 @@ class ToolRenderer {
 
   /**
    * 转义字符串
-   * @param {string} str
-   * @returns {string}
    */
   _escape(str) {
     if (!str) {return '';}
@@ -318,13 +309,13 @@ class ToolRenderer {
   }
 
   /**
-   * 渲染工具响应（任务列表样式：层级缩进 + ⎿ 续行标记）
-   * @param {string} name - 工具名
-   * @param {Object} result - 工具结果
-   * @param {Object} toolCall - 原始工具调用（用于获取参数）
-   * @param {number} width - 可用宽度
-   * @param {number} maxLines - 最大行数
-   * @returns {string[]} 渲染后的行数组
+   * 渲染工具响应（任务列表样式：层级缩进）
+   * @param {string} name
+   * @param {Object} result
+   * @param {Object} toolCall
+   * @param {number} width
+   * @param {number} maxLines
+   * @returns {string[]}
    */
   renderToolResponse(name, result, toolCall, width, maxLines = 10) {
     if (!result) {return [];}
@@ -624,26 +615,14 @@ class ToolRenderer {
     return lines;
   }
 
-  /**
-   * 格式化文件大小
-   * @param {number} bytes
-   * @returns {string}
-   */
+  // 格式化文件大小
   _formatSize(bytes) {
     if (bytes < 1024) {return bytes + 'B';}
     if (bytes < 1024 * 1024) {return (bytes / 1024).toFixed(1) + 'KB';}
     return (bytes / (1024 * 1024)).toFixed(1) + 'MB';
   }
 
-  /**
-   * 渲染搜索结果块（整体一个分支）
-   * @param {string} text - 预处理后的搜索结果文本
-   * @param {string} indent - 缩进
-   * @param {string} branch - 分支符号
-   * @param {number} contentWidth - 内容宽度
-   * @param {Object} t - 主题对象
-   * @returns {string[]} 渲染后的行数组
-   */
+  // 渲染搜索结果块（整体一个分支）
   _renderSearchResultsBlock(text, indent, branch, contentWidth, t) {
     const lines = [];
     const subIndent = indent + '  ';

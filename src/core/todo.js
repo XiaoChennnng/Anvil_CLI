@@ -52,12 +52,6 @@ class TodoManager {
     }
   }
 
-  /**
-   * 添加 todo
-   * @param {string} text - 任务描述
-   * @param {Object} options - 选项
-   * @returns {Object} 创建的 todo
-   */
   add(text, options = {}) {
     if (!text || typeof text !== 'string') {return null;}
 
@@ -84,11 +78,6 @@ class TodoManager {
     return todo;
   }
 
-  /**
-   * 完成 todo
-   * @param {string} id - todo ID
-   * @returns {boolean}
-   */
   complete(id) {
     const todo = this.todos.find(t => t.id === id);
     if (todo) {
@@ -100,11 +89,6 @@ class TodoManager {
     return false;
   }
 
-  /**
-   * 通过文本匹配完成 todo
-   * @param {string} text - 部分文本匹配
-   * @returns {boolean}
-   */
   completeByText(text) {
     const todo = this.todos.find(t =>
       !t.completed && t.text.toLowerCase().includes(text.toLowerCase())
@@ -115,11 +99,6 @@ class TodoManager {
     return false;
   }
 
-  /**
-   * 删除 todo
-   * @param {string} id - todo ID
-   * @returns {boolean}
-   */
   remove(id) {
     const index = this.todos.findIndex(t => t.id === id);
     if (index !== -1) {
@@ -130,9 +109,6 @@ class TodoManager {
     return false;
   }
 
-  /**
-   * 清空已完成的 todos
-   */
   clearCompleted() {
     this.todos = this.todos.filter(t => !t.completed);
     this._save();
@@ -178,23 +154,14 @@ class TodoManager {
     return result;
   }
 
-  /**
-   * 获取未完成的 todos
-   */
   getPending() {
     return this.getAll({ completed: false });
   }
 
-  /**
-   * 获取已完成的 todos
-   */
   getCompleted() {
     return this.getAll({ completed: true });
   }
 
-  /**
-   * 获取统计信息
-   */
   getStats() {
     const total = this.todos.length;
     const completed = this.todos.filter(t => t.completed).length;
@@ -204,16 +171,7 @@ class TodoManager {
     return { total, completed, pending, percent };
   }
 
-  /**
-   * 从 AI 响应中提取 todos
-   * 支持多种格式：
-   * - "- [ ] 任务描述"
-   * - "- [x] 任务描述"
-   * - "TODO: 任务描述"
-   * - "1. 任务描述"
-   * @param {string} content - AI 响应内容
-   * @returns {Array} 提取的 todos
-   */
+  // 从 AI 响应中提取 todos（支持 checkbox/TODO/数字列表格式）
   extractFromContent(content) {
     if (!content) {return [];}
 
@@ -223,7 +181,7 @@ class TodoManager {
     for (const line of lines) {
       const trimmed = line.trim();
 
-      // 格式1: "- [ ] 任务" 或 "- [x] 任务"
+      // checkbox 格式
       const checkboxMatch = trimmed.match(/^[-*]\s*\[([ xX])\]\s*(.+)/);
       if (checkboxMatch) {
         const isCompleted = checkboxMatch[1] !== ' ';
@@ -246,7 +204,7 @@ class TodoManager {
         continue;
       }
 
-      // 格式2: "TODO: 任务"
+      // "TODO:" 格式
       const todoMatch = trimmed.match(/^TODO[:\s]+(.+)/i);
       if (todoMatch) {
         const text = todoMatch[1].trim();
@@ -256,7 +214,7 @@ class TodoManager {
         continue;
       }
 
-      // 格式3: 数字列表 "1. 任务" (仅在明显是任务列表时)
+      // 数字列表格式（仅当明显是任务时）
       const numberMatch = trimmed.match(/^\d+\.\s+(.+)/);
       if (numberMatch && this._looksLikeTask(numberMatch[1])) {
         const text = numberMatch[1].trim();
@@ -270,9 +228,6 @@ class TodoManager {
     return extracted.filter(Boolean);
   }
 
-  /**
-   * 判断文本是否看起来像任务
-   */
   _looksLikeTask(text) {
     if (!text) {return false;}
 
@@ -288,9 +243,6 @@ class TodoManager {
     return taskVerbs.some(v => firstWord.startsWith(v));
   }
 
-  /**
-   * 清理旧的已完成任务
-   */
   _cleanup() {
     // 移除最旧的已完成任务（直接 splice 避免 remove 触发 _save）
     const completed = this.todos.filter(t => t.completed);
@@ -310,9 +262,6 @@ class TodoManager {
     }
   }
 
-  /**
-   * 生成唯一 ID
-   */
   _generateId() {
     return Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
   }

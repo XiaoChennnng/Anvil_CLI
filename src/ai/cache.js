@@ -8,8 +8,7 @@ class SessionCache {
   }
 
   _makeKey(question, context) {
-    // 轻量键：用 question + 上下文标识直接拼接，跳过 JSON.stringify + MD5
-    // context 结构通常是 { model, contextHash }，由调用方传入
+    // 轻量键: question + 上下文标识拼接，context 结构由调用方传入
     const ctxId = (context && typeof context === 'object')
       ? (context.contextHash || context.model || '')
       : String(context || '');
@@ -50,9 +49,7 @@ class SessionCache {
     this._cache.set(key, { value: result, ts: Date.now() });
   }
 
-  /**
-   * 获取缓存统计信息
-   */
+  /** 获取缓存统计信息 */
   getStats() {
     return {
       size: this._cache.size,

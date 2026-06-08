@@ -1,7 +1,6 @@
 'use strict';
 
 function registerContextTools(toolRegistry, chatEngine, logger) {
-
   toolRegistry.register({
     name: 'compact_context',
     description: '压缩对话上下文以释放 token 空间。可指定保留特定信息（如文件、项目结构、最近对话、工具调用等），避免丢失重要内容。当上下文使用率较高或用户要求压缩时调用。',

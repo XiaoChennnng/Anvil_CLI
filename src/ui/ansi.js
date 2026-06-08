@@ -1,21 +1,9 @@
 'use strict';
 
-/**
- * ANSI 转义序列处理工具
- * 使用正则表达式完整匹配 CSI、OSC、SCO 等各类 ANSI 序列
- */
-
-// 完整的 ANSI CSI/OSC 序列正则
-// 匹配：\x1b[...m (颜色等), \x1b[...H (光标位置), \x1b[...K (清除), \x1b[?...h/l (模式设置)
-//      \x1b]... BEL (\x07), \x1b\\ (DCS), \x1b[?1049h/l (Alt screen)
-//      \x1b[38;2;R;G;Bm (24-bit 真彩色前景), \x1b[48;2;R;G;Bm (24-bit 真彩色背景)
+// ANSI 转义序列处理工具，完整匹配 CSI/OSC/SCO 序列
 const ANSI_PATTERN = /\x1b\[[0-9;]*[mHKhlA-Za-z=]|\x1b\?[0-9;]*[hl]|\x1b\][^\x07]*\x07|\x1b\\|\x1b\[\?1049[hl]|\x1b\[38;2;\d+;\d+;\d+m|\x1b\[48;2;\d+;\d+;\d+m/g;
 
-/**
- * 计算字符串的可见长度（去除 ANSI 后计算，支持 CJK 双倍宽字符）
- * @param {string} str - 输入字符串
- * @returns {number} 可见字符宽度
- */
+// 计算字符串的可见长度（去除 ANSI 后计算，支持 CJK 双倍宽字符）
 function visibleLength(str) {
   if (!str) {return 0;}
   const clean = str.replace(ANSI_PATTERN, '');
@@ -26,13 +14,7 @@ function visibleLength(str) {
   return len;
 }
 
-/**
- * 按可见宽度截断字符串（支持 ANSI 序列）
- * @param {string} str - 输入字符串
- * @param {number} maxWidth - 最大可见宽度
- * @param {string} suffix - 超长时的后缀，默认为 '...'
- * @returns {string} 截断后的字符串
- */
+// 按可见宽度截断字符串（支持 ANSI 序列）
 function truncateToWidth(str, maxWidth, suffix = '...') {
   if (!str) {return '';}
   if (maxWidth <= 0) {return suffix;}
@@ -72,11 +54,7 @@ function truncateToWidth(str, maxWidth, suffix = '...') {
   return result;
 }
 
-/**
- * 判断是否为 CJK 双倍宽字符
- * @param {string} char - 单个字符
- * @returns {boolean}
- */
+// 判断是否为 CJK 双倍宽字符
 function isCJK(char) {
   if (!char || char.length === 0) {return false;}
   const code = char.charCodeAt(0);

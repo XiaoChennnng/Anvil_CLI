@@ -5,22 +5,7 @@ const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 
-/**
- * 上下文管理系统 — 默认 1M 上下文窗口
- *
- * 分层架构：
- * - Tier 0: System Prompt + Tool Definitions
- * - Tier 1: Project Overview (目录树 + 关键文件摘要)
- * - Tier 2: Working Memory (最近对话轮次)
- * - Tier 3: File Contexts (按需加载，LRU淘汰)
- * - Tier 4: 工具调用结果 (执行完立即清理)
- *
- * 压缩警告阈值：70%/80%/90%/95%/98%
- */
-
-// ============================================================================
-// 常量定义
-// ============================================================================
+// 上下文管理系统，默认 1M 窗口，5 层架构，5 级压缩阈值
 
 // 忽略的目录
 const IGNORED_DIRS = new Set([
@@ -51,7 +36,7 @@ const _tokenCache = new Map();
 const TOKEN_CACHE_MAX = 500;
 let _tokenCacheSize = 0;
 
-// Token 估算缓存键（用字符串前 200 字 + 长度做键，兼顾准确和性能）
+// Token 估算缓存键（前 200 字 + 长度做摘要）
 function _makeTokenCacheKey(text) {
   if (!text || typeof text !== 'string') {return '';}
   if (text.length <= 200) {return text;}
@@ -155,16 +140,7 @@ const CONVERSATION_PHASES = {
   REVIEW:    { thresholdShift: 0,     keepRounds: 5,  description: '代码审查' },
 };
 
-// ============================================================================
-// Token 估算
-// ============================================================================
-
-/**
- * 内容感知 Token 估算
- * - 检测代码块 (```)、JSON、普通文本
- * - 不同内容类型使用不同比率，同一签名向后兼容
- * - 中文 ~1.5 tokens/char, 代码 ~2.5 char/token, 英文 ~3.5 char/token
- */
+// 内容感知 Token 估算（代码块/JSON/中文/英文用不同比率）
 function estimateTokenCount(text) {
   if (!text) {return 0;}
   if (typeof text !== 'string') {return 0;}
@@ -183,11 +159,7 @@ function estimateTokenCount(text) {
   return result;
 }
 
-/**
- * 将文本分割为不同类型的内容块
- * @param {string} text
- * @returns {Array<{text: string, ratio: number}>}
- */
+// 分割文本为不同类型内容块
 function _segmentContentType(text) {
   const segments = [];
 
@@ -214,9 +186,7 @@ function _segmentContentType(text) {
   return segments;
 }
 
-/**
- * 检测单一段落的内容类型
- */
+// 检测单一段落的内容类型
 function _detectSingleContentType(text) {
   const lines = text.split('\n').filter((l) => l.trim().length > 0);
   if (lines.length === 0) {return [{ text, ratio: CONTENT_TOKEN_RATIOS.plain_text }];}
@@ -240,9 +210,7 @@ function _detectSingleContentType(text) {
   return [{ text, ratio: CONTENT_TOKEN_RATIOS.plain_text }];
 }
 
-/**
- * 估算文本中内联代码比例
- */
+// 估算文本中内联代码比例
 function _estimateInlineCodeRatio(text) {
   if (text.length < 20) {return 0;}
   const codeLike = text.match(/[{}[\]();=<>+*/&|!~^%#@]/g);
@@ -250,9 +218,7 @@ function _estimateInlineCodeRatio(text) {
   return codeLike.length / text.length;
 }
 
-/**
- * 按比率统计字符 tokens（处理 CJK / 空白 / 其他）
- */
+// 按比率统计字符 tokens（处理 CJK / 空白 / 其他）
 function _countCharsByRatio(text, baseRatio) {
   let count = 0;
   for (const char of text) {
@@ -270,9 +236,7 @@ function _countCharsByRatio(text, baseRatio) {
   return count;
 }
 
-/**
- * 估算消息列表的 token 总数
- */
+// 估算消息列表的 token 总数
 // 消息 token 缓存
 const _msgTokenCache = new Map();
 const MSG_TOKEN_CACHE_MAX = 20;
@@ -310,10 +274,7 @@ function estimateMessageTokens(messages) {
   return total;
 }
 
-/**
- * 生成消息列表的快速指纹（用于 token 缓存键）
- * 取最后几条消息的关键属性做哈希，避免全量遍历
- */
+// 生成消息列表的快速指纹（用于 token 缓存键）
 function _messagesFingerprint(messages) {
   if (!messages || messages.length === 0) {return null;}
   // 取长度、最后 3 条消息的内容长度、角色
@@ -327,9 +288,7 @@ function _messagesFingerprint(messages) {
   return `${len}|${last3}`;
 }
 
-// ============================================================================
-// 上下文管理器
-// ============================================================================
+// ------------------------------------
 
 class ContextManager {
   constructor(config) {
@@ -392,14 +351,6 @@ class ContextManager {
     this._enableCalibration = config.autoCalibrate !== false;
   }
 
-  // ==========================================================================
-  // 窗口管理
-  // ==========================================================================
-
-  /**
-   * 设置窗口大小
-   * @param {'STANDARD'|'EXTENDED'|'MAXIMUM'|number} size
-   */
   setWindowSize(size) {
     if (typeof size === 'number') {
       this.windowSize = Math.min(size, WINDOW_SIZES.MAXIMUM);
@@ -410,9 +361,7 @@ class ContextManager {
     return this.windowSize;
   }
 
-  /**
-   * 获取当前窗口配置
-   */
+  // 获取当前窗口配置
   getWindowConfig() {
     return {
       size: this.windowSize,
@@ -429,13 +378,7 @@ class ContextManager {
     };
   }
 
-  // ==========================================================================
-  // Tier 1: 项目概览（Cache-Friendly Zone）
-  // ==========================================================================
-
-  /**
-   * 构建项目概览（优化版 — 自适应深度，按重要性分层）
-   */
+  // 构建项目概览（自适应深度）
   async buildProjectOverview(depth = 3) {
     const maxBudget = Math.floor(this.windowSize * BUDGET.CACHE_FRIENDLY);
 
@@ -569,13 +512,7 @@ class ContextManager {
     return text;
   }
 
-  // ==========================================================================
-  // Tier 3: 文件上下文管理 (LRU + 使用频率追踪)
-  // ==========================================================================
-
-  /**
-   * 按需加载文件到上下文（增强版 — LRU 淘汰 + 预算控制）
-   */
+  // 按需加载文件到上下文（LRU 淘汰 + 预算控制）
   async loadFileOnDemand(filePath, options = {}) {
     const resolvedPath = path.resolve(this.projectDir, filePath);
     const relative = path.relative(this.projectDir, resolvedPath);
@@ -645,9 +582,7 @@ class ContextManager {
     }
   }
 
-  /**
-   * 添加文件上下文到 LRU 缓存
-   */
+  // 添加文件上下文到 LRU 缓存
   _addFileContext(key, content) {
     const newTokens = estimateTokenCount(content);
 
@@ -669,9 +604,7 @@ class ContextManager {
     this._fileContextTotalTokens += newTokens;
   }
 
-  /**
-   * LRU 淘汰
-   */
+  // LRU 淘汰
   _evictLRU() {
     let oldest = null;
     let oldestKey = null;
@@ -689,24 +622,9 @@ class ContextManager {
     }
   }
 
-  /**
-   * 获取当前文件上下文层 token 总数
-   * @returns {number}
-   */
-  _getFileContextTokens() {
-    return this._fileContextTotalTokens;
-  }
-
-  // ==========================================================================
   // 压缩引擎 — 多级渐进式压缩
-  // ==========================================================================
 
-  /**
-   * 检查当前需要的压缩级别
-   * @param {Array} messages - 消息列表
-   * @param {number} currentTokens - 当前估算 token 数
-   * @returns {{ level: number, label: string, needsCompression: boolean }}
-   */
+  // 检查当前需要的压缩级别
   getCompressionLevel(messages, currentTokens) {
     // 更新相位后获取相位偏移
     const phaseCfg = this._updatePhase(messages);
@@ -736,29 +654,7 @@ class ContextManager {
     };
   }
 
-  /**
-   * 检查是否需要压缩（便捷方法）
-   */
-  needsCompression(messages) {
-    const tokens = estimateMessageTokens(messages);
-    const { needsCompression } = this.getCompressionLevel(messages, tokens);
-    return needsCompression;
-  }
-
-  /**
-   * 手动触发上下文压缩（支持聚焦保留）
-   * 由 /compact 命令或 compact_context 工具调用
-   *
-   * @param {Array} messages - 消息列表
-   * @param {Object} [options]
-   * @param {string} [options.level='auto'] - 压缩级别: 'auto' | 'light' | 'medium' | 'heavy' | 'critical'
-   * @param {string|string[]} [options.keep=['recent', 'decisions']] - 要保留的方面:
-   *   'files' 保留注入文件, 'project' 保留项目概览,
-   *   'recent' 保留最近对话, 'tools' 保留工具调用历史,
-   *   'decisions' 保留关键决策, 'all' 全部保留（普通模式）
-   * @param {number} [options.keepRounds] - 保留最近几轮（默认根据相位自适应）
-   * @returns {{ messages: Array, stats: Object }}
-   */
+  // 手动触发上下文压缩（支持聚焦保留）
   compactContext(messages, options = {}) {
     const { level = 'auto' } = options;
     const totalTokens = estimateMessageTokens(messages);
@@ -830,9 +726,7 @@ class ContextManager {
     };
   }
 
-  /**
-   * 按级别选择压缩策略（内部辅助）
-   */
+  // 按级别选择压缩策略
   _compressByLevel(messages, level) {
     const name = Object.entries(COMPRESSION_LEVELS).find(([,c]) => c.level === level)?.[0] || 'MED_COMP';
     switch (name) {
@@ -844,14 +738,7 @@ class ContextManager {
     }
   }
 
-  /**
-   * 选择性压缩 — 保留指定方面，压缩其余部分
-   * @param {Array} messages
-   * @param {number} level
-   * @param {Set<string>} preserve - 要保留的方面集合
-   * @param {number} [keepRounds]
-   * @returns {{ messages: Array, message?: string }}
-   */
+  // 选择性压缩 — 保留指定方面
   _selectiveCompress(messages, level, preserve, keepRounds) {
     const { systemMsgs, nonSystem } = this._splitMessages(messages);
     const phaseCfg = this._updatePhase(messages);
@@ -1007,10 +894,7 @@ class ContextManager {
     return { messages: messagesOut, message: detail.join('，') };
   }
 
-  /**
-   * 轻度压缩 (LIGHT_COMP — 80%触发)
-   * 策略: 按重要性评分裁剪消息 + 淘汰低频文件缓存
-   */
+  // 轻度压缩：按重要性评分裁剪 + 淘汰低频文件缓存
   _lightCompress(messages) {
     const { systemMsgs, semanticSummaryMsgs, nonSystem } = this._splitMessages(messages);
 
@@ -1030,11 +914,7 @@ class ContextManager {
     return { messages: [...systemMsgs, ...semanticSummaryMsgs, ...kept], detail: '按重要性裁剪 + 文件缓存清理' };
   }
 
-  /**
-   * 中度压缩 (MED_COMP — 90%触发)
-   * 策略: 早期对话 → L1 详细摘要（保留每轮关键信息）
-   * 保留最近 N 轮（自适应相位）
-   */
+  // 中度压缩：早期对话 L1 摘要 + 保留最近 N 轮
   _mediumCompress(messages) {
     const { systemMsgs, semanticSummaryMsgs, nonSystem } = this._splitMessages(messages);
 
@@ -1063,10 +943,7 @@ class ContextManager {
     return { messages: [...systemMsgs, ...semanticSummaryMsgs, archiveMsg, ...recent] };
   }
 
-  /**
-   * 深度压缩 (HEAVY_COMP — 95%触发)
-   * 策略: 早期对话 → L2 概要摘要，保留最近 4 轮
-   */
+  // 深度压缩：早期对话 L2 摘要 + 保留最近 4 轮
   _heavyCompress(messages) {
     const { systemMsgs, semanticSummaryMsgs, nonSystem } = this._splitMessages(messages);
 
@@ -1096,10 +973,7 @@ class ContextManager {
     return { messages: [...systemMsgs, ...semanticSummaryMsgs, archiveMsg, ...recent] };
   }
 
-  /**
-   * 极限压缩 (CRITICAL — 98%触发)
-   * 策略: 全部历史 → L3 仅关键决策点 + 保留最近 2 轮
-   */
+  // 极限压缩：仅关键决策点 + 保留最近 2 轮
   _criticalCompress(messages) {
     const { systemMsgs, semanticSummaryMsgs, nonSystem } = this._splitMessages(messages);
 
@@ -1130,13 +1004,7 @@ class ContextManager {
     return { messages: [...systemMsgs, ...semanticSummaryMsgs, archiveMsg, ...recent] };
   }
 
-  /**
-   * 主动后台压缩 — 每轮结束后预压缩最旧部分
-   * 在 70%+ 使用率时，将最旧 20% 对话轮次压缩为 L1 摘要
-   * 同步非阻塞（轻量操作）
-   * @param {Array} messages - 当前消息列表
-   * @returns {Array} 可能压缩后的消息列表
-   */
+  // 主动后台压缩：70%+ 使用率时将最旧 20% 轮次压缩为 L1 摘要
   proactiveCompress(messages) {
     const usage = estimateMessageTokens(messages) / this.windowSize;
     if (usage < 0.70) {return messages;}
@@ -1186,10 +1054,7 @@ class ContextManager {
     return newMessages;
   }
 
-  /**
-   * 分割消息为系统消息和非系统消息（辅助方法）
-   * 注意：_semanticSummary 消息会被当作普通消息处理（保留在 nonSystem 中后续压缩）
-   */
+  // 分割消息为系统消息和非系统消息
   _splitMessages(messages) {
     const systemMsgs = messages.filter((m) => m.role === 'system' && !m._archiveTier && !m._semanticSummary);
     const archiveMsgs = messages.filter((m) => m._archiveTier);
@@ -1203,15 +1068,6 @@ class ContextManager {
     };
   }
 
-  // ==========================================================================
-  // 对话相位检测（无 LLM 依赖，基于工具调用统计 + 关键词）
-  // ==========================================================================
-
-  /**
-   * 记录工具调用（用于相位检测）
-   * @param {string} toolName - 工具名称
-   * @param {Object} args - 调用参数
-   */
   recordToolCall(toolName, args) {
     const seq = this._phaseTracker.toolSequence;
     seq.push(toolName);
@@ -1219,9 +1075,7 @@ class ContextManager {
     if (seq.length > 20) {seq.shift();}
   }
 
-  /**
-   * 检测当前对话相位
-   */
+  // 检测当前对话相位
   _detectPhase(messages) {
     const recentTools = this._phaseTracker.toolSequence.slice(-10);
     const counts = { mutation: 0, execution: 0, read: 0, other: 0 };
@@ -1248,9 +1102,6 @@ class ContextManager {
     return this._phaseTracker.phase;
   }
 
-  /**
-   * 更新相位并返回当前配置
-   */
   _updatePhase(messages) {
     if (!this._enablePhaseDetection) {return CONVERSATION_PHASES.EXPLORE;}
     const newPhase = this._detectPhase(messages);
@@ -1260,9 +1111,6 @@ class ContextManager {
     return CONVERSATION_PHASES[newPhase] || CONVERSATION_PHASES.EXPLORE;
   }
 
-  /**
-   * 获取当前相位的保留轮数
-   */
   _getKeepCountForPhase() {
     const phase = this._phaseTracker.phase;
     const cfg = CONVERSATION_PHASES[phase] || CONVERSATION_PHASES.EXPLORE;
@@ -1272,13 +1120,8 @@ class ContextManager {
     return rounds * 2;
   }
 
-  // ==========================================================================
   // 摘要生成辅助方法
-  // ==========================================================================
 
-  /**
-   * 将扁平消息列表分组为对话轮次
-   */
   _groupIntoRounds(messages) {
     const rounds = [];
     let currentRound = [];
@@ -1298,9 +1141,7 @@ class ContextManager {
     return rounds;
   }
 
-  /**
-   * L1 详细摘要 — 保留每轮核心信息 (~150 tokens/轮)
-   */
+  // L1 详细摘要
   _summarizeRoundL1(round, roundNum) {
     const userMsg = round.find((m) => m.role === 'user');
     const assistantMsgs = round.filter((m) => m.role === 'assistant');
@@ -1323,9 +1164,7 @@ class ContextManager {
     return summary;
   }
 
-  /**
-   * L2 概要摘要 — 仅保留问题和结果 (~50 tokens/轮)
-   */
+  // L2 概要摘要
   _summarizeRoundL2(round, roundNum) {
     const userMsg = round.find((m) => m.role === 'user');
     const assistantMsgs = round.filter((m) => m.role === 'assistant');
@@ -1336,9 +1175,7 @@ class ContextManager {
     return `[${roundNum}] ${(userMsg?.content || '').slice(0, 100)} → ${lastAnswer}`;
   }
 
-  /**
-   * L3 关键决策提取 — 仅保留文件写入/删除等操作记录
-   */
+  // L3 关键决策提取
   _extractKeyDecisions(round) {
     const decisions = [];
     for (const msg of round) {
@@ -1359,13 +1196,8 @@ class ContextManager {
     return decisions;
   }
 
-  // ==========================================================================
   // 消息重要性评分
-  // ==========================================================================
 
-  /**
-   * 计算单条消息的重要性分数（增强版 — 工具类型差异化）
-   */
   _scoreMessage(msg, index, totalCount) {
     let score = MSG_WEIGHTS[msg.role] || 0.2;
 
@@ -1398,11 +1230,7 @@ class ContextManager {
     return score;
   }
 
-  /**
-   * 按重要性排序的裁剪
-   * @param {Array} messages - 非系统消息
-   * @param {number} targetTokens - 目标 token 数
-   */
+  // 按重要性排序裁剪
   _trimByImportance(messages, targetTokens) {
     const len = messages.length;
 
@@ -1484,13 +1312,8 @@ class ContextManager {
     return keptMsgs;
   }
 
-  // ==========================================================================
   // 每层预算追踪与强制执行
-  // ==========================================================================
 
-  /**
-   * 计算当前消息列表中各层的 token 消耗
-   */
   _computeTierTokens(messages) {
     const budget = this.getWindowConfig().budget;
 
@@ -1515,10 +1338,7 @@ class ContextManager {
       .reduce((sum, e) => sum + estimateTokenCount(e.content || ''), 0);
   }
 
-  /**
-   * 检查并强制执行每层预算
-   * 如果某层超出预算 10%，触发对应压缩操作
-   */
+  // 检查并强制执行每层预算
   _enforceBudget(messages) {
     this._computeTierTokens(messages);
 
@@ -1533,13 +1353,8 @@ class ContextManager {
     return messages;
   }
 
-  // ==========================================================================
   // 内容感知去重
-  // ==========================================================================
 
-  /**
-   * 检测并折叠重复消息（相同内容转引用）
-   */
   _deduplicateMessages(messages) {
     const seen = new Map();
     const deduped = [];
@@ -1564,9 +1379,6 @@ class ContextManager {
     return deduped;
   }
 
-  /**
-   * 生成消息指纹（用于去重）
-   */
   _messageFingerprint(msg) {
     if (msg._deduplicated) {return null;}
     const content = (msg.content || '').slice(0, 200);
@@ -1574,14 +1386,7 @@ class ContextManager {
     return crypto.createHash('md5').update(`${msg.role}|${content}|${tools}`).digest('hex');
   }
 
-  // ==========================================================================
-  // 语义分块截断（替代逐行截断）
-  // ==========================================================================
-
-  /**
-   * 将文本裁剪到指定 token 预算内
-   * 代码: 在函数/类边界截断 | 散文: 在段落边界截断
-   */
+  // 语义分块截断（代码在函数/类边界，散文在段落边界）
   _trimToTokens(text, maxTokens) {
     if (!text) {return '';}
     if (estimateTokenCount(text) <= maxTokens) {return text;}
@@ -1597,9 +1402,7 @@ class ContextManager {
     return this._trimProseSemantic(text, maxTokens);
   }
 
-  /**
-   * 代码语义截断（在函数/类边界截断）
-   */
+  // 代码语义截断（在函数/类边界）
   _trimCodeSemantic(text, maxTokens) {
     const blocks = text.split(/(?=^\s*(?:export\s+)?(?:async\s+)?(?:function|class|const\s+\w+\s*=\s*(?:async\s+)?\())/m);
     let result = '';
@@ -1613,9 +1416,7 @@ class ContextManager {
     return result;
   }
 
-  /**
-   * 散文语义截断（在段落边界截断）
-   */
+  // 散文语义截断（在段落边界）
   _trimProseSemantic(text, maxTokens) {
     const paragraphs = text.split(/\n\n+/);
     let result = '';
@@ -1629,22 +1430,7 @@ class ContextManager {
     return result;
   }
 
-  // ==========================================================================
-  // 组装消息（优化缓存命中）
-  // ==========================================================================
-
-  /**
-   * 组装最终消息列表（保证前缀稳定性以优化缓存命中）
-   *
-   * 消息顺序:
-   * [SystemPrompt] → [ProjectOverview] → [Archive] → [History] → [User]
-   *  └─ 静态前缀 ─┘  └── 半静态 ──┘  └─ 动态 ──────────┘  └─ 最新 ─┘
-   *  └── 最大化缓存命中（需相同前缀） ──┘
-   *
-   * @param {string} systemPrompt - Tier 0
-   * @param {Array} historyMessages - Tier 2+4
-   * @returns {Array} 组装好的消息数组
-   */
+  // 组装消息：SystemPrompt → ProjectOverview → Archive → History → User
   assembleMessages(systemPrompt, historyMessages) {
     const assembled = [];
 
@@ -1672,15 +1458,9 @@ class ContextManager {
     return assembled;
   }
 
-  // ==========================================================================
   // Phase 3: 压缩遗憾检测
-  // ==========================================================================
 
-  /**
-   * 检测用户消息是否包含压缩遗憾
-   * @param {string} userMessage - 用户输入
-   * @returns {boolean}
-   */
+  // 压缩遗憾检测
   detectRegret(userMessage) {
     if (!userMessage) {return false;}
     const matched = REGRET_PATTERNS.some((p) => p.test(userMessage));
@@ -1699,53 +1479,11 @@ class ContextManager {
     return matched;
   }
 
-  /**
-   * 获取压缩质量报告
-   * @returns {Object}
-   */
-  getCompressionQualityReport() {
-    const total = this.compressionStats.totalCompressions || 1;
-    const regretCount = this._regretTracker.count;
-    const regretRate = regretCount / total;
-
-    return {
-      totalCompressions: this.compressionStats.totalCompressions,
-      totalTokensSaved: this.compressionStats.totalTokensSaved,
-      regretCount,
-      regretRate: Math.round(regretRate * 100) / 100,
-      suggestion: regretRate > 0.3
-        ? '⚠️ 遗憾率较高 (>30%)，建议降低压缩激进程度或增大窗口'
-        : regretRate > 0.1
-          ? '💡 轻度遗憾，可考虑调整压缩策略'
-          : '✅ 压缩质量良好',
-      lastRegret: this._regretTracker.patterns[this._regretTracker.patterns.length - 1] || null,
-    };
-  }
-
-  // ==========================================================================
-  // 工具方法
-  // ==========================================================================
-
-  /**
-   * 估算消息列表 token 数（应用校准因子）
-   */
   estimateMessagesTokenCount(messages) {
     const raw = estimateMessageTokens(messages);
     return Math.ceil(raw * (this._calibration?.correctionFactor || 1.0));
   }
 
-  /**
-   * 估算单段文本 token 数
-   */
-  estimateTokenCount(text) {
-    return estimateTokenCount(text);
-  }
-
-  /**
-   * 从 API 实际 token 使用反馈校准估算
-   * @param {number} estimatedTokens - 估算值
-   * @param {number} actualPromptTokens - API 返回实际值
-   */
   calibrateFromUsage(estimatedTokens, actualPromptTokens) {
     if (!this._enableCalibration || !estimatedTokens || !actualPromptTokens) {return;}
 
@@ -1769,21 +1507,9 @@ class ContextManager {
     this._calibration.lastCalibrated = new Date().toISOString();
   }
 
-  clearFileCache() {
-    this._fileContexts.clear();
-    this._fileContextTotalTokens = 0;
-  }
+  // 预测性文件预取
 
-  // ==========================================================================
-  // Phase 3: 预测性文件预取
-  // ==========================================================================
-
-  /**
-   * 扫描文件内容中的 import/require 依赖
-   * @param {string} content - 文件内容
-   * @param {string} filePath - 文件路径（相对）
-   * @returns {Array<string>} 依赖的文件路径列表
-   */
+  // 扫描文件内容中的 import/require 依赖
   _scanImports(content, filePath) {
     if (!content) {return [];}
     const imports = new Set();
@@ -1844,13 +1570,7 @@ class ContextManager {
     return relatedPaths;
   }
 
-  /**
-   * 预取关联文件
-   * 在工具执行后调用，异步加载相关文件到缓存
-   * @param {string} filePath - 刚操作的文件路径
-   * @param {number} [maxFiles=5] - 最多预取数量
-   * @returns {Promise<Array<{path: string, content: string|null}>>}
-   */
+  // 预取关联文件到缓存
   async prefetchRelatedFiles(filePath, maxFiles = 5) {
     const relative = path.relative(this.projectDir, path.resolve(this.projectDir, filePath));
     const related = this._prefetchHints.relatedFiles.get(relative);
@@ -1870,14 +1590,6 @@ class ContextManager {
     return loaded;
   }
 
-  /**
-   * 获取上下文各层 Token 明细
-   * @param {Array} messages - 消息列表
-   * @returns {{ systemPrompt: number, projectOverview: number, fileContexts: Array<{path:string, tokens:number}>,
-   *            totalFileTokens: number, messagesTokens: number, messagesPercent: number,
-   *            freeTokens: number, freePercent: number, total: number, totalPercent: number,
-   *            breakdown: Array<{label:string, tokens:number, percent:number}> }}
-   */
   getContextBreakdown(messages) {
     const systemMsgs = messages.filter(m => m.role === 'system' && !m._archiveTier);
 
@@ -1947,9 +1659,6 @@ class ContextManager {
     };
   }
 
-  /**
-   * 获取上下文状态报告
-   */
   getStatusReport(messages) {
     const tokens = estimateMessageTokens(messages);
     const { level, label, ratio } = this.getCompressionLevel(messages, tokens);

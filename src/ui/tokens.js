@@ -1,6 +1,5 @@
 'use strict';
 
-// 预编译 CJK 字符正则表达式，避免循环中重复编译
 const CJK_PATTERN = /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/;
 
 function estimateTokens(text) {
@@ -17,7 +16,7 @@ function estimateTokens(text) {
 }
 
 function calculateCost(cacheMissTokens, cacheHitTokens, outputTokens, pricing) {
-  // DeepSeek 价格单位已经是 元/千token，直接使用
+  // DeepSeek 价格单位是 元/千token
   const pricePerKInput = pricing?.input || 0;
   const pricePerKOutput = pricing?.output || 0;
   // 缓存命中价格 = 未命中价格的 1/10

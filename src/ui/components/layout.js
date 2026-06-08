@@ -44,9 +44,7 @@ class Layout {
     this.messageViewportHeight = Math.max(1, this.contentHeight - 3);
   }
 
-  /**
-   * 进入 Alt Screen 全屏模式
-   */
+  // 进入 Alt Screen 全屏模式
   enterAltScreen() {
     if (this._isAltScreen) {return;}
     this._isAltScreen = true;
@@ -65,9 +63,7 @@ class Layout {
     process.stdout.on('resize', this._onResize);
   }
 
-  /**
-   * 退出 Alt Screen
-   */
+  // 退出 Alt Screen
   leaveAltScreen() {
     if (!this._isAltScreen) {return;}
     this._isAltScreen = false;
@@ -81,62 +77,38 @@ class Layout {
     }
   }
 
-  /**
-   * 光标定位
-   */
   moveTo(row, col) {
     this.write(`\x1b[${row};${col || 1}H`);
   }
 
-  /**
-   * 清除当前行
-   */
   clearLine() {
     this.write('\x1b[2K');
   }
 
-  /**
-   * 清除从光标到行尾
-   */
   clearToEndOfLine() {
     this.write('\x1b[K');
   }
 
-  /**
-   * 隐藏光标
-   */
   hideCursor() {
     this.write('\x1b[?25l');
   }
 
-  /**
-   * 显示光标
-   */
   showCursor() {
     this.write('\x1b[?25h');
   }
 
-  /**
-   * 清屏（一次性清屏，避免逐行清除造成的闪烁）
-   * 使用 Home + Erase Below 替代 2J（更好的跨终端兼容性）
-   */
+  // 清屏，使用 Home + Erase Below 替代 2J
   clearScreen() {
     this.write('\x1b[H\x1b[J');
     this.hideCursor();
   }
 
-  /**
-   * 批量渲染开始
-   * 调用 beginBatch() 后，所有渲染请求会合并直到 endBatch()
-   */
+  // 批量渲染开始，所有渲染请求合并直到 endBatch()
   beginBatch() {
     this._batchLevel++;
   }
 
-  /**
-   * 批量渲染结束
-   * 当 batch level 降为 0 时，执行待处理的渲染
-   */
+  // 批量渲染结束，batch level 降为 0 时执行待处理渲染
   endBatch() {
     this._batchLevel--;
     if (this._batchLevel <= 0) {
@@ -149,10 +121,7 @@ class Layout {
     }
   }
 
-  /**
-   * 写入终端（支持缓冲合并）
-   * 在 startBuf/endBuf 之间调用时，输出被缓冲到 _writeBuf
-   */
+  // 写入终端（支持缓冲合并）
   write(str) {
     if (this._buffering) {
       this._writeBuf += str;
@@ -161,18 +130,13 @@ class Layout {
     }
   }
 
-  /**
-   * 开始写缓冲：之后所有 write() 调用都进入缓冲区
-   */
+  // 开始写缓冲
   startBuf() {
     this._writeBuf = '';
     this._buffering = true;
   }
 
-  /**
-   * 结束写缓冲，返回缓冲区内容
-   * @returns {string} 缓冲的输出
-   */
+  // 结束写缓冲
   endBuf() {
     this._buffering = false;
     const buf = this._writeBuf;
@@ -180,10 +144,7 @@ class Layout {
     return buf;
   }
 
-  /**
-   * 请求渲染（可被批量合并）
-   * @param {Function} renderFn - 渲染函数
-   */
+  // 请求渲染（可被批量合并）
   requestRender(renderFn) {
     if (this._batchLevel > 0) {
       this._pendingRender = true;
@@ -193,59 +154,35 @@ class Layout {
     }
   }
 
-  /**
-   * 插入行（向上滚动）
-   */
   insertLines(n) {
     this.write(`\x1b[${n}L`);
   }
 
-  /**
-   * 删除行（向下滚动）
-   */
   deleteLines(n) {
     this.write(`\x1b[${n}M`);
   }
 
-  /**
-   * 写入文本到指定位置
-   */
   writeAt(row, col, text) {
     this.moveTo(row, col);
     this.write(text);
   }
 
-  /**
-   * 获取消息区起始行
-   */
   get messageStartRow() {
     return 1;
   }
 
-  /**
-   * 获取消息区结束行
-   */
   get messageEndRow() {
     return this.contentHeight;
   }
 
-  /**
-   * 获取编辑器起始行
-   */
   get editorStartRow() {
     return this.contentHeight + 1;
   }
 
-  /**
-   * 获取状态栏行
-   */
   get statusBarRow() {
     return this._height;
   }
 
-  /**
-   * 触发 resize 事件
-   */
   emit(event) {
     // 由 TUI 注册回调
   }

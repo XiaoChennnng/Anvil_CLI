@@ -23,11 +23,7 @@ class QuestionPanel {
     this._customInputBuffer = '';  // 自定义输入缓冲
   }
 
-  /**
-   * 显示问答面板
-   * @param {Object} params - { questions: [...] }
-   * @returns {Promise<Array>} 每个问题的答案
-   */
+  // 显示问答面板
   show(params) {
     this._startLine = undefined;  // 重置以便 _renderToMessageBox 正确定位起始行
     this.questions = params.questions;
@@ -51,11 +47,6 @@ class QuestionPanel {
     });
   }
 
-  /**
-   * 处理键盘输入
-   * @param {Buffer} buf
-   * @returns {{ action: string, value?: any } | null}
-   */
   handleKey(buf) {
     if (!this.active) {return null;}
 
@@ -171,9 +162,7 @@ class QuestionPanel {
     return null;
   }
 
-  /**
-   * 获取当前问题的选中答案
-   */
+  // 获取当前问题的选中答案
   _getCurrentAnswer() {
     const current = this.questions[this.currentQ];
     if (current.multiSelect) {
@@ -183,9 +172,7 @@ class QuestionPanel {
     return current.options[this.selected[this.currentQ]].label;
   }
 
-  /**
-   * 下一个未回答问题
-   */
+  // 下一个未回答问题
   _nextUnanswered() {
     for (let i = 0; i < this.questions.length; i++) {
       if (!this.answered.has(i)) {return i;}
@@ -193,9 +180,7 @@ class QuestionPanel {
     return -1;
   }
 
-  /**
-   * 完成问答
-   */
+  // 完成问答
   _finish() {
     const t = this.theme;
     // 填充未回答的问题为 null
@@ -222,9 +207,7 @@ class QuestionPanel {
     return { action: 'question_done', value: answers };
   }
 
-  /**
-   * 渲染当前问题到消息区
-   */
+  // 渲染当前问题到消息区
   _renderToMessageBox() {
     if (!this.messageBox) {return;}
 
@@ -343,9 +326,7 @@ class QuestionPanel {
     if (this._refreshDisplay) {this._refreshDisplay();}
   }
 
-  /**
-   * 渲染自定义输入界面（替换选项列表，显示输入字段）
-   */
+  // 渲染自定义输入界面
   _renderCustomInput() {
     if (!this.messageBox) {return;}
 
@@ -384,9 +365,7 @@ class QuestionPanel {
     if (this._refreshDisplay) {this._refreshDisplay();}
   }
 
-  /**
-   * 处理自定义输入模式的键盘输入
-   */
+  // 处理自定义输入模式的键盘输入
   _handleCustomInput(buf) {
     // Enter — 提交
     if (buf[0] === 0x0d) {
@@ -437,9 +416,7 @@ class QuestionPanel {
     return { action: 'question_input_char' };
   }
 
-  /**
-   * 计算字符串可见长度（忽略 ANSI）
-   */
+  // 计算字符串可见长度（忽略 ANSI）
   _visibleLength(str) {
     let len = 0;
     let inEscape = false;
@@ -451,9 +428,7 @@ class QuestionPanel {
     return len;
   }
 
-  /**
-   * 按可见长度截断 ANSI 字符串
-   */
+  // 按可见长度截断 ANSI 字符串
   _truncateAnsi(str, maxLen) {
     let visible = 0;
     let result = '';
@@ -468,9 +443,7 @@ class QuestionPanel {
     return result;
   }
 
-  /**
-   * 重置
-   */
+  // 重置
   reset() {
     this.active = false;
     this.resolve = null;

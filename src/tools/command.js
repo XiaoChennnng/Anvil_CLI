@@ -34,25 +34,22 @@ function detectShell() {
   return _cachedShell;
 }
 
-/**
- * 将 GBK/GB2312/GB18030 编码的 Buffer 转换为 UTF-8
- */
+// 将 GBK/GB2312/GB18030 编码的 Buffer 转换为 UTF-8
 function convertEncoding(buffer, fallbackEncoding = 'gbk') {
-  // 首先尝试 UTF-8
   try {
     const utf8Str = buffer.toString('utf8');
-    // 检查是否是有效的 UTF-8（没有替换字符）
+    // 首先尝试 UTF-8
     if (!utf8Str.includes('\uFFFD')) {
       return utf8Str;
     }
   } catch {}
 
-  // 回退到 GBK（Windows 中文默认编码）
+  // 回退到 GBK
   try {
     const iconv = require('iconv-lite');
     return iconv.decode(buffer, 'gbk');
   } catch {
-    // iconv-lite 不可用，使用原生方式
+    // iconv-lite 不可用，fallback 到 latin1
     return buffer.toString('latin1');
   }
 }
@@ -91,9 +88,9 @@ function executeCommand(params, context) {
     const displayLines = [];
     let timedOut = false;
     const MAX_OUTPUT_LEN = 2000; // stdout/stderr 返回给 AI 的最大字符数
-    const MAX_OUTPUT_BUFFER = 100 * 1024; // 100KB — stdout/stderr 内存硬上限
+    const MAX_OUTPUT_BUFFER = 100 * 1024;
 
-    // 实时流式输出（通过 onOutput 回调传递，不直接写终端）
+    // 实时流式输出（通过 onOutput 回调传递）
     if (proc.stdout) {
       proc.stdout.on('data', (data) => {
         const text = convertEncoding(data);
@@ -101,7 +98,7 @@ function executeCommand(params, context) {
           stdout += text;
         }
 
-        // 环形缓冲：slice(-n) 替代 push + shift 的 O(n²)
+        // 环形缓冲：slice(-n) 替代 shift
         const lines = text.split('\n');
         for (const line of lines) {
           displayLines.push(line);
@@ -110,7 +107,6 @@ function executeCommand(params, context) {
           displayLines.splice(0, displayLines.length - maxDisplayLines);
         }
 
-        // 触发输出事件（给 AI 上下文用，同时给 TUI 渲染）
         if (context.onOutput) {
           context.onOutput(text, false);
         }
@@ -132,14 +128,12 @@ function executeCommand(params, context) {
           displayLines.splice(0, displayLines.length - maxDisplayLines);
         }
 
-        // stderr 也通过 onOutput 回调传递
         if (context.onOutput) {
           context.onOutput(text, true);
         }
       });
     }
 
-    // 超时处理
     let timer = null;
     if (timeout && timeout > 0) {
       timer = setTimeout(() => {
@@ -157,7 +151,7 @@ function executeCommand(params, context) {
     proc.on('close', (code) => {
       if (timer) {clearTimeout(timer);}
 
-      // 截断 stdout/stderr 防止塞爆 AI 上下文
+      // 截断 stdout/stderr 防爆 AI 上下文
       const trimmedStdout = stdout.trim();
       const trimmedStderr = stderr.trim();
       const truncStdout = trimmedStdout.length > MAX_OUTPUT_LEN
@@ -177,7 +171,7 @@ function executeCommand(params, context) {
         warning: timedOut ? `命令执行超时（${timeout}ms），已强制终止` : null,
       };
 
-      // 记录到日志（完整内容）
+      // 记录到日志
       if (logger) {
         logger.logCommandOutput(command, stdout, stderr);
       }
@@ -214,10 +208,7 @@ async function checkCommandExists(command) {
   });
 }
 
-/**
- * 注册命令执行工具
- * @param {Object} registry - ToolRegistry 实例
- */
+// 注册命令执行工具
 function registerCommandTool(registry) {
   registry.register({
     name: 'execute_command',

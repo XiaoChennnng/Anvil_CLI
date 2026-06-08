@@ -1,8 +1,5 @@
 /**
- * Context Hooks 机制
- *
- * 在关键事件（文件读取、Phase切换、阈值警告）触发自动化操作。
- * 支持：预加载、上下文监控、验证等。
+ * Context Hooks 机制：在关键事件触发自动化操作
  */
 
 /**
@@ -23,9 +20,6 @@ class ContextHook {
     return undefined;
   }
 
-  /**
-   * 启用/禁用钩子
-   */
   setEnabled(enabled) {
     this.enabled = !!enabled;
   }
@@ -75,13 +69,10 @@ class PhaseTransitionHook extends ContextHook {
   }
 
   async execute(context) {
-    if (!context.phase) {
-      return undefined;
-    }
+    if (!context.phase) { return undefined; }
 
     const { oldPhase, newPhase } = context;
 
-    // 触发回调
     if (this.onPhaseChange && oldPhase !== newPhase) {
       this.onPhaseChange(newPhase, oldPhase);
     }
@@ -266,72 +257,6 @@ class ContextHookManager {
     return results;
   }
 
-  /**
-   * 创建并注册内置钩子
-   */
-  setupBuiltInHooks(options = {}) {
-    // 预加载钩子
-    if (options.enablePrefetch !== false) {
-      const prefetchHook = new PrefetchHook({
-        contextManager: this.contextManager,
-        maxPrefetch: options.maxPrefetch || 5,
-      });
-      this.register(prefetchHook, 10);
-    }
-
-    // Phase 切换钩子
-    if (options.enablePhaseTransition !== false) {
-      const phaseHook = new PhaseTransitionHook({
-        phaseManager: options.phaseManager,
-        onPhaseChange: options.onPhaseChange,
-      });
-      this.register(phaseHook, 5);
-    }
-
-    // 上下文警告钩子
-    if (options.enableContextWarning !== false) {
-      const warningHook = new ContextWarningHook({
-        onWarning: options.onWarning,
-      });
-      this.register(warningHook, 20);
-    }
-
-    // 验证钩子
-    if (options.enableValidation !== false) {
-      const validationHook = new ValidationHook({
-        onValidation: options.onValidation,
-      });
-      this.register(validationHook, 15);
-    }
-  }
-
-  /**
-   * 获取所有已注册钩子
-   */
-  getRegisteredHooks() {
-    const result = [];
-    for (const [priority, hooks] of this.hooks) {
-      for (const hook of hooks) {
-        result.push({
-          name: hook.name,
-          priority,
-          enabled: hook.enabled,
-        });
-      }
-    }
-    return result;
-  }
-
-  /**
-   * 启用/禁用所有钩子
-   */
-  setEnabled(enabled) {
-    for (const [, hooks] of this.hooks) {
-      for (const hook of hooks) {
-        hook.setEnabled(enabled);
-      }
-    }
-  }
 }
 
 // ============================================================================

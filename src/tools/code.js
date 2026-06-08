@@ -3,34 +3,26 @@
 const fsp = require('fs/promises');
 const path = require('path');
 
-/**
- * 代码智能工具
- * 基于静态分析实现符号查找、定义跳转、引用查找等
- * 无 LSP 依赖，纯正则解析
- */
+// 代码智能工具：静态分析符号查找、定义跳转、引用查找，无 LSP 依赖
 
-/**
- * 安全校验
- */
+// 安全校验
 function isPathSafe(targetPath, projectDir) {
   const relative = path.relative(projectDir, targetPath);
   return !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
-/**
- * 解析文件中的符号（函数、类、变量）
- */
+// 解析文件中的符号（函数、类、变量）
 function parseSymbols(content, filePath) {
   const lines = content.split('\n');
   const symbols = [];
 
-  // 预计算行起始位置数组（一次 O(n)），替代每符号 content.substring(0, pos).split('\n') 的 O(n*m)
+  // 预计算行起始位置，避免每次 O(n)
   const lineStarts = [0];
   for (let i = 0; i < content.length; i++) {
     if (content[i] === '\n') {lineStarts.push(i + 1);}
   }
 
-  // 二分查找行号（O(log n)）
+  // 二分查找行号
   function _lineAt(pos) {
     let lo = 0, hi = lineStarts.length;
     while (lo < hi) {
@@ -92,9 +84,7 @@ function parseSymbols(content, filePath) {
   });
 }
 
-/**
- * 获取文件中的符号列表
- */
+// 获取文件中的符号列表
 async function getDocumentSymbols(params, context) {
   const { filePath } = params;
   const projectDir = context.projectDir;
@@ -124,14 +114,7 @@ async function getDocumentSymbols(params, context) {
   }
 }
 
-/**
- * 通用项目目录遍历（跳过 node_modules/.git，仅遍历代码文件）
- * 异步版本 — 不阻塞 event loop
- * @param {string} dir - 起始目录
- * @param {number} maxDepth - 最大深度
- * @param {function} fileCallback - (fullPath) => void
- * @param {string} [include] - 文件类型过滤（如 ".js,.ts"）
- */
+// 遍历项目目录（跳过 node_modules/.git，只遍历代码文件）
 async function _walkProjectDir(dir, maxDepth, fileCallback, include, stopCheck) {
   if (stopCheck && stopCheck()) {return;}
   try {
@@ -158,9 +141,7 @@ async function _walkProjectDir(dir, maxDepth, fileCallback, include, stopCheck) 
   } catch {}
 }
 
-/**
- * 查找符号定义位置
- */
+// 查找符号定义位置
 async function findDefinition(params, context) {
   const { symbol, include } = params;
   const projectDir = context.projectDir;
@@ -200,9 +181,7 @@ async function findDefinition(params, context) {
   }
 }
 
-/**
- * 查找符号的所有引用
- */
+// 查找符号的所有引用
 async function findReferences(params, context) {
   const { symbol, include, maxResults } = params;
   const projectDir = context.projectDir;
@@ -250,9 +229,7 @@ async function findReferences(params, context) {
   }
 }
 
-/**
- * 获取符号的类型/文档信息
- */
+// 获取符号类型/文档信息
 async function getHoverInfo(params, context) {
   const { filePath, line, column } = params;
   const projectDir = context.projectDir;
@@ -316,9 +293,7 @@ async function getHoverInfo(params, context) {
   }
 }
 
-/**
- * 分析文件依赖关系
- */
+// 分析文件依赖关系
 async function analyzeDependencies(params, context) {
   const { filePath } = params;
   const projectDir = context.projectDir;
@@ -341,8 +316,6 @@ async function analyzeDependencies(params, context) {
     // 解析 require 和 import
     const requires = [];
     const imports = [];
-
-    // require('xxx') 或 require("xxx")
     const requireRegex = /require\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
     let match;
     while ((match = requireRegex.exec(content)) !== null) {
@@ -356,7 +329,6 @@ async function analyzeDependencies(params, context) {
       });
     }
 
-    // import ... from 'xxx'
     const importRegex = /import\s+(?:.*?\s+from\s+)?['"]([^'"]+)['"]/g;
     while ((match = importRegex.exec(content)) !== null) {
       const dep = match[1];
@@ -440,9 +412,7 @@ async function analyzeDependencies(params, context) {
   }
 }
 
-/**
- * 代码格式化（简化版，使用 prettier 如果可用）
- */
+// 代码格式化（使用 Prettier）
 async function formatCode(params, context) {
   const { filePath, parser } = params;
   const projectDir = context.projectDir;
@@ -501,7 +471,6 @@ async function formatCode(params, context) {
         saved: content.length - formatted.length,
       };
     } catch (prettierErr) {
-      // prettier 不可用，返回提示
       return {
         filePath,
         changed: false,
@@ -514,16 +483,12 @@ async function formatCode(params, context) {
   }
 }
 
-/**
- * 转义正则特殊字符
- */
+// 转义正则特殊字符
 function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/**
- * 注册代码智能工具
- */
+// 注册代码智能工具
 function registerCodeTools(registry) {
   registry.register({
     name: 'get_document_symbols',

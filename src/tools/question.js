@@ -11,7 +11,6 @@ async function askUserQuestion(params, context) {
 
   // 等待用户回答
   const result = await context.onQuestion(params);
-  // ESC 取消提问
   if (result && result.cancelled) {return { cancelled: true };}
   return { answers: result };
 }

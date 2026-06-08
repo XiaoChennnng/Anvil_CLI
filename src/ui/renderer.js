@@ -58,9 +58,7 @@ class AnvilRenderer extends EventEmitter {
     this._statusRow = this._height;
   }
 
-  // ─────────────────────────────────────────────
-  // Alt Screen 管理
-  // ─────────────────────────────────────────────
+  // ─── Alt Screen 管理 ───
 
   enterAltScreen() {
     if (this._isAltScreen) {return;}
@@ -89,9 +87,7 @@ class AnvilRenderer extends EventEmitter {
     }
   }
 
-  // ─────────────────────────────────────────────
-  // 光标定位工具
-  // ─────────────────────────────────────────────
+  // ─── 光标定位工具 ───
 
   _moveTo(row, col) {
     process.stdout.write(`\x1b[${row};${col || 1}H`);
@@ -139,9 +135,7 @@ class AnvilRenderer extends EventEmitter {
     this._showCursor();
   }
 
-  // ─────────────────────────────────────────────
-  // 渲染方法
-  // ─────────────────────────────────────────────
+  // ─── 渲染方法 ───
 
   renderHeader(model) {
     this._currentModel = model;
@@ -340,9 +334,6 @@ class AnvilRenderer extends EventEmitter {
     process.stdout.write(t.accent('> '));
   }
 
-  /**
-   * 渲染状态栏（最底部）
-   */
   renderStatusBar(model) {
     const t = this.theme;
     this._moveTo(this._statusRow);

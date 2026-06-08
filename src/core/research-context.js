@@ -1,23 +1,12 @@
 /**
- * 研究上下文隔离机制
- *
- * 在独立 context 中运行研究任务，仅返回摘要结果，不污染主 context。
- * 适用于：代码库架构研究、大文件分析、多文件关联分析。
+ * 研究上下文隔离机制：独立 context 运行研究任务，不污染主 context
  */
 
 const fs = require('fs');
 const path = require('path');
 
-// ============================================================================
-// 常量定义
-// ============================================================================
-
-const DEFAULT_MAX_TOKENS = 15000;  // 研究 context 最大 token 数
-const SUMMARY_TRUNCATE_THRESHOLD = 5000;  // 超过此长度生成摘要
-
-// ============================================================================
-// Token 估算
-// ============================================================================
+const DEFAULT_MAX_TOKENS = 15000;
+const SUMMARY_TRUNCATE_THRESHOLD = 5000;
 
 function estimateTokenCount(text) {
   if (!text || typeof text !== 'string') {return 0;}
@@ -37,9 +26,6 @@ function estimateTokenCount(text) {
   return Math.ceil(count);
 }
 
-/**
- * 研究结果封装
- */
 class ResearchResult {
   constructor(options = {}) {
     this.summary = options.summary || '';
@@ -50,9 +36,6 @@ class ResearchResult {
     this.metadata = options.metadata || {};
   }
 
-  /**
-   * 生成简短摘要（用于返回主 context）
-   */
   toSummary() {
     return {
       summary: this.summary.slice(0, 500),
@@ -85,9 +68,7 @@ class ResearchContext {
     this._MAX_CACHE_SIZE = 10 * 1024 * 1024;  // 10MB 缓存
   }
 
-  // ==========================================================================
   // 文件分析
-  // ==========================================================================
 
   /**
    * 分析单个文件
@@ -169,9 +150,7 @@ class ResearchContext {
     });
   }
 
-  // ==========================================================================
   // 模式搜索
-  // ==========================================================================
 
   /**
    * 搜索代码模式
@@ -224,9 +203,7 @@ class ResearchContext {
     });
   }
 
-  // ==========================================================================
   // 架构分析
-  // ==========================================================================
 
   /**
    * 分析项目架构
@@ -244,13 +221,9 @@ class ResearchContext {
     });
   }
 
-  // ==========================================================================
   // 内部辅助方法
-  // ==========================================================================
 
-  /**
-   * 读取文件（带缓存）
-   */
+  // 读取文件（带缓存）
   async _readFile(filePath, maxLines = null) {
     const cacheKey = filePath;
 
@@ -286,9 +259,7 @@ class ResearchContext {
     }
   }
 
-  /**
-   * 生成文件摘要
-   */
+  // 生成文件摘要
   _generateFileSummary(content, filePath) {
     const lines = content.split('\n');
     const totalLines = lines.length;
@@ -425,21 +396,15 @@ class ResearchContext {
     );
   }
 
-  // ==========================================================================
   // 工具方法
-  // ==========================================================================
 
-  /**
-   * 清空缓存
-   */
+  // 清空缓存
   clearCache() {
     this._fileCache.clear();
     this._cacheSize = 0;
   }
 
-  /**
-   * 获取缓存状态
-   */
+  // 获取缓存状态
   getCacheStatus() {
     return {
       entries: this._fileCache.size,
@@ -448,9 +413,7 @@ class ResearchContext {
   }
 }
 
-// ============================================================================
 // 导出
-// ============================================================================
 
 module.exports = {
   ResearchContext,

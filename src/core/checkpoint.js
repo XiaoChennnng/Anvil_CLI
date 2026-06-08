@@ -86,15 +86,9 @@ class CheckpointManager {
       return fs.readdirSync(this.checkpointDir)
         .filter(f => f.endsWith('.json') && f !== 'latest.json')
         .map(f => {
-          // 从文件名提取 id，避免 parse JSON
           const id = f.replace('.json', '');
           const stat = fs.statSync(path.join(this.checkpointDir, f));
-          return {
-            id,
-            timestamp: stat.mtime.toISOString(),
-            messageCount: 0,
-            _size: stat.size,
-          };
+          return { id, timestamp: stat.mtime.toISOString() };
         })
         .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
     } catch {

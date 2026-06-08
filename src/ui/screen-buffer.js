@@ -8,9 +8,6 @@ class ScreenBuffer {
     this._lastRender = this._createEmptyGrid();
   }
 
-  /**
-   * 创建空的网格
-   */
   _createEmptyGrid() {
     const grid = [];
     for (let row = 0; row < this.height; row++) {
@@ -22,23 +19,11 @@ class ScreenBuffer {
     return grid;
   }
 
-  /**
-   * 设置单个单元格
-   * @param {number} row - 行 (1-based for external, 0-based internal)
-   * @param {number} col - 列
-   * @param {string} char - 字符
-   * @param {string|null} style - 样式（保留字段）
-   */
   setCell(row, col, char, style = null) {
     if (row < 0 || row >= this.height || col < 0 || col >= this.width) {return;}
     this._cells[row][col] = { char, style };
   }
 
-  /**
-   * 获取单个单元格
-   * @param {number} row - 行 (0-based)
-   * @param {number} col - 列
-   */
   getCell(row, col) {
     if (row < 0 || row >= this.height || col < 0 || col >= this.width) {
       return null;
@@ -54,21 +39,11 @@ class ScreenBuffer {
     }
   }
 
-  /**
-   * 获取一行内容
-   * @param {number} row - 行 (0-based)
-   * @returns {Array} 该行的单元格数组
-   */
   getRow(row) {
     if (row < 0 || row >= this.height) {return [];}
     return this._cells[row];
   }
 
-  /**
-   * 设置一行内容
-   * @param {number} row - 行 (0-based)
-   * @param {Array} cells - 该行的单元格数组 [{char, style}, ...]
-   */
   setRow(row, cells) {
     if (row < 0 || row >= this.height) {return;}
     for (let col = 0; col < this.width; col++) {
@@ -80,10 +55,7 @@ class ScreenBuffer {
     }
   }
 
-  /**
-   * 计算两个缓冲区的差异
-   * @returns {Array} 需要更新的区域列表 [{row, startCol, endCol}, ...]
-   */
+  // 计算两个缓冲区的差异
   diff() {
     const changes = [];
 
@@ -117,9 +89,7 @@ class ScreenBuffer {
     return changes;
   }
 
-  /**
-   * 提交当前帧作为上一帧（用于下次 diff）
-   */
+  // 提交当前帧作为上一帧（用于下次 diff）
   commit() {
     // 深拷贝
     for (let row = 0; row < this.height; row++) {
@@ -129,11 +99,6 @@ class ScreenBuffer {
     }
   }
 
-  /**
-   * 更新尺寸
-   * @param {number} width - 新宽度
-   * @param {number} height - 新高度
-   */
   resize(width, height) {
     const newCells = [];
     for (let row = 0; row < height; row++) {

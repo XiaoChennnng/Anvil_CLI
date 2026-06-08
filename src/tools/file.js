@@ -11,20 +11,18 @@ function isPathSafe(targetPath, projectDir) {
   return !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
-const MAX_FILE_READ_SIZE = 2 * 1024 * 1024; // 2MB — 大文件安全读取上限
+const MAX_FILE_READ_SIZE = 2 * 1024 * 1024;
 
 async function readFile(params, context) {
   const { filePath } = params;
   const projectDir = context.projectDir;
   const resolvedPath = path.resolve(projectDir, filePath);
 
-  // 安全校验
   if (!isPathSafe(resolvedPath, projectDir)) {
     return { error: `访问被拒绝: 路径超出项目目录 (${filePath})` };
   }
 
   try {
-    // 异步打开文件，失败抛 ENOENT
     let fileHandle;
     let stat;
     try {
@@ -37,7 +35,7 @@ async function readFile(params, context) {
       throw openErr;
     }
 
-    // 二进制文件检测（读取前512字节检查 \0）
+    // 检测二进制文件（前 512 字节检查 \0）
     let isBinary = false;
     if (stat.size > 0) {
       const readSize = Math.min(512, stat.size);
@@ -58,7 +56,7 @@ async function readFile(params, context) {
       };
     }
 
-    // 处理大文件：如果有 maxLines 或 offset/limit，分段读取
+    // 大文件分段读取
     const maxLines = params.maxLines || params.limit || 0;
     let content;
     if (maxLines > 0) {
@@ -99,16 +97,14 @@ async function writeFile(params, context) {
     return { error: '计划模式下禁止写入文件（Anvil.md 除外）' };
   }
 
-  // 安全校验
   if (!isPathSafe(resolvedPath, projectDir)) {
     return { error: `访问被拒绝: 路径超出项目目录 (${filePath})` };
   }
 
   try {
-    // 确保父目录存在
     await fsp.mkdir(path.dirname(resolvedPath), { recursive: true });
 
-    // 文件冲突检测（P1: mtime 检查）
+    // 文件冲突检测（mtime 检查）
     if (params.checkConflict && context.fileTimestamps) {
       const prevTimestamp = context.fileTimestamps[filePath];
       if (prevTimestamp) {
@@ -139,7 +135,7 @@ async function writeFile(params, context) {
 
     const stat = await fsp.stat(resolvedPath);
 
-    // 追加模式时计算已有行数，用于 UI 显示真实行号
+    // 追加模式时计算已有行数
     let appendStartLine = 0;
     if (writeMode === 'a') {
       const existingContent = await fsp.readFile(resolvedPath, 'utf8');
@@ -166,7 +162,6 @@ async function editFile(params, context) {
   const projectDir = context.projectDir;
   const resolvedPath = path.resolve(projectDir, filePath);
 
-  // 计划模式下禁止编辑文件
   if (context.planModeRestricted) {
     return { error: '计划模式下禁止编辑文件' };
   }
@@ -190,7 +185,7 @@ async function editFile(params, context) {
       throw readErr;
     }
 
-    // 单次遍历：查找所有匹配位置（替代 split 计数 + 循环查找 + 再次 indexOf 的三次扫描）
+    // 单次遍历查找所有匹配
     const positions = [];
     let pos = 0;
     while (true) {
@@ -268,19 +263,12 @@ async function editFile(params, context) {
   }
 }
 
-/**
- * 删除文件
- * @param {Object} params
- * @param {string} params.filePath
- * @param {Object} context
- * @returns {Promise<Object>}
- */
+// 删除文件
 async function deleteFile(params, context) {
   const { filePath } = params;
   const projectDir = context.projectDir;
   const resolvedPath = path.resolve(projectDir, filePath);
 
-  // 计划模式下禁止删除文件
   if (context.planModeRestricted) {
     return { error: '计划模式下禁止删除文件' };
   }
@@ -309,13 +297,7 @@ async function deleteFile(params, context) {
   }
 }
 
-/**
- * 创建目录
- * @param {Object} params
- * @param {string} params.path - 目录路径
- * @param {Object} context
- * @returns {Promise<Object>}
- */
+// 创建目录
 async function createDirectory(params, context) {
   const dirPath = params.path;
   const projectDir = context.projectDir;
@@ -333,16 +315,7 @@ async function createDirectory(params, context) {
   }
 }
 
-/**
- * 目录列表
- * @param {Object} params
- * @param {string} [params.dirPath='.'] - 目录路径
- * @param {boolean} [params.recursive=false] - 是否递归遍历
- * @param {number} [params.maxDepth=2] - 最大递归深度
- * @param {string} [params.pattern] - 过滤模式（如 *.js）
- * @param {Object} context
- * @returns {Promise<Object>}
- */
+// 目录列表
 async function listDirectory(params, context) {
   const dirPath = params.dirPath || '.';
   const projectDir = context.projectDir;
@@ -377,10 +350,8 @@ async function listDirectory(params, context) {
         const fullPath = path.join(dirPath, entry.name);
         const relativePath = path.relative(projectDir, fullPath);
 
-        // 跳过 node_modules 和 .git
         if (entry.name === 'node_modules' || entry.name === '.git') {continue;}
 
-        // 模式过滤
         if (pattern && depth === 0) {
           if (!minimatch(entry.name, pattern)) {continue;}
         }
@@ -425,15 +396,7 @@ async function listDirectory(params, context) {
   }
 }
 
-/**
- * 文件名模式匹配搜索（glob）
- * @param {Object} params
- * @param {string} params.pattern - glob 模式（如 **\/*.js）
- * @param {string} [params.cwd] - 搜索根目录
- * @param {string[]} [params.ignore] - 忽略的模式
- * @param {Object} context
- * @returns {Promise<Object>}
- */
+// glob 文件名模式匹配搜索
 async function globFiles(params, context) {
   const { pattern, ignore } = params;
   const cwd = params.cwd || '.';
@@ -466,17 +429,7 @@ async function globFiles(params, context) {
   }
 }
 
-/**
- * 跨文件内容搜索（类似 grep）
- * @param {Object} params
- * @param {string} params.pattern - 搜索模式（正则）
- * @param {string} [params.include] - 文件过滤（如 *.js）
- * @param {string} [params.cwd] - 搜索根目录
- * @param {number} [params.maxResults=50] - 最大结果数
- * @param {number} [params.contextLines=0] - 上下文行数
- * @param {Object} context
- * @returns {Promise<Object>}
- */
+// 跨文件内容搜索（类似 grep）
 async function searchInFiles(params, context) {
   const { pattern, include, maxResults, contextLines } = params;
   const cwd = params.cwd || '.';
@@ -496,12 +449,12 @@ async function searchInFiles(params, context) {
     const searchFile = async (filePath) => {
       if (results.length >= max) {return;}
 
-      // 跳过二进制文件和大文件
+      // 跳过二进制文件和大文件的最小化检查
       let stat;
       try {
         stat = await fsp.stat(filePath);
       } catch { return; }
-      if (stat.size > 1024 * 1024) {return;} // 跳过 >1MB
+      if (stat.size > 1024 * 1024) {return;}
 
       let content;
       try {
@@ -530,7 +483,6 @@ async function searchInFiles(params, context) {
           results.push(match);
         }
 
-        // 重置 regex lastIndex
         regex.lastIndex = 0;
       }
     };
@@ -548,13 +500,11 @@ async function searchInFiles(params, context) {
 
         const fullPath = path.join(dir, entry.name);
 
-        // 跳过 node_modules 和 .git
         if (entry.name === 'node_modules' || entry.name === '.git') {continue;}
 
         if (entry.isDirectory()) {
           await walkDir(fullPath);
         } else {
-          // 文件过滤
           if (include) {
             if (!minimatch(entry.name, include)) {continue;}
           }
@@ -577,22 +527,13 @@ async function searchInFiles(params, context) {
   }
 }
 
-/**
- * 移动/重命名文件
- * @param {Object} params
- * @param {string} params.source - 源路径
- * @param {string} params.destination - 目标路径
- * @param {boolean} [params.overwrite=false] - 是否覆盖已存在文件
- * @param {Object} context
- * @returns {Promise<Object>}
- */
+// 移动/重命名文件
 async function moveFile(params, context) {
   const { source, destination, overwrite } = params;
   const projectDir = context.projectDir;
   const resolvedSource = path.resolve(projectDir, source);
   const resolvedDest = path.resolve(projectDir, destination);
 
-  // 计划模式下禁止移动/重命名文件
   if (context.planModeRestricted) {
     return { error: '计划模式下禁止移动/重命名文件' };
   }
@@ -617,7 +558,6 @@ async function moveFile(params, context) {
         return { error: `目标已存在: ${destination}。设置 overwrite=true 覆盖` };
       }
     } catch {
-      // 目标不存在，可以继续
     }
 
     // 确保目标父目录存在
@@ -635,10 +575,7 @@ async function moveFile(params, context) {
   }
 }
 
-/**
- * 注册文件操作工具到 registry
- * @param {Object} registry - ToolRegistry 实例
- */
+// 注册文件操作工具
 function registerFileTools(registry) {
   registry.register({
     name: 'read_file',

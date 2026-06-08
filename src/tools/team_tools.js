@@ -1,12 +1,6 @@
 'use strict';
 
-/**
- * Team Mode 相关工具
- * - start_team_task: 主动发起团队任务
- * - evaluate_task_complexity: 评估任务复杂度
- * - dissolve_team: 解散当前团队
- * - get_team_status: 查看团队状态
- */
+// Team Mode 工具
 
 async function startTeamTask(params, context) {
   const chatEngine = context.chatEngine;
@@ -68,9 +62,7 @@ async function getTeamStatus(params, context) {
   }
 }
 
-/**
- * 注册 Team Mode 相关工具
- */
+// 注册 Team Mode 工具
 function registerTeamTools(registry, chatEngine) {
   registry.register({
     name: 'start_team_task',

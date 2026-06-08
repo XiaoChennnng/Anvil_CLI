@@ -46,11 +46,6 @@ function registerMCPServerTools(toolRegistry, mcpManager, serverName, tools) {
       },
     };
 
-    toolDef._mcp = {
-      serverName,
-      toolName: tool.name,
-    };
-
     toolRegistry.register(toolDef);
     registeredNames.push(fullName);
   }

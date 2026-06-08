@@ -59,7 +59,7 @@ class Logger {
     }
     line += '\n';
 
-    // 反压保护：write 返回 false 时丢弃（避免内存膨胀）
+    // 反压保护: write 返回 false 时丢弃
     if (!stream.write(line)) {
       this._streamDropped = (this._streamDropped || 0) + 1;
     }

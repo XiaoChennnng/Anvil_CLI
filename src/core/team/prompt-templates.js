@@ -1,7 +1,5 @@
 /**
- * 动态提示词生成器
- * 根据任务上下文、角色和约束条件动态组装提示词
- * @file prompt-templates.js
+ * 动态提示词生成器：根据任务上下文、角色和约束条件组装提示词
  */
 
 const { AgentRoles } = require('./constants');

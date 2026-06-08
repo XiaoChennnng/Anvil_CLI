@@ -15,9 +15,6 @@ class Editor {
     this._needsRefresh = false;  // 增量渲染标志
   }
 
-  /**
-   * 判断是否为 CJK 双倍宽字符
-   */
   _isCJK(char) {
     const code = char.charCodeAt(0);
     return (code >= 0x1100 && code <= 0x115F) ||
@@ -30,9 +27,6 @@ class Editor {
       (code >= 0x3000 && code <= 0x303F);
   }
 
-  /**
-   * 计算字符串的可见宽度（支持 CJK 双倍宽字符）
-   */
   _visibleWidth(str) {
     let width = 0;
     let inEscape = false;
@@ -45,10 +39,6 @@ class Editor {
     return width;
   }
 
-  /**
-   * 渲染输入区（增量渲染模式，固定位置写入，类似侧边栏）
-   * 使用 ANSI 定位确保输入框始终在正确位置，不被消息区覆盖
-   */
   render() {
     const { editorStartRow, _width } = this.layout;
     const t = this.theme;
@@ -66,9 +56,6 @@ class Editor {
     return output;
   }
 
-  /**
-   * 获取输入提示位置
-   */
   get promptRow() {
     return this.layout.editorStartRow + 1;
   }
@@ -78,10 +65,6 @@ class Editor {
     return 4;
   }
 
-  /**
-   * 处理键盘输入
-   * @returns {{ action: string, text?: string } | null}
-   */
   handleKey(buf) {
     // Enter - 发送 (1:1 复刻 opencode: \+Enter 换行)
     if (buf[0] === 0x0d) {
@@ -226,9 +209,6 @@ class Editor {
     return null;
   }
 
-  /**
-   * 重绘输入区域 + 光标归位
-   */
   _redrawInput() {
     const row = this.promptRow;
     const t = this.theme;
@@ -251,39 +231,26 @@ class Editor {
     this._restoreCursor();
   }
 
-  /**
-   * 恢复光标到当前位置（无闪烁，不重绘内容）
-   * 使用可见宽度计算光标位置，支持 CJK 双倍宽字符
-   */
+  // 恢复光标到当前位置，支持 CJK 双倍宽字符
   _restoreCursor() {
     this.layout.showCursor();
     this.layout.moveTo(this.promptRow, this.getCursorColumn());
   }
 
-  /**
-   * 计算光标当前应处的列号（公共 API，供 TUI 重绘时复用）
-   * 用可见宽度计算偏移，自动支持 CJK 双倍宽字符
-   * @returns {number} 1-based 列号
-   */
+  // 计算光标当前应处的列号（公共 API，供 TUI 重绘时复用）
   getCursorColumn() {
     const pos = this.cursorPos ?? this.currentInput?.length ?? 0;
     const inputBeforeCursor = (this.currentInput || '').slice(0, pos);
     return this.promptCol + this._visibleWidth(inputBeforeCursor);
   }
 
-  /**
-   * 重置
-   */
   reset() {
     this.currentInput = '';
     this.cursorPos = 0;
     this.inputLines = [];
   }
 
-  /**
-   * 设置编辑器文本
-   * @param {string} text - 要设置的文本
-   */
+  // 设置编辑器文本
   setText(text) {
     this.currentInput = text;
     this.cursorPos = text.length;

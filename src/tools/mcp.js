@@ -1,27 +1,12 @@
 'use strict';
 
-/**
- * MCP 管理工具
- *
- * 提供 3 个 AI 可调用的工具，用于在对话中动态管理 MCP 服务器：
- * - mcp_add_server: 添加并连接 MCP 服务器
- * - mcp_remove_server: 断开并移除 MCP 服务器
- * - mcp_list_servers: 列出所有 MCP 服务器状态
- *
- * 动态管理 MCP 服务器，AI 可自行连接或断开外部 MCP 服务器。
- */
+// MCP 管理工具：动态添加/移除/罗列 MCP 服务器
 
-/**
- * 注册 MCP 管理工具到 ToolRegistry
- * @param {Object} toolRegistry - Anvil 工具注册器
- * @param {Object} mcpManager - MCP 连接管理器
- * @param {Object} config - 全局配置（含 projectDir）
- * @param {Object} logger - 日志器
- */
+// 注册 MCP 管理工具
 function registerMCPTools(toolRegistry, mcpManager, config, logger) {
   const { saveMCPConfig } = require('../config/loader');
 
-  // ==================== mcp_add_server ====================
+  // ---- mcp_add_server ----
   toolRegistry.register({
     name: 'mcp_add_server',
     description: '添加并连接一个新的 MCP 服务器。AI 可以通过此工具动态连接外部的 MCP 服务器，连接后该服务器的工具将自动注册为 mcp__<服务器名>__<工具名> 格式供后续调用。',
@@ -76,7 +61,6 @@ function registerMCPTools(toolRegistry, mcpManager, config, logger) {
         return { error: 'name 和 transport 是必填参数' };
       }
 
-      // 构建服务器配置
       const serverConfig = { transport };
       if (command) {serverConfig.command = command;}
       if (args) {serverConfig.args = args;}
@@ -85,7 +69,6 @@ function registerMCPTools(toolRegistry, mcpManager, config, logger) {
       if (env) {serverConfig.env = env;}
       if (cwd) {serverConfig.cwd = cwd;}
 
-      // 校验参数完整性
       if (transport === 'stdio' && !command) {
         return { error: 'stdio 模式必须提供 command 参数' };
       }
@@ -94,7 +77,6 @@ function registerMCPTools(toolRegistry, mcpManager, config, logger) {
       }
 
       try {
-        // 连接服务器（由 MCPManager 处理重试）
         const result = await mcpManager.addServer(name, serverConfig);
 
         if (result.status === 'connected') {
@@ -129,7 +111,7 @@ function registerMCPTools(toolRegistry, mcpManager, config, logger) {
     },
   });
 
-  // ==================== mcp_remove_server ====================
+  // ---- mcp_remove_server ----
   toolRegistry.register({
     name: 'mcp_remove_server',
     description: '断开并移除一个已连接的 MCP 服务器。移除后该服务器的所有工具将不再可用。',
@@ -176,7 +158,7 @@ function registerMCPTools(toolRegistry, mcpManager, config, logger) {
     },
   });
 
-  // ==================== mcp_list_servers ====================
+  // ---- mcp_list_servers ----
   toolRegistry.register({
     name: 'mcp_list_servers',
     description: '列出所有已配置的 MCP 服务器及其状态、注册的工具列表。用于查看 MCP 服务器运行状况。',

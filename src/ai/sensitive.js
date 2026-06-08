@@ -47,9 +47,7 @@ const SENSITIVE_PATTERNS = [
   },
 ];
 
-/**
- * 用字符串方法检测并替换 PRIVATE KEY 块（避免正则灾难性回溯）
- */
+/** 用字符串方法检测并替换 PRIVATE KEY 块（避免正则灾难性回溯） */
 function _redactPrivateKeys(text) {
   const sanitized = text;
   let count = 0;
@@ -82,7 +80,6 @@ function _redactPrivateKeys(text) {
       continue;
     }
 
-    // 定位 KEY 块的真正结尾
     const keyEnd = sanitized.indexOf('-----', endIdx + 8);
     const blockEnd = keyEnd !== -1 ? keyEnd + 5 : endIdx + 30;
 
@@ -108,7 +105,6 @@ function detectAndReplace(text) {
 
   for (const rule of SENSITIVE_PATTERNS) {
     if (rule.useStringMethod) {
-      // 字符串方法处理（PRIVATE_KEY），避免灾难性回溯
       const { sanitized: s, count } = _redactPrivateKeys(sanitized);
       if (count > 0) {
         detections.push({ type: rule.name, count });

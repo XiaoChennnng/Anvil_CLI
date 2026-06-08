@@ -6,12 +6,10 @@ const { EventEmitter } = require('events');
 const SessionCache = require('../ai/cache');
 const { getSystemPrompt, getAgentCheckPrompt, getAgentContinuePrompt } = require('../ai/prompts');
 
-// 默认最大迭代次数（不再按关键词猜复杂度，AI 自己通过 enter_plan_mode 申请批准）
+// AI 自主循环上限
 const DEFAULT_MAX_ITERATIONS = 100;
 
-/**
- * 解析 task_complete 结果，健壮处理各种格式
- */
+// 解析 task_complete 结果，处理各种格式
 function parseTaskCompleteResult(content) {
   if (!content) { return { complete: null, reason: 'no_result' }; }
   try {
@@ -28,9 +26,7 @@ function parseTaskCompleteResult(content) {
   }
 }
 
-/**
- * 生成任务指纹，用于压缩后检测任务是否丢失
- */
+// 生成任务指纹，用于压缩后检测任务是否丢失
 function generateTaskFingerprint(task) {
   if (!task) { return { keyWords: [], full: '' }; }
   const words = task.split(/[\s,.，、。]+/).filter(w => w.length > 1);
@@ -39,9 +35,7 @@ function generateTaskFingerprint(task) {
   return { keyWords: keyWords.slice(0, 5), full: task.slice(0, 80), length: task.length };
 }
 
-/**
- * 检测任务是否在压缩后丢失
- */
+// 检测任务是否在压缩后丢失
 function isTaskLost(messages, fingerprint) {
   if (!fingerprint.keyWords.length) { return false; }
   const allText = messages.map(m => m.content || '').join('');
@@ -65,26 +59,15 @@ class ChatEngine extends EventEmitter {
     this.isProcessing = false;
     this._aborted = false;
 
-    // 用于文件冲突检测的时间戳记录
     this.fileTimestamps = {};
-
-    // 当前任务描述（用于自主检查）
     this._currentTask = null;
-
-    // 抑制 UI 事件标志：_agentLoop 内部 check/continue 消息不应渲染到 TUI
-    this._suppressUI = false;
-
-    // Plan Mode 状态
+    this._suppressUI = false; // _agentLoop 内部消息不渲染到 UI
     this._planMode = false;
     this._planModeFilePath = null;
     this._awaitingPlanApproval = false;
     this._planApproved = false;
     this._pendingPlan = null;
-
-    // AskUserQuestion 等待状态
     this._pendingQuestionResolve = null;
-
-    // 团队模式状态（Team System）
     this.teamManager = null;
     this.teamMode = false;
 
@@ -280,13 +263,7 @@ class ChatEngine extends EventEmitter {
     }
   }
 
-  /**
-   * 自主 Agent 循环
-   * AI 自行决定何时执行、何时调用 enter_plan_mode 请求批准、何时调用 task_complete 结束
-   * 代码层不再猜关键词——AI 在 System Prompt 里被明确告知规则
-   * @param {string} originalTask - 原始任务
-   * @returns {Promise<Object>} 最终结果
-   */
+  // 自主 Agent 循环，AI 自行决定何时执行/请求批准/完成
   async _agentLoop(originalTask) {
     const maxIterations = DEFAULT_MAX_ITERATIONS;
     const startTime = Date.now();
@@ -305,9 +282,7 @@ class ChatEngine extends EventEmitter {
     fullThinking += result.thinking || '';
     lastUsage = result.usage;
 
-    // ── Plan Mode 批准检测（检测 AI 是否调用了 request_plan_approval 工具） ──
-
-    // 1. AI 调用了 request_plan_approval → 暂停等用户确认
+    // Plan Mode：AI 调用 request_plan_approval → 暂停等用户确认
     if (this._planMode && this._awaitingPlanApproval) {
       this.logger?.info('Plan Mode: AI 调用了 request_plan_approval，暂停等待确认');
       return {
@@ -319,7 +294,7 @@ class ChatEngine extends EventEmitter {
       };
     }
 
-    // 2. Plan Mode下调了非规划工具 → 重新引导 AI 先提交计划
+    // Plan Mode 下调了非规划工具 → 重新引导 AI 先提交计划
     if (this._planMode && !this._planApproved && !this._awaitingPlanApproval && result.hadToolCalls) {
       const requestedApproval = result.toolCalls?.some(
         tc => tc.function?.name === 'request_plan_approval'
@@ -327,14 +302,12 @@ class ChatEngine extends EventEmitter {
       if (!requestedApproval) {
         this.logger?.info('Plan Mode: AI 调用了非规划工具，重新引导');
 
-        // 将 AI 当前回复加入历史
         this.messages.push({
           role: 'assistant',
           content: result.content || '',
           reasoning_content: result.thinking || '',
         });
 
-        // 注入引导消息
         this.messages.push({
           role: 'user',
           content: '[系统提示] 你在 Plan Mode 下，必须先输出结构化计划方案并调用 request_plan_approval 工具请求批准，然后才能执行其他操作。请立即回到规划阶段。',
@@ -425,7 +398,7 @@ class ChatEngine extends EventEmitter {
         }
       }
 
-      // 将当前结果加入历史（避免重复：_sendAndProcess 在工具调用时已推入）
+      // 将当前结果加入历史
       const lastMsg = this.messages[this.messages.length - 1];
       const isDuplicate = lastMsg && lastMsg.role === 'assistant'
         && lastMsg.content === (result.content || '')
@@ -452,7 +425,7 @@ class ChatEngine extends EventEmitter {
         content: checkMsg,
       });
 
-      // 发送检查请求（内部消息，不渲染到 UI）
+      // 发送检查请求（内部消息）
       this._suppressUI = true;
       const checkResult = await this._sendAndProcess();
       this._suppressUI = false;
@@ -467,7 +440,7 @@ class ChatEngine extends EventEmitter {
         reasoning_content: checkResult.thinking || '',
       });
 
-      // ─── 完成检测：只有明确调用 task_complete 且返回 complete=true 才停止 ───
+      // 完成检测：只有 task_complete 返回 complete=true 才停止
       const calledTaskComplete = checkResult.toolCalls?.some(
         tc => tc.function?.name === 'task_complete'
       );
@@ -489,11 +462,9 @@ class ChatEngine extends EventEmitter {
         // 有未完成或不确定，继续执行
       }
 
-      // ─── 保护性限制：只有真正卡住才停 ───
-      // AI 在干活（有工具调用）就不该停，maxIterations 只是最终保护
-      // 移除 iterationCount >= maxIterations 的自动 break
+      // AI 在干活就不该停，maxIterations 只是最终保护
 
-      // ─── 任务未完成，继续执行 ───
+      // 任务未完成，继续执行
       this.messages.push({
         role: 'user',
         content: getAgentContinuePrompt(),
@@ -504,8 +475,7 @@ class ChatEngine extends EventEmitter {
       fullThinking += result.thinking || '';
       lastUsage = result.usage || lastUsage;
 
-      // ─── "继续"后无工具调用的处理 ───
-      // 真正的动态：AI 在干活就不停，只有连续多次真正卡住才停
+      // "继续"后无工具调用：AI 干活不停，连续多次卡住才停
       if (!result.hadToolCalls) {
         // 检查当前回复中是否包含 task_complete 调用
         if (result.toolCalls?.some(tc => tc.function?.name === 'task_complete')) {
@@ -525,8 +495,7 @@ class ChatEngine extends EventEmitter {
           break;
         }
 
-        // 连续两轮无工具调用，可能是真正卡住了
-        // 但先检查 AI 是否有实际内容输出（可能在写大段代码/文档）
+        // 连续两轮无工具调用，可能是卡住了
         const hasSubstantialContent = (recheckResult.content || '').length > 200;
         if (!hasSubstantialContent) {
           this.logger?.warn('AI 可能卡住', { iterationCount });
@@ -550,9 +519,7 @@ class ChatEngine extends EventEmitter {
     };
   }
 
-  /**
-   * 发送消息并处理响应（含工具调用循环 + 自动继续）
-   */
+  // 发送消息并处理响应（含工具调用循环 + 自动继续）
   async _sendAndProcess() {
     let loopCount = 0;
     const maxLoops = 10; // 防止无限工具调用循环
@@ -569,9 +536,7 @@ class ChatEngine extends EventEmitter {
     while (loopCount < maxLoops) {
       loopCount++;
 
-      // 准备 API 请求（必须正确传递 reasoning_content）
-      // 规则：有 tool_calls 的 assistant 消息必须携带 reasoning_content 给后续所有请求
-      // 无 tool_calls 的 assistant 消息的 reasoning_content 可选（API 会忽略）
+      // 准备 API 请求：带 tool_calls 的 assistant 消息必须携带 reasoning_content
       const apiMessages = this.messages.map((m) => {
         const msg = {
           role: m.role,
@@ -638,9 +603,7 @@ class ChatEngine extends EventEmitter {
         // 注意：内容已通过 AI 客户端的流式发射（aiClient.on('content')）发送到 UI
         // 这里不需要再次发射 response.content，避免重复
 
-        // 先添加 AI 回复（含工具调用 + reasoning_content）到消息历史
-        // 重要：带 tool_calls 的 assistant 消息必须保留 reasoning_content
-        // 后续所有请求都必须携带，否则 API 返回 400
+        // AI 回复（含 tool_calls + reasoning_content）加入消息历史
         const assistantMsg = {
           role: 'assistant',
           content: response.content || null,
@@ -658,13 +621,10 @@ class ChatEngine extends EventEmitter {
         };
         this.messages.push(assistantMsg);
 
-        // 逐个执行工具调用：每个工具调用 → 立即显示结果，实现 1:1 对应
-        // 关键修复：AI 在同一次响应中调 request_plan_approval + 其他工具时，
-        // 必须在 request_plan_approval 执行后立即中断后续工具，避免覆盖 plan 提示
+        // 逐个执行工具调用，request_plan_approval 触发后中断后续工具
         let awaitingPlanBreak = false;
         for (const toolCall of response.toolCalls) {
-          // request_plan_approval 已触发：跳过后续工具，但必须推入 tool result
-          // （OpenAI 协议要求每个 tool_call_id 都有对应 result，否则下一次 API 调用会 400）
+          // request_plan_approval 已触发：跳过后续工具（仍需推入 tool result）
           if (awaitingPlanBreak) {
             if (!this._suppressUI) {this.emit('tool_calls', toolCall);}
             this.messages.push({
@@ -681,7 +641,7 @@ class ChatEngine extends EventEmitter {
             continue;
           }
 
-          // 逐个发射工具调用事件（UI 逐个展示，与结果一一对应）
+          // 逐个发射工具调用事件（UI 逐个展示）
           if (!this._suppressUI) {this.emit('tool_calls', toolCall);}
           const name = toolCall.function?.name || '';
           let args = {};
@@ -693,7 +653,7 @@ class ChatEngine extends EventEmitter {
             args = {};
           }
 
-          // 执行工具（含超时保护，防止某个工具卡死整个循环）
+          // 执行工具（含 120s 超时保护）
           const TOOL_TIMEOUT = 120 * 1000; // 120s
           let result;
           let toolTimeoutId;
@@ -727,7 +687,7 @@ class ChatEngine extends EventEmitter {
             ]);
             clearTimeout(toolTimeoutId);
             if (!this._suppressUI) {this.emit('tool_result', { name, result, toolCall });}
-            // 通知上下文管理器工具调用（用于相位检测 + 文件预取）
+            // 通知上下文管理器（相位检测 + 文件预取）
             if (this.contextManager && typeof this.contextManager.recordToolCall === 'function') {
               this.contextManager.recordToolCall(name, args);
               // 写/读文件操作后尝试预取关联文件
@@ -743,8 +703,7 @@ class ChatEngine extends EventEmitter {
             result = { error: `工具执行失败: ${err.message}` };
           }
 
-          // 将工具调用结果加入消息历史（限制大小防止撑爆上下文）
-          // 先截断大字符串字段再 JSON.stringify，避免大文件/命令输出序列化阻塞 event loop
+          // 将工具调用结果截断后加入消息历史
           let resultStr;
           const MAX_RESULT_LEN = 4000;
           if (result && typeof result === 'object') {
@@ -790,11 +749,11 @@ class ChatEngine extends EventEmitter {
         continue;
       }
 
-      // 检测截断：finishReason === 'length' 表示输出被截断，需要自动继续
+      // 检测截断：finishReason === 'length' 时自动继续
       if (response.finishReason === 'length' && continueCount < maxContinues) {
         continueCount++;
 
-        // 将已有的内容加入消息历史，让 AI 知道从哪里继续
+        // 将已有内容加入消息历史让 AI 继续
         this.messages.push({
           role: 'assistant',
           content: response.content || '',
@@ -818,7 +777,6 @@ class ChatEngine extends EventEmitter {
       }
 
       // 无工具调用且未截断，对话结束
-      // 注意：内容已通过 AI 客户端的流式发射发送到 UI，不需要再次发射
       break;
     }
 
@@ -831,11 +789,6 @@ class ChatEngine extends EventEmitter {
     };
   }
 
-  /**
-   * 压缩对话上下文（供 compact_context 工具和 /compact 命令调用）
-   * @param {Object} options - 见 ContextManager.compactContext
-   * @returns {{ messages: Array, stats: Object }}
-   */
   async compactContext(options, skipSemanticSummary = false) {
     if (!this.contextManager) {
       return { messages: this.messages, stats: { compressed: false, error: '上下文管理器未初始化' } };
@@ -866,11 +819,6 @@ class ChatEngine extends EventEmitter {
     return result;
   }
 
-  /**
-   * 清除当前任务，注入系统通知让 AI 重置工作状态
-   * 由 /todo clear 或自然语言"清除todolist"触发
-   * @param {string} reason - 清除原因
-   */
   clearTask(reason = '用户清空了任务列表') {
     this.messages.push({
       role: 'user',
@@ -881,9 +829,7 @@ class ChatEngine extends EventEmitter {
     if (this.logger) {this.logger.info('任务已清除', { reason });}
   }
 
-  /**
-   * 检测用户输入是否为上下文压缩请求
-   */
+  // 检测用户输入是否为压缩请求
   _isCompressionRequest(input) {
     if (!input || typeof input !== 'string') {return false;}
     const trimmed = input.trim().toLowerCase();
@@ -908,9 +854,7 @@ class ChatEngine extends EventEmitter {
     return patterns.some(p => p.test(trimmed));
   }
 
-  /**
-   * 处理上下文压缩请求
-   */
+  // 处理上下文压缩请求
   async _handleCompressionRequest(input) {
     const trimmed = input.trim().toLowerCase();
 
@@ -981,10 +925,7 @@ class ChatEngine extends EventEmitter {
     }
   }
 
-  /**
-   * 查找最后一条语义摘要消息在消息数组中的索引
-   * @returns {number} 索引，-1 表示没有现有摘要
-   */
+  // 查找最后一条语义摘要的索引
   _findLastSemanticSummaryIndex() {
     for (let i = this.messages.length - 1; i >= 0; i--) {
       if (this.messages[i]._semanticSummary) {
@@ -994,11 +935,6 @@ class ChatEngine extends EventEmitter {
     return -1;
   }
 
-  /**
-   * 计算语义摘要的 Token 预算
-   * 基于待摘要的消息数量和窗口大小动态分配
-   * @returns {number} 可用预算（tokens）
-   */
   _calculateSummaryBudget() {
     const windowSize = this.contextManager?.windowSize || 1_000_000;
 
@@ -1017,13 +953,7 @@ class ChatEngine extends EventEmitter {
     return budget;
   }
 
-  /**
-   * AI 语义压缩：调用 AI 生成语义摘要
-   * 在规则压缩前先用 AI 理解对话内容，生成语义级别的摘要
-   * 使用动态 Token 预算替代固定句子数限制，对话越长摘要越详细
-   * @param {number} budget - 可用的 Token 预算
-   * @returns {Promise<string>} 语义摘要内容
-   */
+  // AI 语义压缩：生成语义摘要
   async _generateSemanticSummary(budget = 200) {
     if (!this.aiClient) {return '';}
 
@@ -1077,10 +1007,7 @@ class ChatEngine extends EventEmitter {
     }
   }
 
-  /**
-   * 检测用户输入是否为"清除todolist"请求
-   * 自然语言检测，不依赖 /todo clear 命令
-   */
+  // 检测用户输入是否为清除 todolist 请求
   _isTodoClearRequest(input) {
     if (!input || typeof input !== 'string') {return false;}
     const patterns = [
@@ -1091,10 +1018,7 @@ class ChatEngine extends EventEmitter {
     return patterns.some(p => p.test(input.trim()));
   }
 
-  /**
-   * 检查并获取待注入的用户上下文
-   * @returns {Promise<string|null>} 待注入的上下文内容
-   */
+  // 检查并获取待注入的用户上下文
   async _checkPendingContext() {
     return new Promise((resolve) => {
       // 设置一次性监听器，等待 index.js 返回上下文
@@ -1114,9 +1038,6 @@ class ChatEngine extends EventEmitter {
     });
   }
 
-  /**
-   * 中断当前处理
-   */
   interrupt() {
     this._aborted = true;
     if (this.aiClient) {
@@ -1126,10 +1047,6 @@ class ChatEngine extends EventEmitter {
     this.emit('interrupted');
   }
 
-  /**
-   * 切换模型
-   * @param {string} modelName
-   */
   switchModel(modelName) {
     const { isValidModel } = require('../ai/models');
     if (isValidModel(modelName)) {
@@ -1139,10 +1056,6 @@ class ChatEngine extends EventEmitter {
     return false;
   }
 
-  /**
-   * 切换 Plan Mode
-   * @returns {boolean} 切换后的状态
-   */
   togglePlanMode() {
     this._planMode = !this._planMode;
     if (!this._planMode) {
@@ -1156,17 +1069,7 @@ class ChatEngine extends EventEmitter {
     return this._planMode;
   }
 
-  /**
-   * 根据当前 planMode / teamMode 状态构建 System Prompt
-   *
-   * 加载策略（KISS: 按场景精确加载, 最大化 token 节省）:
-   * - 默认: core + tools    (L0+L1+L2 精简 + L3 工具详细)
-   * - planMode: core + plan  (省略 L3, plan 阶段不需要写代码细节)
-   * - teamMode: core + tools + team
-   * - planMode + teamMode: core + plan + team
-   *
-   * @returns {string} System Prompt 内容
-   */
+  // 根据 planMode/teamMode 构建 System Prompt
   _buildSystemPrompt() {
     return getSystemPrompt({
       planMode: this._planMode,
@@ -1175,9 +1078,7 @@ class ChatEngine extends EventEmitter {
     });
   }
 
-  /**
-   * 更新 System Prompt（切换 Plan Mode / Team Mode 后重建 system 消息）
-   */
+  // 更新 System Prompt（Plan/Team Mode 切换后重建 system 消息）
   _updateSystemPrompt() {
     const sysPrompt = this._buildSystemPrompt();
     // 替换第一条 system 消息
@@ -1189,9 +1090,6 @@ class ChatEngine extends EventEmitter {
     }
   }
 
-  /**
-   * 保存计划到 Anvil.md
-   */
   async savePlanToFile(planContent) {
     if (!this.contextManager?.projectDir) {return;}
     const filePath = path.join(this.contextManager.projectDir, 'Anvil.md');
@@ -1206,9 +1104,6 @@ class ChatEngine extends EventEmitter {
     }
   }
 
-  /**
-   * 更新 Anvil.md（追加新内容）
-   */
   async updatePlanInFile(additionalContent) {
     if (!this._planModeFilePath) {return;}
     const fsp = require('fs/promises');
@@ -1221,10 +1116,6 @@ class ChatEngine extends EventEmitter {
     }
   }
 
-  /**
-   * 处理用户问答结果
-   * @param {Array} answers - 用户回答的结果数组
-   */
   resolveQuestion(answers) {
     if (this._pendingQuestionResolve) {
       this._pendingQuestionResolve(answers);
@@ -1232,10 +1123,6 @@ class ChatEngine extends EventEmitter {
     }
   }
 
-  /**
-   * 处理计划批准 — 用户批准 → 按计划执行
-   * @returns {Promise<Object>}
-   */
   async approvePlan() {
     if (!this._awaitingPlanApproval) {return { error: '当前没有待批准的 plan' };}
     this._awaitingPlanApproval = false;
@@ -1256,11 +1143,6 @@ class ChatEngine extends EventEmitter {
     return this._finishPlanResponse(result);
   }
 
-  /**
-   * 处理计划拒绝 — 用户拒绝 → 重新规划
-   * @param {string} [feedback] - 拒绝时可附带反馈
-   * @returns {Promise<Object>}
-   */
   async rejectPlan(feedback) {
     if (!this._awaitingPlanApproval) {return { error: '当前没有待批准的 plan' };}
     this._awaitingPlanApproval = false;
@@ -1278,11 +1160,6 @@ class ChatEngine extends EventEmitter {
     return this._finishPlanResponse(result);
   }
 
-  /**
-   * 处理计划编辑反馈 — 用户给了修改意见
-   * @param {string} feedback
-   * @returns {Promise<Object>}
-   */
   async editPlan(feedback) {
     if (!this._awaitingPlanApproval) {return { error: '当前没有待批准的 plan' };}
     this._awaitingPlanApproval = false;
@@ -1297,11 +1174,6 @@ class ChatEngine extends EventEmitter {
     return this._finishPlanResponse(result);
   }
 
-  /**
-   * 请求进入 Plan Mode（由 enter_plan_mode 工具调用）
-   * @param {string} reason - 进入原因
-   * @returns {Promise<Object>}
-   */
   async requestPlanMode(reason) {
     if (this._planMode) {
       return { alreadyEnabled: true, message: 'Plan Mode 已启用' };
@@ -1321,9 +1193,7 @@ class ChatEngine extends EventEmitter {
     };
   }
 
-  /**
-   * 收尾 Plan → _agentLoop 结果（同 processInput 收尾逻辑）
-   */
+  // 收尾 Plan → _agentLoop 结果
   async _finishPlanResponse(result) {
     // 如果结果仍然是一个 plan（再次产出 plan 而非执行），继续等待批准
     if (result.plan) {
@@ -1363,10 +1233,6 @@ class ChatEngine extends EventEmitter {
     return result;
   }
 
-  /**
-   * 获取对话历史
-   * @returns {Array}
-   */
   getHistory() {
     return this.messages
       .filter((m) => m.role !== 'system')
@@ -1379,19 +1245,12 @@ class ChatEngine extends EventEmitter {
       }));
   }
 
-  /**
-   * 清空对话历史（保留 System Prompt）
-   */
   clearHistory() {
     const systemMsgs = this.messages.filter((m) => m.role === 'system');
     this.messages = systemMsgs;
     this.cache.clear();
   }
 
-  /**
-   * 获取当前状态（包含上下文信息）
-   * @returns {Object}
-   */
   getStatus() {
     const baseStatus = {
       model: this.model,
@@ -1407,13 +1266,8 @@ class ChatEngine extends EventEmitter {
     return baseStatus;
   }
 
-  // ================================================================
-  // 团队模式管理（Team System）
-  // ================================================================
+  // 团队模式管理
 
-  /**
-   * 懒加载并获取 TeamManager 实例
-   */
   async _getTeamManager() {
     if (!this.teamManager) {
       const TeamManager = require('./team/manager');
@@ -1426,11 +1280,6 @@ class ChatEngine extends EventEmitter {
     return this.teamManager;
   }
 
-  /**
-   * 评估任务复杂度，决定是否需要创建团队
-   * @param {string} taskDescription - 任务描述
-   * @returns {Object} 评估结果
-   */
   async _evaluateTeamNeed(taskDescription) {
     const teamManager = await this._getTeamManager();
     const context = {
@@ -1443,11 +1292,6 @@ class ChatEngine extends EventEmitter {
     return await teamManager.evaluateTaskComplexity(taskDescription, context);
   }
 
-  /**
-   * 启动团队任务
-   * @param {string} taskDescription - 任务描述
-   * @returns {Object} 执行结果
-   */
   async _startTeamTask(taskDescription) {
     try {
       // 评估是否需要团队
@@ -1481,67 +1325,6 @@ class ChatEngine extends EventEmitter {
     }
   }
 
-  /**
-   * 设置团队事件监听（供 TUI 绑定）
-   */
-  _setupTeamEventListeners() {
-    if (!this.teamManager) {return;}
-
-    this.teamManager.on('team_created', (data) => {
-      this.emit('team_created', data);
-    });
-
-    this.teamManager.on('agent_created', (data) => {
-      this.emit('subagent_created', data);
-    });
-
-    this.teamManager.on('agent_started', (data) => {
-      this.emit('subagent_started', data);
-    });
-
-    this.teamManager.on('agent_completed', (data) => {
-      this.emit('subagent_completed', data);
-    });
-
-    this.teamManager.on('agent_terminated', (data) => {
-      this.emit('subagent_terminated', data);
-    });
-
-    this.teamManager.on('state_changed', (data) => {
-      this.emit('team_state_changed', data);
-    });
-
-    this.teamManager.on('team_dissolved', (data) => {
-      this.emit('team_mode_end', data);
-    });
-
-    // 子Agent事件转发
-    this.teamManager.on('subagent_thinking', (data) => {
-      this.emit('subagent_thinking', data);
-    });
-
-    this.teamManager.on('subagent_content', (data) => {
-      this.emit('subagent_content', data);
-    });
-
-    this.teamManager.on('subagent_usage', (data) => {
-      this.emit('subagent_usage', data);
-    });
-  }
-
-  /**
-   * 终止团队
-   */
-  async _dissolveTeam() {
-    if (this.teamManager) {
-      await this.teamManager.dissolve();
-    }
-    // 团队解散：移除 L4_TEAM 规则
-    if (this.teamMode) {
-      this.teamMode = false;
-      this._updateSystemPrompt();
-    }
-  }
 }
 
 module.exports = ChatEngine;

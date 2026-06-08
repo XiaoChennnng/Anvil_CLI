@@ -98,15 +98,6 @@ class TeamManager extends EventEmitter {
     };
   }
 
-  // ================================================================
-  // 团队生命周期管理
-  // ================================================================
-
-  /**
-   * 创建团队（静态工厂方法）
-   * @param {Object} options
-   * @returns {Promise<TeamManager>}
-   */
   static async create(options) {
     const team = new TeamManager(options);
     await team._initialize();
@@ -247,102 +238,6 @@ class TeamManager extends EventEmitter {
     };
   }
 
-  // ================================================================
-  // 研究隔离机制
-  // ================================================================
-
-  /**
-   * 在独立研究 context 中执行研究任务
-   * 不污染主 context，只返回摘要
-   *
-   * @param {string} researchType - 研究类型 ('file', 'pattern', 'architecture')
-   * @param {Object} params - 研究参数
-   * @returns {Promise<ResearchResult>} 研究结果摘要
-   */
-  async runResearchInIsolation(researchType, params) {
-    switch (researchType) {
-      case 'file':
-        return await this._researchContext.analyzeFile(params.filePath, params.options);
-
-      case 'files':
-        return await this._researchContext.analyzeFiles(params.filePaths, params.options);
-
-      case 'pattern':
-        return await this._researchContext.searchPattern(
-          params.pattern,
-          params.extensions,
-          params.maxResults
-        );
-
-      case 'architecture':
-        return await this._researchContext.analyzeArchitecture();
-
-      default:
-        return { summary: `Unknown research type: ${researchType}`, keyFindings: [] };
-    }
-  }
-
-  /**
-   * 使用 ResearchContext 进行代码分析（不污染主 context）
-   * @param {string} codeSnippet - 代码片段
-   * @returns {Object} 分析结果
-   */
-  analyzeCodeInIsolation(codeSnippet) {
-    const findings = [];
-
-    // 检测函数定义
-    const funcMatches = codeSnippet.matchAll(/(?:export\s+)?(?:async\s+)?function\s+(\w+)/g);
-    for (const match of funcMatches) {
-      findings.push({ type: 'function', name: match[1] });
-    }
-
-    // 检测类定义
-    const classMatches = codeSnippet.matchAll(/class\s+(\w+)/g);
-    for (const match of classMatches) {
-      findings.push({ type: 'class', name: match[1] });
-    }
-
-    // 检测 import
-    const importMatches = codeSnippet.matchAll(/import\s+(?:\{([^}]+)\}|(\w+))/g);
-    for (const match of importMatches) {
-      findings.push({ type: 'import', name: match[1] || match[2] });
-    }
-
-    return {
-      summary: `Found ${findings.length} code elements`,
-      keyFindings: findings.slice(0, 10),
-      metadata: { type: 'code_analysis' },
-    };
-  }
-
-  /**
-   * 根据 context 使用情况调整复杂度阈值
-   * @param {number} contextUsagePercent - Context 使用百分比 (0-100)
-   */
-  adjustComplexityThreshold(contextUsagePercent) {
-    // 高 context 使用时，降低阈值，优先使用研究隔离而非完整团队
-    if (contextUsagePercent > 80) {
-      this._complexityThreshold.low = 20;
-      this._complexityThreshold.medium = 40;
-      this._complexityThreshold.high = 60;
-    } else if (contextUsagePercent > 60) {
-      this._complexityThreshold.low = 25;
-      this._complexityThreshold.medium = 50;
-      this._complexityThreshold.high = 75;
-    } else {
-      // 正常阈值
-      this._complexityThreshold.low = 25;
-      this._complexityThreshold.medium = 50;
-      this._complexityThreshold.high = 75;
-    }
-  }
-
-  /**
-   * 启动团队任务
-   * @param {string} task - 任务描述
-   * @param {Object} context - 上下文信息
-   * @returns {Promise<Object>} 团队任务执行结果
-   */
   async startTeamTask(task, context = {}) {
     if (this.state !== TeamState.IDLE && this.state !== TeamState.DISSOLVED) {
       throw new Error(`团队当前状态为 ${this.state}，无法启动新任务`);
@@ -609,9 +504,7 @@ class TeamManager extends EventEmitter {
     };
   }
 
-  // ================================================================
   // 状态机管理
-  // ================================================================
 
   _createStateMachine() {
     const transitions = {
@@ -654,9 +547,7 @@ class TeamManager extends EventEmitter {
     this.logger?.info(`团队状态转换: ${oldState} -> ${newState}`);
   }
 
-  // ================================================================
   // 空闲管理
-  // ================================================================
 
   _startIdleTimer() {
     this._idleTimer = setTimeout(() => {
@@ -673,10 +564,6 @@ class TeamManager extends EventEmitter {
     }
   }
 
-  _resetIdleTimer() {
-    this._stopIdleTimer();
-    this._startIdleTimer();
-  }
 }
 
 module.exports = TeamManager;

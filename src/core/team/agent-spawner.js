@@ -1,7 +1,5 @@
 /**
  * 子Agent生成与执行器
- * 负责生成子Agent实例、分配角色、管理执行循环
- * @file agent-spawner.js
  */
 
 const { EventEmitter } = require('events');
@@ -29,11 +27,6 @@ class AgentSpawner extends EventEmitter {
     this.promptGenerator = new DynamicPromptGenerator({ config: options.config, logger: options.logger });
   }
 
-  /**
-   * 生成Agent实例
-   * @param {Object} options
-   * @returns {Promise<Object>} Agent实例信息
-   */
   async spawn(options) {
     const {
       role,
@@ -82,12 +75,6 @@ class AgentSpawner extends EventEmitter {
     return agent;
   }
 
-  /**
-   * 运行Agent执行任务
-   * @param {Object} agent - Agent实例
-   * @param {Object} options
-   * @returns {Promise<Object>}
-   */
   async run(agent, options) {
     const {
       systemPrompt,
@@ -128,9 +115,7 @@ class AgentSpawner extends EventEmitter {
     }
   }
 
-  /**
-   * Agent自主执行循环
-   */
+  // Agent 自主执行循环
   async _agentLoop(agent, messages, tools, timeout) {
     const maxIterations = 50;
     const timeoutMs = timeout;

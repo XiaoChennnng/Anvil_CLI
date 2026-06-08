@@ -1,19 +1,11 @@
 'use strict';
 
-/**
- * web_search 工具注册
- *
- * 薄壳：只负责 schema 和 execute 入口，业务逻辑全在 core/web_search.js。
- * 错误处理统一 return { error }，不 throw。
- *
- * 注意：context 字段不包含 config（见 core/chat.js:702-723），
- * 所以 config 通过 registerXxxTool(registry, config) 闭包注入。
- */
+// web_search 工具注册，业务逻辑在 core/web_search.js
 
 const { searchBing } = require('../core/web_search');
 
 function registerWebSearchTool(registry, config) {
-  // 闭包捕获 config，避免每个工具调用重新读
+  // 闭包捕获 config
   const baseConfig = (config && config.webSearch) || {};
 
   registry.register({
@@ -40,9 +32,8 @@ function registerWebSearchTool(registry, config) {
       const { query, maxResults } = params || {};
       const logger = context && context.logger;
 
-      // 浅拷贝：避免 AI 多次调用时累积 maxResults 覆盖
+      // 浅拷贝避免累积覆盖
       const cfg = { ...baseConfig };
-      // 允许工具调用方临时覆盖 maxResults（AI 可以每次搜更多/更少）
       if (typeof maxResults === 'number' && maxResults > 0 && maxResults <= 20) {
         cfg.maxResults = maxResults;
       }
@@ -50,7 +41,6 @@ function registerWebSearchTool(registry, config) {
       try {
         return await searchBing(query, cfg, logger);
       } catch (err) {
-        // 兜底：core 已经 return error，正常不该走到这里
         logger?.error?.('web_search 异常', err.message);
         return { error: `web_search 内部错误: ${err.message}` };
       }

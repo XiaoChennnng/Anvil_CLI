@@ -20,7 +20,6 @@ class TUI {
     this.questionPanel = new QuestionPanel(this.layout);
     this.questionPanel.messageBox = this.messageBox;  // 注入消息区引用
     this.questionPanel._refreshDisplay = () => this._refreshMessages();  // 注入刷新回调
-    this._cmdNeedBranch = true;  // 下一个命令输出的第一行用 └─ 分支符号
     this._isRunning = false;
     this._onSend = null;
     this._onExit = null;
@@ -33,37 +32,29 @@ class TUI {
     // 渲染节流队列（50ms 间隔）
     this._renderQueue = null;
 
-    // 思考中状态栏定时刷新（每秒更新耗时）
+    // 思考中状态栏定时刷新
     this._thinkingTimer = null;
 
-    // stdout 反压检测：write() 返回 false 时标记跳过非关键渲染
+    // stdout 反压检测
     this._stdoutBackedUp = false;
     this._lastWriteResult = true;
-    this.MAX_RENDER_OUTPUT = 32 * 1024; // 单次渲染最大输出 32KB（防 Windows 终端阻塞）
+    this.MAX_RENDER_OUTPUT = 32 * 1024; // 单次渲染最大输出 32KB，防 Windows 终端阻塞
 
-    // 光标隐藏标志（避免频繁 hide/show 切换造成闪烁）
+    // 光标隐藏标志
     this._cursorHidden = false;
   }
 
-  /**
-   * 启动 TUI
-   */
   start() {
     this.layout.enterAltScreen();
     this._isRunning = true;
 
-    // 初始渲染
     this._fullRender();
-
     // 注册 resize 处理
     this.layout.on('resize', () => {
       this._fullRender();
     });
   }
 
-  /**
-   * 停止 TUI
-   */
   stop() {
     this._isRunning = false;
     if (this._thinkingTimer) {
@@ -73,10 +64,7 @@ class TUI {
     this.layout.leaveAltScreen();
   }
 
-  /**
-   * 完整重绘
-   * 使用 Layout 缓冲合并所有 write 为一次 + 反压检测
-   */
+  // 完整重绘，合并所有 write 为一次
   _fullRender() {
     this.layout.startBuf();
     this.layout.hideCursor();
@@ -90,10 +78,7 @@ class TUI {
     this._restoreCursorToEditor();
   }
 
-  /**
-   * 刷新消息区 + 侧边栏（流式输出时使用，不重绘编辑器/状态栏以减少闪烁）
-   * 合并 render 输出 + 反压检测，避免 Windows 终端缓冲区阻塞
-   */
+  // 刷新消息区 + 侧边栏（流式输出时使用）
   _refreshMessages() {
     this.layout.startBuf();
     let out = (this.messageBox.render() || '') + (this.sidebar.render() || '');
@@ -108,10 +93,7 @@ class TUI {
     this.layout.endBuf();
   }
 
-  /**
-   * 刷新全部组件（响应结束后调用）
-   * 合并所有 render 输出 + 反压检测
-   */
+  // 刷新全部组件（响应结束后调用）
   _refreshAll() {
     this.layout.hideCursor();
     this._cursorHidden = true;
@@ -120,12 +102,8 @@ class TUI {
     this._restoreCursorToEditor();
   }
 
-  /**
-   * 恢复光标到编辑器输入位置
-   * 复用 editor 的 getCursorColumn() 计算列号（自动处理 CJK 宽度）
-   */
+  // 恢复光标到编辑器输入位置
   _restoreCursorToEditor() {
-    // 只有在 cursor 当前是隐藏状态时才 show
     if (this._cursorHidden) {
       this.layout.showCursor();
       this._cursorHidden = false;
@@ -133,22 +111,18 @@ class TUI {
     this.layout.moveTo(this.editor.promptRow, this.editor.getCursorColumn());
   }
 
-  /**
-   * 请求节流渲染（用于流式输出等高频场景）
-   */
+  // 请求节流渲染（用于流式输出等高频场景）
   _queueRender() {
     if (!this._renderQueue) {
       const RenderQueue = require('./render-queue');
-      this._renderQueue = new RenderQueue(20);  // 20ms 节流（约50fps），减少闪烁
+      this._renderQueue = new RenderQueue(20);  // 20ms 节流
     }
     this._renderQueue.requestRender(() => {
       this._refreshMessages();
     });
   }
 
-  /**
-   * 强制立即渲染（忽略节流）
-   */
+  // 强制立即渲染
   _forceRender() {
     if (!this._renderQueue) {
       this._refreshMessages();
@@ -159,29 +133,18 @@ class TUI {
     }
   }
 
-  /**
-   * 仅刷新编辑器
-   */
   _refreshEditor() {
     const out = this.editor.render();
     if (out) {this._safeWrite(out, true);}
   }
 
-  /**
-   * 仅刷新状态栏
-   */
   _refreshStatusBar() {
     const out = this.statusBar.render();
     if (out) {this._safeWrite(out, true);}
   }
 
-  /**
-   * 仅刷新侧边栏（已合并到状态栏，保留方法用于兼容）
-   */
-  _refreshSidebar() {
-    // 侧边栏已合并到状态栏，此方法不再需要
-    // 但保留以兼容旧的调用方式
-  }
+  // 兼容旧接口，已合并到状态栏
+  _refreshSidebar() {}
 
   /**
    * 刷新侧边栏相关的信息（Todo, Context, Cache）- 更新到状态栏
@@ -202,54 +165,32 @@ class TUI {
     this._refreshStatusBar();
   }
 
-  // ─────────────────────────────────────────────
-  // 事件注册
-  // ─────────────────────────────────────────────
+  // ─── 事件注册 ───
 
-  /**
-   * 注册发送回调
-   */
   onSend(callback) {
     this._onSend = callback;
   }
 
-  /**
-   * 注册退出回调
-   */
   onExit(callback) {
     this._onExit = callback;
   }
 
-  /**
-   * 注册命令回调
-   */
   onCommand(callback) {
     this._onCommand = callback;
   }
 
-  /**
-   * 注册上下文注入回调（处理期间输入的内容）
-   */
   onContextInject(callback) {
     this._onContextInject = callback;
   }
 
-  /**
-   * 设置待注入上下文状态
-   */
   setPendingContext(hasPending) {
     this._hasPendingContext = hasPending;
     this.statusBar.setPendingContext(hasPending);
     this._refreshStatusBar();
   }
 
-  // ─────────────────────────────────────────────
-  // 消息渲染（对接 ChatEngine 事件）
-  // ─────────────────────────────────────────────
+  // ─── 消息渲染（对接 ChatEngine 事件） ───
 
-  /**
-   * 渲染用户消息
-   */
   renderUserMessage(content) {
     this._isProcessing = true;
     this.layout.hideCursor();
@@ -257,12 +198,7 @@ class TUI {
     this._refreshMessages();
   }
 
-  /**
-   * 开始思考
-   */
-  /**
-   * 启动 thinking 定时器（每秒刷新状态栏更新耗时）
-   */
+  // 启动 thinking 定时器，每秒刷新状态栏
   _startThinkingTimer() {
     if (this._thinkingTimer) {clearInterval(this._thinkingTimer);}
     this._thinkingTimer = setInterval(() => {
@@ -275,9 +211,7 @@ class TUI {
     }, 1000);
   }
 
-  /**
-   * 恢复 thinking 状态（提问回答后 AI 继续处理时调用）
-   */
+  // 恢复 thinking 状态（提问回答后 AI 继续处理时调用）
   resumeThinking() {
     this.statusBar.setThinking(true);
     this._refreshStatusBar();
@@ -291,56 +225,36 @@ class TUI {
     this._startThinkingTimer();
   }
 
-  /**
-   * 思考内容（使用节流渲染）
-   */
   renderThinkingChunk(chunk) {
     this.messageBox.addThinkingChunk(chunk);
     this._queueRender();
   }
 
-  /**
-   * 开始响应内容
-   */
   renderContentStart() {
     this.messageBox.startContent();
   }
 
-  /**
-   * 响应内容（立即渲染，避免闪烁）
-   */
   renderContentChunk(chunk) {
     this.messageBox.addContentChunk(chunk);
     this._forceRender();
   }
 
-  /**
-   * 工具调用（使用节流渲染）
-   */
   renderToolCall(toolCalls) {
     this.messageBox.addToolCall(toolCalls);
     this._queueRender();
   }
 
-  /**
-   * 工具结果（使用节流渲染）
-   */
   renderToolResult(name, result, toolCall) {
     this.messageBox.addToolResult(name, result, toolCall);
     this._queueRender();
   }
 
-  /**
-   * Token 使用情况
-   */
   renderTokenUsage(usage, pricing) {
     this.statusBar.updateTokenUsage(usage);
     if (pricing) {this.statusBar.setPricing(pricing);}
   }
 
-  /**
-   * 完成响应
-   */
+  // 完成响应
   finishResponse(model) {
     this.messageBox.finishResponse(model);
     this.statusBar.setThinking(false);
@@ -353,9 +267,6 @@ class TUI {
     this._refreshAll();
   }
 
-  /**
-   * 显示错误
-   */
   renderError(message, error) {
     const t = this.layout.theme;
     // 按换行拆分，每行独立推入（避免单行超长撑爆显示）
@@ -376,9 +287,6 @@ class TUI {
     this._refreshMessages();
   }
 
-  /**
-   * 显示状态消息
-   */
   renderStatus(msg) {
     const t = this.layout.theme;
     const marker = chalk.hex(t.colors.primary)('●');
@@ -386,9 +294,6 @@ class TUI {
     this._refreshMessages();
   }
 
-  /**
-   * 显示中断消息
-   */
   renderInterrupted() {
     const t = this.layout.theme;
     const marker = chalk.hex(t.colors.primary)('●');
@@ -397,16 +302,11 @@ class TUI {
     this._refreshAll();
   }
 
-  /**
-   * 重置消息区状态
-   */
   resetMessages() {
     this.messageBox.reset();
   }
 
-  /**
-   * 渲染计划批准提示（将选项添加到消息区，类似 QuestionPanel 样式）
-   */
+  // 渲染计划批准提示
   renderPlanApprovalHint() {
     const t = this.layout.theme;
     const width = this.layout.messageWidth - 4;
@@ -467,9 +367,7 @@ class TUI {
     this._refreshMessages();
   }
 
-  /**
-   * 更新计划批准提示（方向键选择时调用）
-   */
+  // 更新计划批准提示
   updatePlanApprovalHint() {
     if (!this._planApprovalHintLines) {return;}
 
@@ -514,9 +412,6 @@ class TUI {
     }
   }
 
-  /**
-   * 清除计划批准提示
-   */
   clearPlanApprovalHint() {
     if (this._planApprovalCursor !== undefined) {
       this._planApprovalCursor = undefined;
@@ -528,12 +423,7 @@ class TUI {
     }
   }
 
-  /**
-   * 安全写入 stdout，带反压检测和输出上限
-   * 防止 Windows 终端缓冲区阻塞导致 event loop 卡死
-   * @param {string} output - 要写入的内容
-   * @param {boolean} [critical=false] - 关键渲染（强制写入，跳过上限检查）
-   */
+  // 安全写入 stdout，带反压检测和输出上限
   _safeWrite(output, critical = false) {
     if (!output) {return true;}
 
@@ -592,38 +482,24 @@ class TUI {
     return this._lastWriteResult !== false;
   }
 
-  /**
-   * 计算字符串可见长度（使用 ANSI_PATTERN 正则完整匹配）
-   */
+  // 计算字符串可见长度
   _visibleLength(str) {
     return visibleLength(str);
   }
 
-  /**
-   * 判断是否为 CJK 双倍宽字符
-   */
   _isCJK(char) {
     return isCJK(char);
   }
 
-  /**
-   * 按可见长度截断 ANSI 字符串
-   */
   _truncateAnsi(str, maxLen) {
     return truncateToWidth(str, maxLen, chalk.dim('...'));
   }
 
-  /**
-   * 清空消息
-   */
   clearMessages() {
     this.messageBox.clear();
     this._fullRender();
   }
 
-  /**
-   * 处理键盘输入
-   */
   handleKey(buf) {
     // ─── 问答面板优先处理 ───
     if (this.questionPanel.active) {
@@ -785,9 +661,6 @@ class TUI {
     return result;
   }
 
-  /**
-   * 设置处理状态
-   */
   setProcessing(processing) {
     this._isProcessing = processing;
     if (!processing) {
@@ -796,9 +669,6 @@ class TUI {
     }
   }
 
-  /**
-   * 获取是否正在处理
-   */
   get isProcessing() {
     return this._isProcessing;
   }

@@ -11,12 +11,10 @@ class Sidebar {
     this.modifiedFiles = [];
     this.diagnostics = { errors: 0, warnings: 0 };
 
-    // 上下文信息
     this.contextManager = null;
     this.messages = [];
     this.chatEngine = null;
 
-    // 缓存统计
     this.cacheStats = {
       totalRequests: 0,
       cacheHits: 0,
@@ -24,25 +22,21 @@ class Sidebar {
       cachedTokens: 0,
     };
 
-    // Todo 状态
     this.todos = [];
 
-    // 增量渲染缓存
     this._lastRenderedContent = [];
     this._lastViewportHeight = 0;
 
-    // 侧边栏行构建缓存（避免状态未变时重复调 _renderLine）
+    // 避免状态未变时重复调 _renderLine
     this._renderVersion = 0;
     this._lastRenderVersion = -1;
     this._lastRenderedFullLines = [];
 
-    // 上下文信息缓存（避免每次 render 全量重算）
     this._contextInfoCache = null;
     this._contextBreakdownCache = null;
     this._messagesVersion = 0;
     this._todosVersion = 0;
 
-    // 进度条动画状态
     this._progressAnimation = {
       active: false,
       from: 0,
@@ -102,30 +96,6 @@ class Sidebar {
   }
 
   /**
-   * 将 hex 颜色转换为 ANSI 256 色码
-   * @param {string} hex - hex 颜色值如 "#fab283"
-   * @returns {number} ANSI 256 色码
-   */
-  _hexToAnsi256(hex) {
-    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-    if (!result) {return 0;}
-
-    const r = parseInt(result[1], 16);
-    const g = parseInt(result[2], 16);
-    const b = parseInt(result[3], 16);
-
-    // 简化的 RGB 转 256 色算法
-    if (r === g && g === b) {
-      // 灰度
-      if (r < 8) {return 16;}
-      if (r > 248) {return 231;}
-      return Math.round((r - 8) / 10) + 232;
-    }
-
-    return 16 + Math.round(r / 51) * 36 + Math.round(g / 51) * 6 + Math.round(b / 51);
-  }
-
-  /**
    * 判断是否为 CJK 双倍宽字符
    */
   _isCJK(char) {
@@ -155,10 +125,7 @@ class Sidebar {
     return width;
   }
 
-  /**
-   * 渲染侧边栏（增量渲染，只写变化的行）
-   * 降低 ANSI 输出量，避免 Windows 终端缓冲区阻塞
-   */
+  // 渲染侧边栏（增量渲染，只写变化的行）
   render() {
     const { messageStartRow, contentHeight, sidebarWidth, messageWidth } = this.layout;
     const viewportHeight = contentHeight;
@@ -202,9 +169,7 @@ class Sidebar {
     return output;
   }
 
-  /**
-   * 渲染单行内容
-   */
+  // 渲染单行内容
   _renderLine(lineIndex, width) {
     const t = this.theme;
     let line = 0;
@@ -437,9 +402,7 @@ class Sidebar {
     return '';
   }
 
-  /**
-   * 获取上下文信息（带缓存，仅 messages 变化时重算）
-   */
+  // 获取上下文信息（带缓存）
   _getContextInfo() {
     const defaultInfo = {
       used: 0,
@@ -472,30 +435,7 @@ class Sidebar {
     }
   }
 
-  /**
-   * 获取注入的文件列表
-   */
-  _getInjectedFiles() {
-    if (!this.contextManager) {return [];}
-
-    try {
-      const fileContexts = this.contextManager._fileContexts;
-      if (!fileContexts) {return [];}
-
-      return [...fileContexts.keys()].map(key => {
-        // key 可能是 "file.js:0:100" 格式
-        const parts = key.split(':');
-        return parts[0];
-      });
-    } catch {
-      return [];
-    }
-  }
-
-  /**
-   * 获取上下文各层 Token 明细
-   * @returns {{ systemPrompt: number, projectOverview: number, fileContexts: Array, totalFileTokens: number }}
-   */
+  // 获取上下文各层 Token 明细
   _getContextBreakdown() {
     if (!this.contextManager) {return { systemPrompt: 0, projectOverview: 0, fileContexts: [], totalFileTokens: 0 };}
 
@@ -513,18 +453,14 @@ class Sidebar {
     }
   }
 
-  /**
-   * 获取已加载的 Skills 数量
-   */
+  // 获取已加载的 Skills 数量
   _getSkillCount() {
     if (!this.toolRegistry) {return 0;}
     const skills = this.toolRegistry.listSkills();
     return skills.length;
   }
 
-  /**
-   * 获取缓存信息
-   */
+  // 获取缓存信息
   _getCacheInfo() {
     const { totalRequests, cacheHits, totalInputTokens, cachedTokens } = this.cacheStats;
     const hitRate = totalInputTokens > 0
@@ -542,9 +478,7 @@ class Sidebar {
     };
   }
 
-  /**
-   * 渲染进度条
-   */
+  // 渲染进度条
   _renderProgressBar(percent, width) {
     const t = this.theme;
     const barWidth = Math.max(10, width - 6);
@@ -563,21 +497,14 @@ class Sidebar {
     return `${filledBar}${emptyBar}`;
   }
 
-  /**
-   * 格式化 token 数
-   */
+  // 格式化 token 数
   _formatTokens(count) {
     if (count >= 1000000) {return (count / 1000000).toFixed(1) + 'M';}
     if (count >= 1000) {return (count / 1000).toFixed(1) + 'K';}
     return String(count);
   }
 
-  /**
-   * 启动进度条动画
-   * @param {number} fromPercent - 起始进度 %
-   * @param {number} toPercent - 目标进度 %
-   * @param {number} durationMs - 动画时长 ms
-   */
+  // 启动进度条动画
   startProgressAnimation(fromPercent, toPercent, durationMs) {
     // 清除之前的动画
     if (this._progressAnimationTimer) {
@@ -617,9 +544,7 @@ class Sidebar {
     tick(); // 立即执行一次
   }
 
-  /**
-   * 获取当前动画进度（用于渲染）
-   */
+  // 获取当前动画进度
   _getAnimationProgress() {
     if (!this._progressAnimation.active) {return null;}
 
@@ -630,80 +555,12 @@ class Sidebar {
       (this._progressAnimation.to - this._progressAnimation.from) * progress;
   }
 
-  /**
-   * 获取 Todo 统计摘要
-   */
+  // 获取 Todo 统计摘要
   _getTodoStats() {
     const total = this.todos.length;
     if (total === 0) {return '';}
     const completed = this.todos.filter(t => t.completed).length;
     return `(${completed}/${total})`;
-  }
-
-  /**
-   * 从扁平文件路径构建目录树渲染行
-   * @param {string[]} files - 文件路径数组
-   * @param {number} width - 可用宽度
-   * @returns {string[]} 渲染后的行数组
-   */
-  _buildFileTree(files, width) {
-    if (files.length === 0) {return [];}
-
-    // 构建树结构（嵌套对象，null 表示文件，{} 表示目录）
-    const tree = {};
-    for (const file of files) {
-      const parts = file.replace(/\\/g, '/').split('/');
-      let node = tree;
-      for (let i = 0; i < parts.length; i++) {
-        const part = parts[i];
-        if (i === parts.length - 1) {
-          // 最后一段是文件名
-          node[part] = null;
-        } else {
-          // 中间段是目录
-          if (!node[part] || node[part] === null) {
-            node[part] = {};
-          }
-          node = node[part];
-        }
-      }
-    }
-
-    // 递归渲染树
-    const lines = [];
-    const renderNode = (node, prefix) => {
-      // 排序：目录在前，文件在后，同类型按字母排序
-      const entries = Object.entries(node).sort(([aName, aChild], [bName, bChild]) => {
-        const aIsDir = aChild !== null;
-        const bIsDir = bChild !== null;
-        if (aIsDir && !bIsDir) {return -1;}
-        if (!aIsDir && bIsDir) {return 1;}
-        return aName.localeCompare(bName);
-      });
-      entries.forEach(([name, child], index) => {
-        const isLastEntry = index === entries.length - 1;
-        const connector = isLastEntry ? '└── ' : '├── ';
-        const childPrefix = isLastEntry ? '    ' : '│   ';
-
-        // 截断过长的文件名
-        const maxNameLen = width - prefix.length - 4;
-        const displayName = name.length > maxNameLen
-          ? name.substring(0, maxNameLen - 3) + '...'
-          : name;
-
-        if (child === null) {
-          // 文件
-          lines.push(`${prefix}${connector}${displayName}`);
-        } else {
-          // 目录
-          lines.push(`${prefix}${connector}${displayName}/`);
-          renderNode(child, prefix + childPrefix);
-        }
-      });
-    };
-
-    renderNode(tree, '');
-    return lines;
   }
 
   /**

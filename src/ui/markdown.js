@@ -17,15 +17,11 @@ class MarkdownRenderer {
     this._inTable = false;   // 是否在表格内
     this._codeBlockBuffer = [];  // 代码块内容缓冲
     this._codeBlockLanguage = '';  // 代码块语言标识
-    // 预构建语法高亮主题，避免每次代码块重建 24 个闭包
     this._syntaxTheme = this._buildSyntaxTheme();
     this._setupRenderer();
   }
 
-  /**
-   * 构建 cli-highlight 语法高亮主题
-   * 映射 Anvil theme 的 syntax* 颜色到 cli-highlight Theme 格式
-   */
+  // 构建 cli-highlight 语法高亮主题
   _buildSyntaxTheme() {
     const t = this.theme;
     return {
@@ -67,10 +63,7 @@ class MarkdownRenderer {
     };
   }
 
-  /**
-   * 配置 marked-terminal 渲染器
-   * 1:1 复刻 opencode glamour 样式
-   */
+  // 配置 marked-terminal 渲染器
   _setupRenderer() {
     const t = this.theme;
     const syntaxTheme = this._syntaxTheme;
@@ -108,7 +101,7 @@ class MarkdownRenderer {
       // 列表项样式: Primary 色 (#fab283)
       listitem: chalk.hex(t.colors.markdownListItem),
 
-      // 水平线样式: 不渲染满屏横线，只输出一个空行分隔（免得满屏 --- 煞笔）
+      // 水平线样式: 不渲染满屏横线，只输出空行分隔
       hr: () => '',
 
       // 行内代码样式: Success 色 (#7fd88f)
@@ -117,7 +110,7 @@ class MarkdownRenderer {
       // 删除线样式: TextMuted 色 + strikethrough (#6a6a6a)
       del: chalk.hex(t.colors.textMuted).strikethrough,
 
-      // 表格样式（自定义渲染器：将 marked-terminal 硬编码的灰色/红色替换为主题色）
+      // 表格样式：将 marked-terminal 硬编码的灰色/红色替换为主题色
       table: (tableText) => {
         // 简单的 hex → raw ANSI 前景色生成
         const hexToFgAnsi = (hex) => {
@@ -132,8 +125,6 @@ class MarkdownRenderer {
           .replace(/\x1b\[90m/g, '\x1b[1m' + hexToFgAnsi(t.colors.text))
           .replace(/\x1b\[31m/g, '\x1b[1m' + hexToFgAnsi(t.colors.markdownHeading));
       },
-
-      // 段落样式
 
       // HTML样式
       html: chalk.gray,
@@ -159,12 +150,7 @@ class MarkdownRenderer {
     }));
   }
 
-  /**
-   * 写入 chunk 并渲染（成块行处理）
-   * 用 split 替代逐字符遍历，大幅减少字符串操作
-   * @param {string} chunk
-   * @returns {string}
-   */
+  // 写入 chunk 并渲染（成块行处理）
   write(chunk) {
     if (!chunk) {return '';}
     let output = '';
@@ -267,9 +253,7 @@ class MarkdownRenderer {
     return output;
   }
 
-  /**
-   * 使用 cli-highlight 高亮代码块
-   */
+  // 使用 cli-highlight 高亮代码块
   _highlightCodeBlock() {
     if (this._codeBlockBuffer.length === 0) {
       return '';
@@ -302,13 +286,7 @@ class MarkdownRenderer {
     }
   }
 
-  /**
-   * 快速检测行是否包含 markdown 语法
-   * 纯文本行直接跳过 marked.parse()，节省约 100x 开销
-   * 保守检测，宁可误判也不要漏掉 markdown 语法
-   * @param {string} line
-   * @returns {boolean}
-   */
+  // 快速检测行是否包含 markdown 语法，纯文本行跳过 marked.parse()
   _hasMarkdownSyntax(line) {
     const len = line.length;
     if (len === 0) {return false;}
@@ -372,12 +350,7 @@ class MarkdownRenderer {
     return false;
   }
 
-  /**
-   * 渲染单行 markdown
-   * @param {string} line
-   * @param {boolean} inCodeBlock - 是否在代码块内
-   * @returns {string|null}
-   */
+  // 渲染单行 markdown
   _renderLine(line, inCodeBlock = false) {
     // 跳过空行
     if (!line || !line.trim()) {
@@ -431,11 +404,7 @@ class MarkdownRenderer {
     }
   }
 
-  /**
-   * 刷新表格缓冲：将累积的表格行一次性渲染
-   * 表格需要表头 + 分隔线 + 数据行一起才能渲染成框线表
-   * @returns {string}
-   */
+  // 刷新表格缓冲：将累积的表格行一次性渲染
   _flushTable() {
     if (this._tableBuffer.length === 0) {return '';}
     this._inTable = false;
@@ -450,9 +419,7 @@ class MarkdownRenderer {
     }
   }
 
-  /**
-   * 刷新缓冲区（处理剩余内容）
-   */
+  // 刷新缓冲区（处理剩余内容）
   flush() {
     let output = '';
 
@@ -475,11 +442,7 @@ class MarkdownRenderer {
     return output;
   }
 
-  /**
-   * 渲染完整的 markdown 内容
-   * @param {string} content
-   * @returns {string}
-   */
+  // 渲染完整的 markdown 内容
   render(content) {
     try {
       return marked.parse(content);
@@ -488,9 +451,7 @@ class MarkdownRenderer {
     }
   }
 
-  /**
-   * 重置状态
-   */
+  // 重置状态
   reset() {
     this.lineBuffer = '';
     this._inCodeBlock = false;
@@ -499,9 +460,7 @@ class MarkdownRenderer {
     this._inTable = false;
   }
 
-  /**
-   * 检查是否在代码块中
-   */
+  // 检查是否在代码块中
   get isInCodeBlock() {
     return false;
   }

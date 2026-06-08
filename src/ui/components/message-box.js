@@ -14,35 +14,28 @@ class MessageBox {
     this.renderedLines = [];   // 渲染后的所有行
     this.scrollOffset = 0;     // 滚动偏移
     this._scrollPaused = false; // 用户手动翻页后暂停自动滚动
-    this._showScrollHint = false; // 显示"向上滚动"指示器
+    this._showScrollHint = false;
     this.isProcessing = false;
-    this._lastRenderedLine = null;  // 最后渲染的行，用于去重
+    this._lastRenderedLine = null;  // 去重
     this._thinkingBuffer = '';
     this._inThinking = false;
     this._hasThinkingContent = false;
     this._contentStarted = false;
     this._startTime = null;
-    // 增量渲染缓存
     this._lastRenderedVisibleLines = [];
-    this._responseStarted = false;  // 标志：响应是否已开始输出
-    this._firstContentBlock = true;  // 标志：是否第一个内容块（需要加 ● 前缀）
-    // renderedLines 上限控制
+    this._firstContentBlock = true;
     this.MAX_RENDERED_LINES = 2000;
-    // 可见长度缓存（按字符串）
+    // 可见长度缓存
     this._visibleLengthCache = new Map();
     // 换行缓存（按 str|maxWidth）
     this._wrapLineCache = new Map();
-    // CJK 字符判定缓存
     this._cjkCache = new Map();
-    // 文件操作去重：追踪最后操作的文件路径，同一文件只显示一次结果
+    // 文件操作去重：同一文件只显示一次结果
     this._lastToolFile = null;
     this._sameFileResultShown = false;
   }
 
-  /**
-   * 修剪 renderedLines 防止无限增长
-   * 保留最后 N 行，丢弃最早的行
-   */
+  // 修剪 renderedLines 防止无限增长
   _trimRenderedLines() {
     if (this.renderedLines.length > this.MAX_RENDERED_LINES) {
       const excess = this.renderedLines.length - this.MAX_RENDERED_LINES;
@@ -105,9 +98,6 @@ class MessageBox {
     this._scrollToBottom();
   }
 
-  /**
-   * 添加响应内容
-   */
   addContentChunk(chunk) {
     const t = this.theme;
 
@@ -139,9 +129,6 @@ class MessageBox {
     this._scrollToBottom();
   }
 
-  /**
-   * 强制刷新内容缓冲区
-   */
   flushContentBuffer() {
     const t = this.theme;
 
@@ -264,10 +251,7 @@ class MessageBox {
     this._scrollToBottom();
   }
 
-  /**
-   * 渲染消息区到屏幕（双缓冲模式，减少闪烁）
-   * 将所有输出合并为一次 write 调用，避免多次终端操作造成的闪烁
-   */
+  // 渲染消息区到屏幕（双缓冲模式，减少闪烁）
   render() {
     // 渲染前检查是否需要裁剪 renderedLines
     this._trimRenderedLines();
@@ -342,26 +326,20 @@ class MessageBox {
     return output;
   }
 
-  /**
-   * 滚动到底部（如果用户手动翻页了，暂停自动滚动）
-   */
+  // 滚动到底部
   _scrollToBottom() {
     if (this._scrollPaused) {return;}
     this.scrollOffset = 0;
   }
 
-  /**
-   * 强制滚动到底部（新用户消息时使用）
-   */
+  // 强制滚动到底部
   _forceScrollToBottom() {
     this._scrollPaused = false;
     this._showScrollHint = false;
     this.scrollOffset = 0;
   }
 
-  /**
-   * 向上滚动（暂停自动滚动）
-   */
+  // 向上滚动
   scrollUp(lines = 5) {
     const maxOffset = Math.max(0, this.renderedLines.length - this.layout.messageViewportHeight);
     const prevOffset = this.scrollOffset;
@@ -375,9 +353,7 @@ class MessageBox {
     }
   }
 
-  /**
-   * 向下滚动
-   */
+  // 向下滚动
   scrollDown(lines = 5) {
     const prevOffset = this.scrollOffset;
     this.scrollOffset = Math.max(0, this.scrollOffset - lines);
@@ -393,9 +369,7 @@ class MessageBox {
     }
   }
 
-  /**
-   * 截断字符串到指定显示宽度（处理 ANSI 转义序列）
-   */
+  // 截断字符串到指定显示宽度（处理 ANSI 转义序列）
   _truncateToWidth(str, maxWidth) {
     let visibleWidth = 0;
     let inEscape = false;
@@ -426,9 +400,7 @@ class MessageBox {
     return result;
   }
 
-  /**
-   * 判断是否为 CJK 双倍宽字符（带缓存）
-   */
+  // 判断是否为 CJK 双倍宽字符（带缓存）
   _isCJK(char) {
     if (char.length === 0) {return false;}
     // 快速路径：ASCII 字符不是 CJK
@@ -454,10 +426,7 @@ class MessageBox {
     return result;
   }
 
-  /**
-   * 计算字符串的可见长度（支持 CJK 双倍宽字符，带缓存）
-   * 使用 ANSI_PATTERN 正则完整匹配，替代逐字符检测
-   */
+  // 计算字符串的可见长度（带缓存）
   _visibleLength(str) {
     if (!str) {return 0;}
 
@@ -479,12 +448,7 @@ class MessageBox {
     return len;
   }
 
-  /**
-   * 按可见字符宽度换行（支持 ANSI 转义序列状态延续 + CJK 双倍宽字符，带缓存）
-   * @param {string} str - 输入字符串（含 ANSI 码）
-   * @param {number} maxWidth - 最大可见字符数
-   * @returns {string[]} 换行后的行数组
-   */
+  // 按可见字符宽度换行（带缓存）
   _wrapLine(str, maxWidth) {
     if (maxWidth <= 0) {return [str];}
 
@@ -576,9 +540,7 @@ class MessageBox {
     return lines;
   }
 
-  /**
-   * 重置
-   */
+  // 重置
   reset() {
     this._inThinking = false;
     this._hasThinkingContent = false;
@@ -596,9 +558,7 @@ class MessageBox {
     this._sameFileResultShown = false;
   }
 
-  /**
-   * 获取工具调用的文件路径（用于去重判断）
-   */
+  // 获取工具调用的文件路径（用于去重判断）
   _getToolFilePath(name, toolCall) {
     // 优先从 result 获取文件路径
     if (toolCall?.function?.arguments) {
@@ -614,9 +574,7 @@ class MessageBox {
     return null;
   }
 
-  /**
-   * 清空消息
-   */
+  // 清空消息
   clear() {
     this.messages = [];
     this.renderedLines = [];

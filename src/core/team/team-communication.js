@@ -8,10 +8,7 @@ const { EventEmitter } = require('events');
 const { MessageTypes } = require('./constants');
 
 /**
- * 团队通信通道
- *
- * 负责主Agent与子Agent之间、以及子Agent彼此间的消息传递
- * 采用发布-订阅模式，支持异步通信
+ * 团队通信通道，主Agent与子Agent间的消息传递（发布-订阅模式）
  */
 class TeamCommunication extends EventEmitter {
   constructor(options = {}) {
@@ -40,16 +37,6 @@ class TeamCommunication extends EventEmitter {
     this._heartbeatMap = new Map();  // agentId -> last heartbeat timestamp
   }
 
-  // ================================================================
-  // 消息发送
-  // ================================================================
-
-  /**
-   * 发送消息到指定Agent
-   * @param {string} agentId - 目标Agent ID
-   * @param {Object} message - 消息内容
-   * @returns {Promise<Object>} 响应
-   */
   async sendToAgent(agentId, message) {
     const messageId = this._generateMessageId();
 
@@ -132,14 +119,7 @@ class TeamCommunication extends EventEmitter {
     return { received: true };
   }
 
-  // ================================================================
-  // Agent间直接通信（通过主Agent转发）
-  // ================================================================
-
-  /**
-   * Agent间点对点通信
-   * 消息通过主Agent转发，不允许直接通信以保持主Agent控制权
-   */
+  // Agent间点对点通信（通过主Agent转发）
   async agentToAgent(fromAgentId, toAgentId, message) {
     const envelope = {
       id: this._generateMessageId(),
@@ -160,13 +140,6 @@ class TeamCommunication extends EventEmitter {
     return { relayed: true };
   }
 
-  // ================================================================
-  // 心跳管理
-  // ================================================================
-
-  /**
-   * 启动Agent心跳
-   */
   startHeartbeat(agentId) {
     const timerId = setInterval(() => {
       this._checkHeartbeat(agentId);
@@ -208,10 +181,6 @@ class TeamCommunication extends EventEmitter {
     }
   }
 
-  // ================================================================
-  // 消息处理
-  // ================================================================
-
   _handleResultSubmit(agentId, payload) {
     this.emit('result_submitted', {
       agentId,
@@ -233,20 +202,13 @@ class TeamCommunication extends EventEmitter {
     this._setLastHeartbeat(agentId, new Date().toISOString());
   }
 
-  // ================================================================
   // 辅助方法
-  // ================================================================
 
   _enqueueMessage(agentId, envelope) {
     if (!this.messageQueue.has(agentId)) {
       this.messageQueue.set(agentId, []);
     }
     this.messageQueue.get(agentId).push(envelope);
-  }
-
-  _getNextMessage(agentId) {
-    const queue = this.messageQueue.get(agentId);
-    return queue ? queue.shift() : null;
   }
 
   _createResponsePromise(messageId) {
@@ -258,15 +220,6 @@ class TeamCommunication extends EventEmitter {
 
       this.pendingResponses.set(messageId, { resolve, reject, timeout });
     });
-  }
-
-  _resolveResponse(messageId, response) {
-    const pending = this.pendingResponses.get(messageId);
-    if (pending) {
-      clearTimeout(pending.timeout);
-      pending.resolve(response);
-      this.pendingResponses.delete(messageId);
-    }
   }
 
   _generateMessageId() {

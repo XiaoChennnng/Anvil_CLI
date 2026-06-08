@@ -34,32 +34,23 @@ class MCPManager extends EventEmitter {
 
   async addServer(name, serverConfig) {
     if (this._servers.has(name)) {
-      // 如果已存在且处于已连接状态，返回冲突错误
+      // 已连接则报错
       const existing = this._servers.get(name);
       if (existing.status === 'connected' || existing.status === 'connecting') {
         throw new Error(`MCP 服务器 "${name}" 已存在且状态为 ${existing.status}`);
       }
-      // 已存在但处于 error/disconnected 状态，先移除旧的重新添加
+      // 移除旧的重新添加
       await this.disconnectServer(name);
     }
     return this.connectServer(name, serverConfig, 0);
   }
 
-  /**
-   * 移除一个 MCP 服务器并断开连接
-   * @param {string} name - 服务器名称
-   */
+  // 移除并断开 MCP 服务器
   async removeServer(name) {
     await this.disconnectServer(name);
   }
 
-  /**
-   * 连接单个 MCP 服务器（含指数退避重试）
-   * @param {string} name
-   * @param {Object} serverConfig
-   * @param {number} retryCount
-   * @returns {Promise<Object>}
-   */
+  // 连接 MCP 服务器（指数退避重试）
   async connectServer(name, serverConfig, retryCount) {
     // 创建或更新服务器状态记录
     const entry = {
@@ -170,10 +161,7 @@ class MCPManager extends EventEmitter {
     }
   }
 
-  /**
-   * 断开单个 MCP 服务器
-   * @param {string} name
-   */
+  // 断开 MCP 服务器
   async disconnectServer(name) {
     const entry = this._servers.get(name);
     if (!entry) {return;}
@@ -205,10 +193,7 @@ class MCPManager extends EventEmitter {
     }
   }
 
-  /**
-   * 重新连接服务器（由断线事件触发）
-   * @param {string} name
-   */
+  // 断线重连
   async reconnectServer(name) {
     const entry = this._servers.get(name);
     if (!entry) {return;}
@@ -225,7 +210,6 @@ class MCPManager extends EventEmitter {
       if (entry.transport) {entry.transport.close();}
     } catch {} // 旧连接关闭失败不影响重连
 
-    // 保留工具列表（断线时先清除，重连后用新列表替代）
     this.emit('server_disconnected', { name });
 
     if (this._logger) {
@@ -241,13 +225,7 @@ class MCPManager extends EventEmitter {
     await this.connectServer(name, entry.config, 0);
   }
 
-  /**
-   * 执行 MCP 服务器上的工具
-   * @param {string} serverName
-   * @param {string} toolName
-   * @param {Object} params
-   * @returns {Promise<Object>}
-   */
+  // 执行 MCP 工具
   async executeTool(serverName, toolName, params) {
     const entry = this._servers.get(serverName);
     if (!entry || entry.status !== 'connected') {
@@ -271,9 +249,7 @@ class MCPManager extends EventEmitter {
     }
   }
 
-  /**
-   * 优雅关闭所有服务器
-   */
+  // 关闭所有服务器
   async stop() {
     if (this._servers.size === 0) {return;}
 
@@ -281,7 +257,7 @@ class MCPManager extends EventEmitter {
       this._logger.info(`[mcp] 关闭 ${this._servers.size} 个 MCP 服务器`);
     }
 
-    // 清除所有重连定时器 + 标记主动关闭
+    // 清除重连定时器并标记主动关闭
     for (const [, entry] of this._servers) {
       entry._closingDeliberately = true;
       if (entry._reconnectTimer) {
@@ -317,10 +293,7 @@ class MCPManager extends EventEmitter {
     }
   }
 
-  /**
-   * 获取所有服务器的状态摘要
-   * @returns {Array<{name, status, tools, error?}>}
-   */
+  // 获取服务器状态摘要
   getStatus() {
     const result = [];
     for (const [name, entry] of this._servers) {
@@ -337,10 +310,7 @@ class MCPManager extends EventEmitter {
     return result;
   }
 
-  /**
-   * 获取当前所有服务器配置（用于持久化）
-   * @returns {Object}
-   */
+  // 获取服务器配置
   getConfig() {
     const config = {};
     for (const [name, entry] of this._servers) {
@@ -350,25 +320,13 @@ class MCPManager extends EventEmitter {
   }
 
   /**
-   * 判断服务器是否已连接
-   * @param {string} name
-   * @returns {boolean}
-   */
-  isConnected(name) {
-    const entry = this._servers.get(name);
-    return entry ? entry.status === 'connected' : false;
-  }
-
-  // ==================== 内部方法 ====================
-
-  /**
-   * 处理意外的传输关闭事件
+   * 处理传输意外关闭
    */
   _onTransportClose(name) {
     const entry = this._servers.get(name);
     if (!entry) {return;}
 
-    // 如果是主动关闭，不做任何事
+    // 主动关闭不重连
     if (entry._closingDeliberately) {return;}
 
     if (this._logger) {
@@ -377,7 +335,7 @@ class MCPManager extends EventEmitter {
 
     entry.status = 'disconnected';
 
-    // 延迟 2 秒后重连（保存 timer 引用供 stop/disconnect 清理）
+    // 2 秒后重连
     entry._reconnectTimer = setTimeout(() => {
       if (!this._servers.has(name)) {return;}
       this.reconnectServer(name).catch((err) => {
@@ -404,17 +362,13 @@ class MCPManager extends EventEmitter {
     this.emit('server_error', { name, error: err.message });
   }
 
-  /**
-   * 格式化 MCP 工具执行结果（处理结构化内容）
-   * @param {Object} result - MCP callTool 返回结果
-   * @returns {Object}
-   */
+  // 格式化 MCP 工具执行结果
   _formatToolResult(result) {
     if (!result || !result.content) {
       return { content: [], isError: result?.isError || false };
     }
 
-    // 提取所有 text 类型的内容，拼接为可读字符串
+    // 提取 text 内容拼接为字符串
     const textParts = [];
     let nonTextCount = 0;
 
@@ -443,11 +397,7 @@ class MCPManager extends EventEmitter {
     return formatted;
   }
 
-  /**
-   * 检测并格式化搜索结果 JSON 为可读文本
-   * @param {string} text - 原始文本
-   * @returns {string} 格式化后的文本
-   */
+  // 格式化搜索结果 JSON
   _formatSearchResults(text) {
     try {
       const trimmed = text.trim();
@@ -473,7 +423,7 @@ class MCPManager extends EventEmitter {
         return text;
       }
 
-      // 格式化：多行可读格式，用 [SEARCH_RESULTS] 标记开头
+      // 多行可读格式
       const lines = [];
       lines.push(`[SEARCH_RESULTS:${items.length}]`);
 

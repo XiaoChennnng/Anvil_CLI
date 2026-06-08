@@ -1,7 +1,5 @@
 /**
- * 任务分发器
- * 负责将主任务分解为子任务，构建依赖图，并智能分配给Agent
- * @file task-distributor.js
+ * 任务分发器：将主任务分解为子任务，构建依赖图，分配给Agent
  */
 
 const { TaskTypes, TaskPriority } = require('./constants');

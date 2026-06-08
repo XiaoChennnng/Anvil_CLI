@@ -37,30 +37,18 @@ class StatusBar {
     this.planMode = false;
   }
 
-  /**
-   * 设置 Plan Mode 状态
-   */
   setPlanMode(enabled) {
     this.planMode = enabled;
   }
 
-  /**
-   * 设置待注入上下文状态
-   */
   setPendingContext(hasPending) {
     this.hasPendingContext = hasPending;
   }
 
-  /**
-   * 设置 Todo 统计
-   */
   setTodoStats(total, completed) {
     this.todoStats = { total: total || 0, completed: completed || 0 };
   }
 
-  /**
-   * 设置上下文信息
-   */
   setContextInfo(used, total, percent) {
     this.contextInfo = {
       used: used || 0,
@@ -69,9 +57,6 @@ class StatusBar {
     };
   }
 
-  /**
-   * 设置缓存信息
-   */
   setCacheInfo(hitRate, cachedTokens, totalTokens) {
     this.cacheInfo = {
       hitRate: hitRate || 0,
@@ -80,9 +65,6 @@ class StatusBar {
     };
   }
 
-  /**
-   * 设置思考状态
-   */
   setThinking(thinking) {
     this.isThinking = thinking;
     if (thinking) {
@@ -92,9 +74,6 @@ class StatusBar {
     }
   }
 
-  /**
-   * 更新 token 使用情况
-   */
   updateTokenUsage(usage) {
     if (usage) {
       this.tokenUsage.roundInput = usage.prompt_tokens || usage.promptTokens || 0;
@@ -106,41 +85,20 @@ class StatusBar {
     }
   }
 
-  /**
-   * 设置定价信息
-   */
   setPricing(pricing) {
     this.pricing = pricing;
   }
 
-  /**
-   * 设置诊断信息
-   */
   setDiagnostics(errors, warnings) {
     this.diagnostics = { errors: errors || 0, warnings: warnings || 0 };
   }
 
-  /**
-   * 设置信息消息（opencode 风格 info message 区域）
-   */
   setInfoMessage(msg, type, ttl) {
     this.infoMessage = { msg, type: type || 'info', ttl: ttl || 10000 };
     this._infoMessageTime = Date.now();
   }
 
-  /**
-   * 移除格式后缀（如 ".0K" → "K", ".0M" → "M"）
-   */
-  _cleanTokenSuffix(str) {
-    return str.replace('.0K', 'K').replace('.0M', 'M');
-  }
-
-  /**
-   * 渲染状态栏（1:1 复刻 opencode status.go）
-   *
-   * 布局:
-   * [ctrl+? help] [Context: 110K(85%), Cost: ¥0.50] [Info Msg...] [✖ N ⚠ N] [ModelName]
-   */
+  // 渲染状态栏
   render(model) {
     if (model) {this.model = model;}
     const t = this.theme;
@@ -250,9 +208,6 @@ class StatusBar {
     return output;
   }
 
-  /**
-   * 重置 token 统计
-   */
   resetTokenUsage() {
     this.tokenUsage = {
       roundInput: 0,
@@ -264,9 +219,7 @@ class StatusBar {
     };
   }
 
-  /**
-   * 获取已经过的时间
-   */
+  // 获取已经过的时间
   _getElapsedTime() {
     if (!this.thinkingStartTime) {return '';}
     const elapsed = Date.now() - this.thinkingStartTime;
@@ -275,18 +228,7 @@ class StatusBar {
     return `${Math.floor(elapsed / 60000)}m${Math.floor((elapsed % 60000) / 1000)}s`;
   }
 
-  /**
-   * 格式化 token 数为人类可读格式
-   */
-  _formatTokens(count) {
-    if (count >= 1000000) {return (count / 1000000).toFixed(1) + 'M';}
-    if (count >= 1000) {return (count / 1000).toFixed(1) + 'K';}
-    return String(count);
-  }
-
-  /**
-   * 计算字符串的可见长度（使用 ANSI_PATTERN 正则完整匹配）
-   */
+  // 计算字符串的可见长度
   _visibleLength(str) {
     return visibleLength(str);
   }

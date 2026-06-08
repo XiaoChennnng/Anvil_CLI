@@ -137,10 +137,7 @@ function createTheme(colors) {
     borderFocused: chalk.hex(colors.borderFocused),
     borderDim: chalk.hex(colors.borderDim),
 
-    // 功能色
-    // AI 思考内容：灰色 + 斜体
-    // 使用 .italic() 需要终端支持 SGR 3，但不是所有终端都支持
-    // fallback: 如果 italic 不可见，至少保持灰色
+    // 功能色：AI 思考内容灰色斜体（终端不支持则回退灰色）
     thinking: chalk.hex(colors.textMuted).italic,
     thinkingFallback: (text) => chalk.hex(colors.textMuted)(text),
     code: chalk.hex(colors.markdownCode),
@@ -204,10 +201,7 @@ function createTheme(colors) {
 const DARK_THEME = createTheme(DARK_COLORS);
 const LIGHT_THEME = createTheme(LIGHT_COLORS);
 
-/**
- * 检测终端是否为暗色背景
- * @returns {boolean}
- */
+// 检测终端是否为暗色背景
 function isDarkBackground() {
   // 简单检测：检查 COLORFGBG 环境变量
   const fgBg = process.env.COLORFGBG;
@@ -219,11 +213,7 @@ function isDarkBackground() {
   return true; // 默认暗色
 }
 
-/**
- * 获取当前主题
- * @param {string} [preference='auto'] - 'auto' | 'dark' | 'light'
- * @returns {Object}
- */
+// 获取当前主题
 function getTheme(preference = 'auto') {
   if (preference === 'light') {return LIGHT_THEME;}
   if (preference === 'dark') {return DARK_THEME;}

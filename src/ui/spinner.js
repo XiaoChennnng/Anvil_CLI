@@ -10,8 +10,8 @@ class Spinner {
     this._timer = null;
     this._text = '';
     this._frameIndex = 0;
-    this._blinking = false;  // 闪烁状态
-    this._visible = true;     // 当前圆点是否可见
+    this._blinking = false;
+    this._visible = true;
   }
 
   start(text) {
@@ -59,7 +59,6 @@ class Spinner {
     const line = `${chalk.cyan(frame)} ${this._text}`;
     // 只要在运行就闪烁：每帧交替显示/隐藏（每 80ms 切换）
     if (this._blinking && !this._visible) {
-      // 当前应该隐藏
       const cols = process.stdout.columns || 80;
       process.stdout.write(`\r${' '.repeat(cols)}\r`);
     } else {
@@ -74,8 +73,7 @@ class Spinner {
       clearInterval(this._timer);
       this._timer = null;
     }
-    this._blinking = false;  // 停止闪烁
-    // 清除当前行
+    this._blinking = false;
     const cols = process.stdout.columns || 80;
     process.stdout.write(`\r${' '.repeat(cols)}\r`);
   }
