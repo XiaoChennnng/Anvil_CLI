@@ -1275,6 +1275,7 @@ class ChatEngine extends EventEmitter {
         config: this.config,
         logger: this.logger,
         parentAgent: this,
+        projectDir: this.config.projectDir || process.cwd(),
       });
     }
     return this.teamManager;
@@ -1322,6 +1323,25 @@ class ChatEngine extends EventEmitter {
       return { needsTeam: false, error: error.message };
     } finally {
       this.teamMode = false;
+    }
+  }
+
+  // 解散团队
+  async _dissolveTeam() {
+    if (!this.teamManager) {
+      return { success: false, message: '当前没有活跃的团队' };
+    }
+
+    try {
+      await this.teamManager.dissolve();
+      this.teamManager = null;
+      this.teamMode = false;
+      this._updateSystemPrompt();
+      this.emit('team_mode_end', { reason: 'dissolved' });
+      return { success: true, message: '团队已解散' };
+    } catch (error) {
+      this.logger?.error('解散团队失败', error.message);
+      return { success: false, error: error.message };
     }
   }
 

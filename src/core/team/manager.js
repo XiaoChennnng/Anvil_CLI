@@ -487,6 +487,46 @@ class TeamManager extends EventEmitter {
   }
 
   /**
+   * 重新生成Agent（用于错误恢复）
+   */
+  async respawnAgent(agentId, options = {}) {
+    // 先终止旧的Agent（如果存在）
+    try {
+      await this.agentSpawner.terminate(agentId);
+    } catch {
+      // 忽略终止失败（可能已不存在）
+    }
+
+    // 从agents Map中移除
+    this.agents.delete(agentId);
+
+    // 创建新Agent
+    const newAgent = await this.agentSpawner.spawn({
+      role: options.role || 'executor',
+      teamId: this.teamId,
+      parentAgent: this.parentAgent,
+      model: options.model,
+    });
+
+    this.agents.set(newAgent.agentId, {
+      ...newAgent,
+      role: options.role || 'executor',
+      createdAt: new Date().toISOString(),
+      status: 'initialized',
+      respawnedFrom: agentId, // 标记是从哪个Agent重新生成的
+    });
+
+    this.emit('agent_respawned', {
+      teamId: this.teamId,
+      oldAgentId: agentId,
+      newAgentId: newAgent.agentId,
+      role: options.role,
+    });
+
+    return newAgent;
+  }
+
+  /**
    * 获取团队状态
    */
   getStatus() {

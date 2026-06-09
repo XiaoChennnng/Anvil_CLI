@@ -178,7 +178,7 @@ class ResultAggregator {
    */
   _mergeResults(categorizedResults, strategy) {
     let content = '';
-    const artifacts = {};
+    let artifacts = {};
 
     // 处理无冲突情况：_resolveConflicts 返回 { resolved: true } 时直接返回空结果
     if (categorizedResults.resolved === true && !categorizedResults.resolvedItems) {
