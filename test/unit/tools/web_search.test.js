@@ -12,7 +12,7 @@
  * 策略：mock globalThis.fetch 控制响应；parseBingHTML 直接测避免 mock。
  */
 
-const { searchBing, parseBingHTML } = require('../../../src/core/web_search');
+const { searchBing, parseBingHTML } = require('../../../src/core/web_search/bing');
 
 // 简化的 Bing HTML 片段 fixture（含 2 条结果 + 1 条 Bing 重定向）
 const BING_HTML_FIXTURE = `

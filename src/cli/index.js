@@ -20,6 +20,7 @@ const { registerCommandTool } = require('../tools/command');
 const { registerCodeTools } = require('../tools/code');
 const { registerTodoTools } = require('../tools/todo');
 const { registerWebSearchTool } = require('../tools/web_search');
+const { registerWebFetchTool } = require('../tools/web_fetch');
 const { registerMCPTools } = require('../tools/mcp');
 const MCPManager = require('../mcp/manager');
 const { wireMCPEvents } = require('../mcp/integration');
@@ -74,6 +75,7 @@ async function main() {
   registerCodeTools(toolRegistry);
   registerTodoTools(toolRegistry);
   registerWebSearchTool(toolRegistry, config);
+  registerWebFetchTool(toolRegistry, config);
   const { registerQuestionTool } = require('../tools/question');
   registerQuestionTool(toolRegistry);
   const { registerTaskCompleteTool } = require('../tools/task_complete');

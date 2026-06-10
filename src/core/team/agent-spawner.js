@@ -257,7 +257,7 @@ class AgentSpawner extends EventEmitter {
    */
   _buildTaskPrompt(tasks) {
     if (!tasks || tasks.length === 0) {
-      return '请执行分配给你的任务。完成后调用 task_complete 工具声明完成。';
+      return '请执行分配给你的任务。完成后调用 task_complete 工具声明完成，一句话说明即可。';
     }
 
     let prompt = '## 任务列表\n\n';
@@ -271,7 +271,7 @@ class AgentSpawner extends EventEmitter {
       prompt += `- **${taskId}**${priority}: ${description}\n`;
     }
 
-    prompt += '\n每完成一个任务，标注进度。如果所有任务都完成，调用 task_complete 工具声明完成。';
+    prompt += '\n关键进展时简要汇报。所有任务完成后调用 task_complete，一句话说明即可，不要重复总结。';
 
     return prompt;
   }

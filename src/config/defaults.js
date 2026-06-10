@@ -31,14 +31,33 @@ const DEFAULTS = {
 
   mcpServers: {},
 
-  // 联网搜索（默认 Bing 公开搜索页，零 key 模拟浏览器抓取）
+  // 联网搜索（支持多引擎：Bing、DuckDuckGo、SearXNG）
   webSearch: {
     enabled: true,
-    endpoint: 'https://www.bing.com/search',
+    defaultEngine: 'auto', // 'auto' | 'bing' | 'duckduckgo' | 'searxng'
     timeout: 15000,
     maxResults: 8,
     locale: 'zh-CN',
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    // 缓存配置
+    cacheEnabled: true,
+    cache: {
+      maxSize: 100, // 最大缓存条目数
+      ttl: 300000, // 缓存有效期（毫秒），默认 5 分钟
+    },
+    // 各引擎配置
+    bing: {
+      enabled: true,
+      endpoint: 'https://www.bing.com/search',
+    },
+    duckduckgo: {
+      enabled: true,
+      endpoint: 'https://html.duckduckgo.com/html/',
+    },
+    searxng: {
+      enabled: true,
+      instance: null, // 自定义 SearXNG 实例 URL，如 'https://search.example.com'
+    },
   },
 
   i18n: {

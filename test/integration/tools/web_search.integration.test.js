@@ -9,7 +9,7 @@
  * 启用时真实请求 Bing 验证端到端。CI 上不会跑，避免 flaky。
  */
 
-const { searchBing } = require('../../../src/core/web_search');
+const { searchBing } = require('../../../src/core/web_search/bing');
 
 const ENABLED = process.env.WEB_SEARCH_INTEGRATION === '1';
 const d = ENABLED ? describe : describe.skip;
