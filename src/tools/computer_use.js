@@ -74,15 +74,11 @@ function registerComputerUseTools(registry, context) {
   // 获取屏幕尺寸
   registry.register({
     name: 'computer_get_screen_size',
-    description: `获取屏幕分辨率，用于坐标换算。
+    description: `获取屏幕分辨率。
 
-坐标换算公式：
-实际坐标 = 截图中的坐标 × (实际屏幕尺寸 / 截图尺寸)
-
-示例：
-- 截图尺寸为 1920×1080，实际屏幕为 2560×1440
-- 截图中某按钮在 (960, 540)
-- 实际坐标 = (960 × 2560/1920, 540 × 1440/1080) = (1280, 720)`,
+使用场景：
+- 了解当前屏幕分辨率
+- 确认坐标是否在有效范围内`,
     parameters: {
       type: 'object',
       properties: {},
