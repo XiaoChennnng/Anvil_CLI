@@ -69,14 +69,45 @@
 
 ## 安装
 
+### 环境要求
+
 ```bash
 node >= 18.0.0
+```
 
+### 克隆并安装
+
+```bash
 git clone <repo-url> && cd anvil
 npm install
 ```
 
+### 全局安装（推荐）
+
+安装后可在任意目录直接输入 `anvil` 启动：
+
+```bash
+npm run install-global    # 一键全局安装
+# 或
+npm link                  # 链接到全局
+```
+
+验证安装：
+
+```bash
+anvil --version
+anvil --help
+```
+
+### 临时使用（无需安装）
+
+```bash
+npx anvil -d /path/to/project
+```
+
 ## 启动
+
+### 全局安装后启动（推荐）
 
 ```bash
 # 设置 API Key（根据所选提供商）
@@ -85,8 +116,16 @@ export MOONSHOT_API_KEY=sk-your-key-here   # Kimi
 export OPENAI_API_KEY=sk-your-key-here     # OpenAI
 export ANTHROPIC_API_KEY=sk-ant-...        # Anthropic
 
-# 启动
-npm start
+# 启动（任意目录）
+anvil                    # 在当前目录启动
+anvil -d /path/to/project # 指定工作目录
+```
+
+### 开发模式启动
+
+```bash
+npm start                # 开发调试
+node bin/anvil.js        # 直接运行
 ```
 
 首次启动自动打开配置向导，引导设置：
