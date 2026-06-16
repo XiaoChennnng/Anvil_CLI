@@ -335,7 +335,55 @@ const L3_TOOLS = `## 可用工具详细说明
 - **web_fetch(url, extractType?, maxLength?)** — 获取指定 URL 的网页内容并提取正文
   - **使用场景**：搜索结果中的网页需要深入阅读时；用户直接提供 URL 需要分析时
   - **extractType**：article（智能提取文章正文，默认）/ text（全部纯文本）/ html（清理后的 HTML）
-  - **最佳实践**：先用 web_search 找到相关 URL，再用 web_fetch 提取详细内容；长篇文章可分段读取`;
+  - **最佳实践**：先用 web_search 找到相关 URL，再用 web_fetch 提取详细内容；长篇文章可分段读取
+
+### Computer Use（电脑控制）
+
+以下工具仅在当前模型支持多模态（vision）时可用。使用这些工具控制电脑时，**必须遵循"观察-分析-操作-验证"的闭环流程**。
+
+**核心原则**：
+1. **先观察**：任何操作前必须先截图（computer）了解当前状态
+2. **再分析**：根据截图分析当前界面、可用元素、目标位置
+3. **后操作**：规划并执行具体操作（移动、点击、输入等）
+4. **必验证**：操作后再次截图验证结果，确认是否达到预期
+
+**坐标定位技巧**：
+- 使用 computer_get_screen_size 获取实际屏幕分辨率
+- 从截图估算相对位置，按比例换算实际坐标：实际坐标 = 截图坐标 × (实际分辨率 / 截图分辨率)
+- 不确定时先用 computer_move 移动鼠标到大致位置观察效果
+
+**常见任务模式**：
+- 打开程序：截图 → 点击开始菜单 → 输入程序名 → 点击搜索结果
+- 点击按钮：截图定位按钮 → computer_move 到按钮中心 → computer_click
+- 填写表单：截图定位输入框 → 点击输入框 → computer_type 输入内容 → 点击提交
+- 等待加载：执行操作后调用 computer_wait 等待界面稳定 → 截图验证
+
+- **computer(wait?)** — 截取屏幕截图，返回图片供 AI 分析
+  - **使用时机**：任务开始时、每次操作后验证、不确定状态时
+  - **wait**：截图前等待毫秒数（默认500），用于等待界面变化稳定
+
+- **computer_get_screen_size()** — 获取屏幕分辨率，帮助坐标换算
+
+- **computer_move(x, y)** — 移动鼠标到指定坐标
+  - **技巧**：不确定精确坐标时，先移动到大致位置观察效果
+
+- **computer_click(x?, y?, button?, double?)** — 在指定坐标点击鼠标
+  - **参数**：x/y 可选，不提供则在当前位置点击；button 可选 left/right（默认left）；double 是否双击
+  - **技巧**：复杂操作前先点击目标元素获取焦点
+
+- **computer_type(text)** — 在当前光标位置输入文本
+  - **注意**：输入前确保目标输入框已获得焦点（先点击）
+
+- **computer_key(key)** — 按下特殊按键（enter/escape/tab/arrowup/arrowdown/arrowleft/arrowright/space/delete/backspace/home/end/pageup/pagedown）
+
+- **computer_scroll(direction, clicks?, x?, y?)** — 在指定位置滚动鼠标滚轮
+
+- **computer_wait(seconds?)** — 等待一段时间，观察屏幕变化
+  - **使用场景**：点击后等待界面加载、操作后等待响应
+  - **seconds**：等待秒数（默认2秒）
+
+- **computer_drag(startX, startY, endX, endY)** — 从起点拖拽到终点
+`;
 
 // L4_PLAN_MODE: Plan Mode 规则（planMode 开启时加载, ~1070 tokens）
 

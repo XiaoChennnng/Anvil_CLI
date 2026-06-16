@@ -80,6 +80,8 @@ async function main() {
   registerQuestionTool(toolRegistry);
   const { registerTaskCompleteTool } = require('../tools/task_complete');
   const { registerPlanModeTools } = require('../tools/plan_mode');
+  const { registerComputerUseTools, unregisterComputerUseTools } = require('../tools/computer_use');
+  const { isVisionModel } = require('../ai/providers');
   logger.debug('工具注册完成', { tools: toolRegistry.list() });
 
   const mcpManager = new MCPManager(config, logger);
@@ -136,6 +138,34 @@ async function main() {
   registerTeamTools(toolRegistry, chatEngine);
 
   const tui = new TUI(config);
+
+  // ─── Computer Use 工具动态注册 ───
+  // 根据当前模型是否支持 vision 动态注册/注销 computer use 工具
+  function updateComputerUseTools() {
+    const currentModel = chatEngine.model;
+    const currentProvider = chatEngine.getProvider?.() || config.provider || 'deepseek';
+    const supportsVision = isVisionModel(currentProvider, currentModel);
+
+    const hasComputerTools = toolRegistry.get('computer_screenshot') !== undefined;
+
+    if (supportsVision && !hasComputerTools) {
+      // 注册 computer use 工具
+      registerComputerUseTools(toolRegistry, { tui, chatEngine });
+      logger.debug('已注册 Computer Use 工具（多模态模型）', { model: currentModel });
+    } else if (!supportsVision && hasComputerTools) {
+      // 注销 computer use 工具
+      unregisterComputerUseTools(toolRegistry);
+      logger.debug('已注销 Computer Use 工具（非多模态模型）', { model: currentModel });
+    }
+  }
+
+  // 初始注册
+  updateComputerUseTools();
+
+  // 监听模型切换事件
+  chatEngine.on('model_changed', () => {
+    updateComputerUseTools();
+  });
 
   let thinkingStarted = false;
   let contentStarted = false;

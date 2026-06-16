@@ -1063,6 +1063,9 @@ class ChatEngine extends EventEmitter {
         }
       }
 
+      // 触发模型切换事件
+      this.emit('model_changed', { model: modelName, provider: this.getProvider() });
+
       return true;
     }
     return false;

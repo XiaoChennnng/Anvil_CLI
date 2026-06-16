@@ -2,7 +2,70 @@
 
 **AI-Driven CLI Programming Assistant** — 在终端里锻造代码。
 
-基于 DeepSeek V4 API 的全屏 TUI 编程助手，支持自主 Agent 模式、多轮对话、工具调用、MCP 扩展。
+基于多模态 AI 的全屏 TUI 编程助手，支持 DeepSeek、Kimi、OpenAI、Anthropic 等多家模型提供商，具备自主 Agent 模式、多轮对话、工具调用、MCP 扩展、Computer Use 电脑控制等能力。
+
+## 特性
+
+### 多模型提供商支持
+
+支持多家 AI 提供商，灵活切换：
+
+| 提供商 | 模型 | 特点 |
+|--------|------|------|
+| DeepSeek | V4 Flash / V4 Pro | 中文优秀、支持思考模式 |
+| Kimi | K2.5 / K2.6 / K2.7 | 超长上下文 (256K)、支持多模态 |
+| OpenAI | GPT-4o / o1 / o3 | 需自行添加模型配置 |
+| Anthropic | Claude 3.5/3.7 Sonnet | 需自行添加模型配置 |
+
+支持自定义提供商和模型，兼容 OpenAI Chat Completions 和 Anthropic Messages API 格式。
+
+### Computer Use 电脑控制
+
+支持多模态模型（如 Kimi K2.5）控制电脑：
+
+- **截图** - 获取屏幕状态供 AI 分析
+- **点击** - 在指定坐标点击鼠标
+- **输入** - 键盘输入文本
+- **移动** - 移动鼠标到目标位置
+- **拖拽** - 拖拽操作
+- **滚动** - 滚动页面内容
+
+使用场景：自动化操作、界面测试、流程演示等。
+
+### 多模态支持
+
+支持图片输入，可以：
+- 分析截图内容
+- 识别 UI 元素位置
+- 理解视觉信息并执行相应操作
+
+### 自主 Agent 循环
+
+接收任务后自动规划、执行、验证、检查，直到任务完成，无需中间干预。
+
+### 上下文管理
+
+多层级上下文窗口（支持 1M tokens），支持自适应渐进压缩：
+
+- **6 层架构**：System Prompt → 项目概览 → 工作记忆 → 文件上下文 → 压缩存档 → 瞬时结果
+- **5 级压缩**：从轻度警告到极限压缩，自动触发
+- **相位感知**：根据探索/实现/调试/审查阶段动态调整策略
+
+### MCP 扩展
+
+支持 [Model Context Protocol](https://modelcontextprotocol.io) 服务器，AI 可在对话中动态添加/移除外部工具。
+
+### 团队协作模式
+
+支持多 Agent 并行工作，自动分解任务并协同完成。
+
+### 技能系统
+
+支持自定义技能（slash commands），放在 `.anvil/skills/` 目录下自动加载。
+
+### 联网搜索
+
+内置 `web_search` 工具，AI 可主动联网查最新版本、官方文档、新闻等实时信息。
 
 ## 安装
 
@@ -16,15 +79,21 @@ npm install
 ## 启动
 
 ```bash
-# 设置 API Key（二选一）
-export DEEPSEEK_API_KEY=sk-your-key-here   # Linux/macOS
-$env:DEEPSEEK_API_KEY="sk-your-key-here"   # Windows PowerShell
+# 设置 API Key（根据所选提供商）
+export DEEPSEEK_API_KEY=sk-your-key-here   # DeepSeek
+export MOONSHOT_API_KEY=sk-your-key-here   # Kimi
+export OPENAI_API_KEY=sk-your-key-here     # OpenAI
+export ANTHROPIC_API_KEY=sk-ant-...        # Anthropic
 
 # 启动
 npm start
 ```
 
-首次启动自动打开配置向导，引导设置 API Key 和默认模型。
+首次启动自动打开配置向导，引导设置：
+- 项目工作目录
+- 模型提供商
+- API Key
+- 默认模型
 
 ## 使用
 
@@ -36,42 +105,69 @@ npm start
 - `创建一个 Vue 组件`
 - `审查 src/index.js 的代码质量`
 - `帮我看看这个报错`
+- `打开浏览器访问 example.com` (Computer Use)
 
 ### 快捷键
 
-| 按键         | 作用    |
-| ---------- | ----- |
-| `Enter`    | 发送    |
-| `Ctrl+J`   | 换行    |
-| `↑/↓`      | 浏览历史  |
-| `Ctrl+C`   | 中断回复  |
-| `Ctrl+D`   | 退出    |
-| `Ctrl+U`   | 清空输入  |
-| `←/→`      | 移动光标  |
+| 按键 | 作用 |
+|------|------|
+| `Enter` | 发送 |
+| `Ctrl+J` | 换行 |
+| `↑/↓` | 浏览历史 |
+| `Ctrl+C` | 中断回复 |
+| `Ctrl+D` | 退出 |
+| `Ctrl+U` | 清空输入 |
+| `←/→` | 移动光标 |
 | `Home/End` | 行首/行尾 |
+| `PageUp/Down` | 翻页 |
 
 ### 内置命令
 
-| 命令               | 作用        | <br /> | <br />  | <br /> |
-| ---------------- | --------- | :----- | :------ | :----- |
-| `/help`          | 帮助信息      | <br /> | <br />  | <br /> |
-| `/keys`          | 快捷键列表     | <br /> | <br />  | <br /> |
-| `/clear`         | 清屏        | <br /> | <br />  | <br /> |
-| `/model <name>`  | 切换模型      | <br /> | <br />  | <br /> |
-| `/review [file]` | 代码审查      | <br /> | <br />  | <br /> |
-| \`/todo add      | done      | list   | clear\` | 任务管理   |
-| `/plan`          | 计划模式      | <br /> | <br />  | <br /> |
-| `/compact`       | 手动压缩上下文   | <br /> | <br />  | <br /> |
-| `/undo /redo`    | 撤销/重做     | <br /> | <br />  | <br /> |
-| `/mcp`           | 查看 MCP 状态 | <br /> | <br />  | <br /> |
-| `/skill [name]`  | 技能系统管理   | <br /> | <br />  | <br /> |
+| 命令 | 作用 |
+|------|------|
+| `/help` | 帮助信息 |
+| `/keys` | 快捷键列表 |
+| `/clear` | 清屏 |
+| `/provider [id]` | 切换或查看提供商 |
+| `/provider add <id> <name> <url> <key>` | 添加自定义提供商 |
+| `/model [id]` | 切换或查看模型 |
+| `/model add <id> <name>` | 添加自定义模型 |
+| `/review [file]` | 代码审查 |
+| `/todo add \| done \| list \| clear` | 任务管理 |
+| `/plan` | 计划模式 |
+| `/compact` | 手动压缩上下文 |
+| `/undo /redo` | 撤销/重做 |
+| `/mcp` | 查看 MCP 状态 |
+| `/skills` | 查看已加载 Skills |
+| `/team` | 团队协作模式 |
 
-## 模型
+## 模型配置
 
-| 模型                | 用途        | 定价（元/千tokens）       |
-| ----------------- | --------- | ------------------- |
-| DeepSeek V4 Flash | 日常开发、快速生成 | 输入 0.001 / 输出 0.002 |
-| DeepSeek V4 Pro   | 复杂推理、深度分析 | 输入 0.003 / 输出 0.006 |
+### 内置模型
+
+| 模型 | 上下文窗口 | 多模态 | 思考模式 |
+|------|------------|--------|----------|
+| DeepSeek V4 Flash | 1M | ✗ | ✓ |
+| DeepSeek V4 Pro | 1M | ✗ | ✓ |
+| Kimi K2.5 | 256K | ✓ | ✓ |
+| Kimi K2.6 | 256K | ✓ | ✓ |
+| Kimi K2.7 Code | 256K | ✓ | ✓ |
+
+### 自定义提供商
+
+```bash
+/provider add my-openai "My OpenAI" https://api.openai.com/v1 sk-xxx openai false
+```
+
+参数：`id` `名称` `baseURL` `apiKey` `format(openai/anthropic)` `thinkingMode`
+
+### 自定义模型
+
+```bash
+/model add gpt-4o "GPT-4o" true true 128000
+```
+
+参数：`id` `名称` `vision(true/false)` `thinkingMode(true/false)` `contextWindow`
 
 ## 配置
 
@@ -79,15 +175,18 @@ npm start
 
 ```bash
 # 命令行参数
-node bin/anvil.js -d /path/to/project -m deepseek-v4-pro --no-thinking
+node bin/anvil.js -d /path/to/project -m kimi-k2.5 --no-thinking
 
 # 环境变量
-DEEPSEEK_API_KEY     # API Key
-HTTP_PROXY           # HTTP 代理
-HTTPS_PROXY          # HTTPS 代理
-ANVIL_PROJECT_DIR    # 默认工作目录
-WEB_SEARCH_TIMEOUT   # 联网搜索超时（毫秒）
-WEB_SEARCH_DISABLED  # =1 禁用联网搜索
+DEEPSEEK_API_KEY       # DeepSeek API Key
+MOONSHOT_API_KEY       # Kimi API Key
+OPENAI_API_KEY         # OpenAI API Key
+ANTHROPIC_API_KEY      # Anthropic API Key
+HTTP_PROXY             # HTTP 代理
+HTTPS_PROXY            # HTTPS 代理
+ANVIL_PROJECT_DIR      # 默认工作目录
+WEB_SEARCH_TIMEOUT     # 联网搜索超时（毫秒）
+WEB_SEARCH_DISABLED    # =1 禁用联网搜索
 ```
 
 配置文件（JSON）：
@@ -97,8 +196,10 @@ WEB_SEARCH_DISABLED  # =1 禁用联网搜索
 
 ```json
 {
+  "provider": "deepseek",
   "apiKey": "sk-xxx",
   "defaultModel": "deepseek-v4-flash",
+  "baseURL": "https://api.deepseek.com",
   "thinkingMode": true,
   "theme": "auto",
   "mcpServers": {},
@@ -111,57 +212,48 @@ WEB_SEARCH_DISABLED  # =1 禁用联网搜索
 }
 ```
 
-## 特性
+## Computer Use 使用指南
 
-### 自主 Agent 循环
+Computer Use 功能允许 AI 控制你的电脑，**仅在使用支持多模态（vision）的模型时可用**（如 Kimi K2.5）。
 
-接收任务后自动规划、执行、验证、检查，直到任务完成，无需中间干预。
+### 操作流程
 
-### 上下文管理
+1. **截图观察** - AI 调用 `computer` 工具获取屏幕截图
+2. **分析规划** - AI 分析截图内容，确定目标元素位置
+3. **执行操作** - 移动鼠标、点击、输入等
+4. **验证结果** - 再次截图确认操作成功
 
-多层级上下文窗口（默认 1M tokens），支持自适应渐进压缩：
-
-- **6 层架构**：System Prompt → 项目概览 → 工作记忆 → 文件上下文 → 压缩存档 → 瞬时结果
-- **5 级压缩**：从轻度警告到极限压缩，自动触发
-- **相位感知**：根据探索/实现/调试/审查阶段动态调整策略
-
-### MCP 扩展
-
-支持 [Model Context Protocol](https://modelcontextprotocol.io) 服务器，AI 可在对话中动态添加/移除外部工具：
+### 示例任务
 
 ```
-/mcp 查看状态
-AI 自动调用 mcp_add_server / mcp_remove_server
+用户：打开计算器计算 123+456
+
+AI 执行步骤：
+1. computer (截图看桌面)
+2. computer_click x=50 y=50 (点击开始菜单)
+3. computer_wait seconds=1 (等待菜单弹出)
+4. computer (截图验证菜单打开)
+5. computer_type text="计算器" (输入搜索词)
+6. computer_key key="enter" (确认搜索)
+7. computer_wait seconds=2 (等待计算器打开)
+8. computer (截图验证计算器已打开)
+9. computer_click x=... (依次点击 1, 2, 3, +, 4, 5, 6, =)
+10. computer (截图查看计算结果)
 ```
 
-### 团队协作模式
+### 坐标换算
 
-支持多 Agent 并行工作，自动分解任务并协同完成：
+截图分辨率可能与实际屏幕不同，使用 `computer_get_screen_size` 获取实际分辨率后换算：
 
-- **自动任务分解**：复杂任务自动拆分为子任务，分配给多个 Agent 并行执行
-- **结果聚合**：各 Agent 结果自动汇总，形成完整解决方案
-- **错误处理**：支持重试和降级策略，保证任务可靠性
-- **使用方式**：输入 `/team` 命令开启团队模式
+```
+实际坐标 = 截图坐标 × (实际分辨率 / 截图分辨率)
+```
 
-### 技能系统
+### 安全提示
 
-支持自定义技能（slash commands）：
-
-- **技能文件**：放在 `.anvil/skills/` 目录下
-- **独立文件**：每个技能是独立的 JS 文件
-- **注册机制**：启动时自动扫描并注册可用技能
-- **使用方式**：输入 `/skill` 查看可用技能列表
-
-### 联网搜索
-
-内置 `web_search` 工具，AI 可主动联网查最新版本、官方文档、新闻、库变更等实时信息：
-
-- **零配置开箱即用**：访问 Bing 公开搜索页，无需任何 API Key
-- **中文友好**：默认 `zh-CN` locale，返回结果含中文页面
-- **智能容错**：超时/反爬/解析失败均返回友好错误，AI 据此调整策略
-- **可移植**：不依赖宿主 MCP 服务，Anvil 在任何 Node 18+ 环境都能联网
-
-使用示例：在对话中问"Node.js 最新 LTS 版本是多少"，AI 会自动调用 `web_search("Node.js LTS")` 拿到答案。
+- Computer Use 工具需要用户确认后才能执行
+- 涉及点击、输入的操作会询问用户批准
+- 可随时按 `Ctrl+C` 中断正在执行的操作序列
 
 ## 架构
 
@@ -170,30 +262,39 @@ bin/anvil.js             入口
 src/
 ├── cli/                 主流程 + 命令处理
 │   ├── index.js         启动、事件总线、输入循环
-│   ├── commands.js      内置命令（/model /todo 等）
+│   ├── commands.js      内置命令（/provider /model /todo 等）
 │   └── options.js       命令行参数解析
 ├── ai/                  AI 客户端
-│   ├── client.js        DeepSeek API（流式 + 思考模式 + 自动重试）
+│   ├── client.js        多提供商 API 客户端（OpenAI/Anthropic 格式）
+│   ├── providers.js     多提供商配置（DeepSeek/Kimi/OpenAI/Anthropic）
+│   ├── models.js        模型定义和定价
+│   ├── prompts.js       分层 System Prompt（L0-L4）
 │   ├── cache.js         会话级 LRU 缓存
-│   ├── models.js        模型定义
 │   └── sensitive.js     输出敏感内容过滤
 ├── core/                核心引擎
 │   ├── chat.js          对话引擎 + 自主 Agent 循环
-│   ├── context.js       智能上下文管理（压缩 + 相位检测）
+│   ├── context.js       智能上下文管理（1M tokens 窗口）
 │   ├── session.js       会话持久化
 │   ├── todo.js          Todo 管理器
-│   ├── web_search.js    联网搜索核心（fetch + HTML 解析 + 重试）
+│   ├── web_search/      联网搜索多引擎实现
+│   │   ├── index.js     统一入口 + 引擎调度
+│   │   ├── bing.js      Bing 搜索
+│   │   ├── duckduckgo.js DuckDuckGo 搜索
+│   │   └── searxng.js   SearXNG 私有实例
 │   └── team/            团队协作模式
 ├── tools/               工具系统
 │   ├── registry.js      工具注册中心
 │   ├── file.js          文件读写/编辑/删除
 │   ├── code.js          代码分析（符号/引用/定义）
 │   ├── command.js       命令执行
+│   ├── computer_use.js  Computer Use 电脑控制（截图/点击/输入）
+│   ├── web_search.js    联网搜索
+│   ├── web_fetch.js     网页内容获取
 │   ├── todo.js          Todo 工具
-│   ├── web_search.js    联网搜索（基于 Bing 公开搜索页）
 │   ├── question.js      用户提问工具
 │   ├── task_complete.js 任务完成声明
-│   ├── context.js       上下文压缩工具
+│   ├── plan_mode.js     计划模式工具
+│   ├── team_tools.js    团队协作工具
 │   ├── mcp.js           MCP 管理工具
 │   └── skill.js         技能系统
 ├── mcp/                 MCP 服务器管理
@@ -208,40 +309,31 @@ src/
 │   └── proxy.js         代理解析
 └── ui/                  TUI 全屏界面
     ├── tui.js           主入口
-    ├── components/
-    │   ├── layout.js    分栏布局（消息区/编辑器/状态栏）
-    │   ├── message-box.js  消息渲染
-    │   ├── message.js   消息行渲染
-    │   ├── sidebar.js   侧边栏（Todo/上下文/缓存）
-    │   ├── editor.js    输入编辑器
-    │   ├── status-bar.js  状态栏
-    │   └── question-panel.js  问答面板
-    ├── markdown.js      Markdown 渲染
-    ├── diff.js          Diff 展示
-    ├── theme.js         暗色/亮色主题
-    ├── tokens.js        Token 统计
-    ├── renderer.js      备用渲染器
+    ├── components/      UI 组件
     └── ...
 ```
 
 ## 开发
 
 ```bash
-npm test          # 运行测试
-npm run lint      # 代码检查
-npm run format    # 格式化
+npm test              # 运行测试
+npm run test:unit     # 单元测试
+npm run test:integration # 集成测试
+npm run lint          # 代码检查
+npm run format        # 格式化
 ```
 
 ## 技术栈
 
-| 层   | 技术                        |
-| --- | ------------------------- |
-| 运行时 | Node.js 18+ (CommonJS)    |
-| AI  | DeepSeek V4 (OpenAI SDK)  |
-| CLI | Commander.js              |
-| UI  | Chalk + marked-terminal   |
+| 层 | 技术 |
+|----|------|
+| 运行时 | Node.js 18+ (CommonJS) |
+| AI | DeepSeek / Kimi / OpenAI / Anthropic |
+| CLI | Commander.js |
+| UI | Chalk + marked-terminal |
+| 自动化 | robotjs + screenshot-desktop |
 | MCP | @modelcontextprotocol/sdk |
-| 测试  | Jest                      |
+| 测试 | Jest |
 
 ## 许可
 

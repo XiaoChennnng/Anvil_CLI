@@ -672,6 +672,64 @@ class TUI {
   get isProcessing() {
     return this._isProcessing;
   }
+
+  // ─── Computer Use 支持 ───
+
+  /**
+   * 获取当前屏幕状态（用于截图）
+   * @returns {Object} 屏幕状态对象
+   */
+  getScreenState() {
+    // 获取消息区可见内容
+    const visibleContent = this.messageBox?.getVisibleContent?.() || '';
+
+    // 获取编辑器当前输入
+    const editorInput = this.editor?.currentInput || '';
+
+    // 获取光标位置
+    const cursorPosition = {
+      row: this.editor?.cursorRow || 0,
+      col: this.editor?.cursorCol || 0,
+    };
+
+    // 获取终端尺寸
+    const dimensions = {
+      width: this.layout?.width || 80,
+      height: this.layout?.height || 24,
+    };
+
+    // 构建屏幕文本描述
+    const lines = [];
+    lines.push('=== 终端屏幕状态 ===');
+    lines.push(`尺寸: ${dimensions.width}x${dimensions.height}`);
+    lines.push(`光标: 行${cursorPosition.row}, 列${cursorPosition.col}`);
+    lines.push('');
+    lines.push('--- 消息区内容 ---');
+    lines.push(visibleContent || '(空)');
+    lines.push('');
+    lines.push('--- 编辑器输入 ---');
+    lines.push(editorInput || '(空)');
+
+    return {
+      text: lines.join('\n'),
+      visibleContent,
+      editorInput,
+      cursorPosition,
+      dimensions,
+    };
+  }
+
+  /**
+   * 模拟键盘输入
+   * @param {string} key - 要输入的字符或按键序列
+   */
+  simulateKeyPress(key) {
+    if (!key) {return;}
+
+    // 将字符串转换为 Buffer 并调用 handleKey
+    const buf = Buffer.from(key, 'utf8');
+    this.handleKey(buf);
+  }
 }
 
 module.exports = TUI;
