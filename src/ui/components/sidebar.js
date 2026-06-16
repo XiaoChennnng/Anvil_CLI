@@ -65,9 +65,17 @@ class Sidebar {
   updateCacheStats(usage) {
     if (usage) {
       this.cacheStats.totalRequests++;
-      this.cacheStats.totalInputTokens += usage.prompt_tokens || usage.promptTokens || 0;
-      const cached = usage.prompt_cache_hit_tokens || 0;
+      // 支持多种输入 token 字段名
+      const inputTokens = usage.prompt_tokens || usage.promptTokens || usage.input_tokens || 0;
+      this.cacheStats.totalInputTokens += inputTokens;
+
+      // 支持多种缓存命中字段名（不同提供商命名不同）
+      const cached = usage.prompt_cache_hit_tokens // DeepSeek
+        || usage.prompt_caching_tokens // Anthropic prompt caching
+        || usage.cached_tokens // OpenAI / 通用
+        || 0;
       this.cacheStats.cachedTokens += cached;
+
       if (cached > 0) {
         this.cacheStats.cacheHits++;
       }

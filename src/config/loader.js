@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const DEFAULTS = require('./defaults');
 const { loadProxy } = require('./proxy');
+const { getModelContextWindow, getProvider } = require('../ai/providers');
 
 function getGlobalConfigDir() {
   return path.join(os.homedir(), '.anvil');
@@ -69,8 +70,18 @@ function loadConfig(cliOptions = {}) {
 
   config.proxy = loadProxy(config.proxy);
 
+  // API Key 环境变量支持
   if (process.env.DEEPSEEK_API_KEY) {
     config.apiKey = process.env.DEEPSEEK_API_KEY;
+  }
+  if (process.env.OPENAI_API_KEY) {
+    config.openaiApiKey = process.env.OPENAI_API_KEY;
+  }
+  if (process.env.ANTHROPIC_API_KEY) {
+    config.anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+  }
+  if (process.env.MOONSHOT_API_KEY) {
+    config.moonshotApiKey = process.env.MOONSHOT_API_KEY;
   }
 
   // 联网搜索环境变量覆盖
@@ -84,11 +95,44 @@ function loadConfig(cliOptions = {}) {
     config.webSearch.enabled = false;
   }
 
+  if (cliOptions.provider) {
+    config.provider = cliOptions.provider;
+  }
   if (cliOptions.model) {
     config.defaultModel = cliOptions.model;
   }
   if (cliOptions.thinkingMode !== undefined) {
     config.thinkingMode = cliOptions.thinkingMode;
+  }
+
+  // 根据所选模型自动探测上下文窗口大小
+  const provider = config.provider || 'deepseek';
+  // 如果没有指定模型，或者当前模型不属于新提供商，使用提供商的默认模型
+  let model = config.defaultModel;
+  const providerConfig = getProvider(provider);
+  if (model && providerConfig?.models && !providerConfig.models[model]) {
+    // 当前模型不属于该提供商，切换到提供商的默认模型
+    model = providerConfig?.defaultModel;
+    config.defaultModel = model; // 更新配置中的模型
+  }
+  if (!model) {
+    model = providerConfig?.defaultModel || 'deepseek-v4-flash';
+    config.defaultModel = model; // 更新配置中的模型
+  }
+  const detectedWindow = getModelContextWindow(provider, model);
+
+  // 设置上下文窗口大小（如果配置中没有显式指定且能探测到）
+  if (!config.context) {
+    config.context = {};
+  }
+  // 使用探测值或回退到默认值 128K
+  const finalWindowSize = detectedWindow || 128_000;
+  if (!config.context.windowSize) {
+    config.context.windowSize = finalWindowSize;
+  }
+  // 同时设置顶层 windowSize 以兼容旧代码
+  if (!config.windowSize) {
+    config.windowSize = finalWindowSize;
   }
 
   const isFirstRun = !config.apiKey;

@@ -1048,12 +1048,80 @@ class ChatEngine extends EventEmitter {
   }
 
   switchModel(modelName) {
-    const { isValidModel } = require('../ai/models');
+    const { isValidModel, getModelProvider } = require('../ai/models');
+    const { getModelContextWindow } = require('../ai/providers');
     if (isValidModel(modelName)) {
       this.model = modelName;
+
+      // 根据新模型更新上下文窗口大小（如果能探测到）
+      const provider = getModelProvider(modelName) || this.getProvider() || 'deepseek';
+      const contextWindow = getModelContextWindow(provider, modelName);
+      if (this.contextManager && contextWindow) {
+        this.contextManager.setWindowSize(contextWindow);
+        if (this.logger) {
+          this.logger.debug(`切换模型到 ${modelName}，上下文窗口调整为 ${contextWindow.toLocaleString()} tokens`);
+        }
+      }
+
       return true;
     }
     return false;
+  }
+
+  /**
+   * 获取当前提供商 ID
+   * @returns {string} 提供商 ID
+   */
+  getProvider() {
+    if (this.aiClient && this.aiClient.getCurrentProvider) {
+      return this.aiClient.getCurrentProvider();
+    }
+    // 回退：从模型推断
+    const { detectProvider } = require('../ai/providers');
+    return detectProvider(this.model) || 'deepseek';
+  }
+
+  /**
+   * 切换模型提供商
+   * @param {string} providerId - 提供商 ID
+   * @returns {boolean} 是否切换成功
+   */
+  switchProvider(providerId) {
+    const { isValidProvider, getProvider, getModelContextWindow } = require('../ai/providers');
+    if (!isValidProvider(providerId)) {
+      return false;
+    }
+
+    const provider = getProvider(providerId);
+
+    // 更新 AI 客户端的提供商配置
+    if (this.aiClient) {
+      // 重置客户端缓存，下次请求会使用新配置
+      this.aiClient._providerConfig = null;
+      this.aiClient._openai = null;
+      this.aiClient.config.provider = providerId;
+    }
+
+    // 更新当前配置
+    this.config.provider = providerId;
+
+    // 如果当前模型不属于新提供商，切换到新提供商的默认模型
+    const { detectProvider } = require('../ai/providers');
+    const currentModelProvider = detectProvider(this.model);
+    if (currentModelProvider !== providerId) {
+      this.model = provider.defaultModel;
+    }
+
+    // 根据新提供商和模型更新上下文窗口大小（如果能探测到）
+    const contextWindow = getModelContextWindow(providerId, this.model);
+    if (this.contextManager && contextWindow) {
+      this.contextManager.setWindowSize(contextWindow);
+      if (this.logger) {
+        this.logger.debug(`切换提供商到 ${providerId}，上下文窗口调整为 ${contextWindow.toLocaleString()} tokens`);
+      }
+    }
+
+    return true;
   }
 
   togglePlanMode() {

@@ -1,6 +1,7 @@
 'use strict';
 
 const { isValidModel } = require('../ai/models');
+const { isValidProvider, getProviderList, getModelList, getProvider, registerCustomProvider, registerCustomModel, listCustomProviders, listCustomModels, removeCustomProvider } = require('../ai/providers');
 
 const COMMANDS = {
   skills: {
@@ -13,10 +14,15 @@ const COMMANDS = {
     description: '触发代码审查（可指定文件）',
     usage: '/review [file]',
   },
+  provider: {
+    name: '/provider',
+    description: '切换模型提供商或管理自定义提供商',
+    usage: '/provider [id] | /provider add <id> <name> <url> <key> [format] [thinking] | /provider list | /provider remove <id>',
+  },
   model: {
     name: '/model',
-    description: '切换模型',
-    usage: '/model <deepseek-v4-flash | deepseek-v4-pro>',
+    description: '切换模型或管理自定义模型',
+    usage: '/model [id] | /model add <id> <name> [vision] [thinking] [contextWindow] | /model list',
   },
   undo: {
     name: '/undo',
@@ -91,18 +97,174 @@ async function handleCommand(input, chatEngine, options = {}) {
       return { handled: false, response: reviewPrompt };
     }
 
-    case 'model': {
-      const modelName = args[0];
-      if (!modelName) {
+      case 'provider': {
+      const subCmd = args[0];
+
+      // 子命令: add, list, remove, switch(默认)
+      if (subCmd === 'add') {
+        // /provider add <id> <name> <baseURL> <apiKey> [format] [thinkingMode]
+        const [, id, name, baseURL, apiKey, format = 'openai', thinkingMode = 'false'] = args;
+        if (!id || !name || !baseURL || !apiKey) {
+          return {
+            handled: true,
+            response: '用法: /provider add <id> <名称> <baseURL> <apiKey> [format:openai|anthropic] [thinkingMode:true|false]\n例: /provider add my-openai "My OpenAI" https://api.openai.com/v1 sk-xxx openai false',
+          };
+        }
+        try {
+          registerCustomProvider({
+            id,
+            name,
+            baseURL,
+            apiKey,
+            format,
+            thinkingMode: thinkingMode === 'true',
+          });
+          return {
+            handled: true,
+            response: `✅ 已添加自定义提供商: ${name} (${id})\n格式: ${format}\n支持思考模式: ${thinkingMode}`,
+          };
+        } catch (err) {
+          return { handled: true, response: `❌ 添加失败: ${err.message}` };
+        }
+      }
+
+      if (subCmd === 'list') {
+        const customProviders = listCustomProviders();
+        if (customProviders.length === 0) {
+          return { handled: true, response: '📋 暂无自定义提供商' };
+        }
+        let response = `📋 自定义提供商 (${customProviders.length}个):\n\n`;
+        for (const p of customProviders) {
+          response += `  • ${p.name} (${p.id})\n`;
+          response += `    URL: ${p.baseURL}\n`;
+          response += `    格式: ${p.format}, 思考模式: ${p.thinkingMode}\n\n`;
+        }
+        return { handled: true, response };
+      }
+
+      if (subCmd === 'remove') {
+        const providerId = args[1];
+        if (!providerId) {
+          return { handled: true, response: '用法: /provider remove <id>' };
+        }
+        removeCustomProvider(providerId);
+        return { handled: true, response: `✅ 已移除自定义提供商: ${providerId}` };
+      }
+
+      // 默认: 切换或显示提供商
+      const providerId = subCmd;
+      if (!providerId) {
+        const providers = getProviderList();
+        const currentProvider = chatEngine.getProvider?.() || 'deepseek';
+        let response = `当前提供商: ${currentProvider}\n\n可用提供商:\n`;
+        for (const p of providers) {
+          const marker = p.id === currentProvider ? '▶' : ' ';
+          response += `  ${marker} ${p.name}\n`;
+        }
+        response += '\n使用 /provider <id> 切换';
+        response += '\n使用 /provider add 添加自定义提供商';
+        response += '\n\n注意: openai 和 anthropic 提供商无预设模型，请使用 /model add 添加';
+        return { handled: true, response };
+      }
+
+      if (!isValidProvider(providerId)) {
+        const providers = getProviderList();
+        let response = `❌ 未知提供商: ${providerId}\n\n可用提供商:\n`;
+        for (const p of providers) {
+          response += `  • ${p.name} (${p.id})\n`;
+        }
+        return { handled: true, response };
+      }
+
+      // 切换提供商
+      if (chatEngine.switchProvider) {
+        chatEngine.switchProvider(providerId);
+        const provider = getProvider(providerId);
         return {
           handled: true,
-          response: `当前模型: ${chatEngine.model}\n可用模型: deepseek-v4-flash, deepseek-v4-pro\n使用 /model <模型名> 切换`,
+          response: `✅ 已切换到 ${provider.name} (${providerId})\n默认模型: ${provider.defaultModel}\n可用模型: ${Object.keys(provider.models).join(', ')}`,
         };
       }
-      if (!isValidModel(modelName)) {
+      return { handled: true, response: '⏳ 提供商切换功能开发中' };
+    }
+
+    case 'model': {
+      const subCmd = args[0];
+      const currentProvider = chatEngine.getProvider?.() || 'deepseek';
+
+      // 子命令: add, list
+      if (subCmd === 'add') {
+        // /model add <id> <name> [vision] [thinkingMode] [contextWindow]
+        const [, id, name, vision = 'false', thinkingMode = 'false', contextWindow = '128000'] = args;
+        if (!id || !name) {
+          return {
+            handled: true,
+            response: '用法: /model add <id> <名称> [vision:true|false] [thinkingMode:true|false] [contextWindow]\n例: /model add my-model "My Model" true false 128000',
+          };
+        }
+        try {
+          const parsedContextWindow = parseInt(contextWindow, 10);
+          registerCustomModel({
+            id,
+            provider: currentProvider,
+            name,
+            vision: vision === 'true',
+            thinkingMode: thinkingMode === 'true',
+            contextWindow: Number.isNaN(parsedContextWindow) ? 128_000 : parsedContextWindow,
+          });
+          return {
+            handled: true,
+            response: `✅ 已添加自定义模型: ${name} (${id}) 到提供商 ${currentProvider}\n多模态: ${vision}, 思考模式: ${thinkingMode}, 上下文窗口: ${parsedContextWindow.toLocaleString()} tokens`,
+          };
+        } catch (err) {
+          return { handled: true, response: `❌ 添加失败: ${err.message}` };
+        }
+      }
+
+      if (subCmd === 'list') {
+        const customModels = listCustomModels().filter(m => m.provider === currentProvider);
+        if (customModels.length === 0) {
+          return { handled: true, response: `📋 提供商 ${currentProvider} 暂无自定义模型` };
+        }
+        let response = `📋 自定义模型 (${customModels.length}个):\n\n`;
+        for (const m of customModels) {
+          response += `  • ${m.name} (${m.id})\n`;
+          response += `    多模态: ${m.vision}, 思考模式: ${m.thinkingMode}\n`;
+          response += `    上下文窗口: ${(m.contextWindow || 128000).toLocaleString()} tokens\n\n`;
+        }
+        return { handled: true, response };
+      }
+
+      // 默认: 切换或显示模型
+      const modelName = subCmd;
+      const availableModels = getModelList(currentProvider);
+      const modelIds = availableModels.map(m => m.id);
+
+      if (!modelName) {
+        let response = `当前模型: ${chatEngine.model}\n当前提供商: ${currentProvider}\n\n可用模型:\n`;
+        if (availableModels.length === 0) {
+          response += '  (暂无模型)\n';
+          response += `\n提示: 请使用 /model add 添加模型`;
+          if (currentProvider === 'openai') {
+            response += '\n例: /model add gpt-4o "GPT-4o" true false';
+          } else if (currentProvider === 'anthropic') {
+            response += '\n例: /model add claude-3-5-sonnet-20241022 "Claude 3.5 Sonnet" true false';
+          }
+        } else {
+          for (const m of availableModels) {
+            const marker = m.id === chatEngine.model ? '▶' : ' ';
+            const customMark = m.isCustom ? '[自定义] ' : '';
+            response += `  ${marker} ${m.name}${customMark ? ' - ' + customMark : ''}\n`;
+          }
+          response += '\n使用 /model <模型名> 切换';
+          response += '\n使用 /model add 添加自定义模型';
+        }
+        return { handled: true, response };
+      }
+      if (!isValidModel(currentProvider, modelName)) {
         return {
           handled: true,
-          response: `❌ 未知模型: ${modelName}\n可用模型: deepseek-v4-flash, deepseek-v4-pro`,
+          response: `❌ 未知模型: ${modelName}\n可用模型: ${modelIds.join(', ')}`,
         };
       }
       chatEngine.switchModel(modelName);

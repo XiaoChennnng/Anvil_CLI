@@ -39,6 +39,7 @@
     "marked": "^15.0.0",
     "marked-terminal": "^7.3.0",
     "minimatch": "^10.2.5",
+    "@anthropic-ai/sdk": "^0.24.0",
     "openai": "^4.0.0",
     "ora": "^8.0.0",
     "react": "^19.2.5",

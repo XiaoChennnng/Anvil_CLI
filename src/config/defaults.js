@@ -1,6 +1,9 @@
 'use strict';
 
 const DEFAULTS = {
+  // 默认提供商: 'deepseek' | 'kimi' | 'openai' | 'anthropic' | 自定义
+  // 注意: openai 和 anthropic 无预设模型，需通过 /model add 添加
+  provider: 'deepseek',
   defaultModel: 'deepseek-v4-flash',
   baseURL: 'https://api.deepseek.com',
   thinkingMode: true,
@@ -15,13 +18,30 @@ const DEFAULTS = {
   sessionsDirName: 'sessions',
   logsDirName: 'logs',
 
+  // 定价配置（元/千 tokens）
   pricing: {
+    // DeepSeek
     'deepseek-v4-flash': { input: 0.001, output: 0.002 },
     'deepseek-v4-pro': { input: 0.003, output: 0.006 },
+    // Kimi K2.x 系列
+    'kimi-k2.5': { input: 0.004, cachedInput: 0.0007, output: 0.021 },
+    'kimi-k2.6': { input: 0.0065, cachedInput: 0.0011, output: 0.027 },
+    'kimi-k2.7-code': { input: 0.0065, cachedInput: 0.0013, output: 0.027 },
+    'kimi-k2.7-code-highspeed': { input: 0.013, cachedInput: 0.0026, output: 0.054 },
+    // Moonshot V1 系列
+    'moonshot-v1-8k': { input: 0.002, output: 0.01 },
+    'moonshot-v1-32k': { input: 0.005, output: 0.02 },
+    'moonshot-v1-128k': { input: 0.01, output: 0.03 },
+    'moonshot-v1-8k-vision-preview': { input: 0.002, output: 0.01 },
+    'moonshot-v1-32k-vision-preview': { input: 0.005, output: 0.02 },
+    'moonshot-v1-128k-vision-preview': { input: 0.01, output: 0.03 },
+    // 注意：OpenAI 和 Anthropic 模型由用户自行添加，无预设定价
   },
 
   context: {
-    windowSize: 1_000_000,
+    // windowSize 不设置默认值，由模型探测决定
+    // DeepSeek: 1_000_000, Kimi: 256_000, etc.
+    windowSize: null,
     autoCompress: true,
     compressThresholds: { softWarn: 70, light: 80, medium: 90, heavy: 95, critical: 98 },
     keepRounds: { default: 8, explore: 4, implement: 10, debug: 12, review: 6 },
