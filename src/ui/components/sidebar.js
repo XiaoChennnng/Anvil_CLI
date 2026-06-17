@@ -24,14 +24,6 @@ class Sidebar {
 
     this.todos = [];
 
-    this._lastRenderedContent = [];
-    this._lastViewportHeight = 0;
-
-    // 避免状态未变时重复调 _renderLine
-    this._renderVersion = 0;
-    this._lastRenderVersion = -1;
-    this._lastRenderedFullLines = [];
-
     this._contextInfoCache = null;
     this._contextBreakdownCache = null;
     this._messagesVersion = 0;
@@ -59,7 +51,6 @@ class Sidebar {
   updateMessages(messages) {
     this.messages = messages || [];
     this._messagesVersion++;
-    this._renderVersion++;
   }
 
   updateCacheStats(usage) {
@@ -79,28 +70,23 @@ class Sidebar {
       if (cached > 0) {
         this.cacheStats.cacheHits++;
       }
-      this._renderVersion++;
     }
   }
 
   setTodos(todos) {
     this.todos = todos || [];
-    this._renderVersion++;
   }
 
   setSessionTitle(title) {
     this.sessionTitle = title || 'New Session';
-    this._renderVersion++;
   }
 
   setModifiedFiles(files) {
     this.modifiedFiles = files || [];
-    this._renderVersion++;
   }
 
   setDiagnostics(errors, warnings) {
     this.diagnostics = { errors: errors || 0, warnings: warnings || 0 };
-    this._renderVersion++;
   }
 
   /**
@@ -133,46 +119,28 @@ class Sidebar {
     return width;
   }
 
-  // 渲染侧边栏（增量渲染，只写变化的行）
+  // 渲染侧边栏（完全重绘整个区域，简单可靠）
   render() {
     const { messageStartRow, contentHeight, sidebarWidth, messageWidth } = this.layout;
     const viewportHeight = contentHeight;
 
-    // 如果渲染版本和 viewport 高度未变，复用行缓存（跳过 30-50 次 _renderLine 调用）
-    let newLines;
-    if (this._renderVersion === this._lastRenderVersion && this._lastRenderedFullLines.length === viewportHeight) {
-      newLines = this._lastRenderedFullLines;
-    } else {
-      newLines = [];
-      for (let i = 0; i < viewportHeight; i++) {
-        const line = this._renderLine(i, sidebarWidth - 1);
-        newLines.push(line ? this._truncateToWidth(line, sidebarWidth - 1) : '');
-      }
-      this._lastRenderedFullLines = newLines;
-      this._lastRenderVersion = this._renderVersion;
+    // 生成所有行内容
+    const lines = [];
+    for (let i = 0; i < viewportHeight; i++) {
+      const line = this._renderLine(i, sidebarWidth - 1);
+      lines.push(line ? this._truncateToWidth(line, sidebarWidth - 1) : '');
     }
 
-    // 对比缓存，只输出变化的行
+    // 完全重绘：清空整个 sidebar 区域后重新输出
     let output = '';
-    const maxLen = Math.max(newLines.length, this._lastRenderedContent.length);
+    const startCol = messageWidth + 1;
 
-    for (let i = 0; i < maxLen; i++) {
-      const newLine = i < newLines.length ? newLines[i] : '';
-      const lastLine = i < this._lastRenderedContent.length ? this._lastRenderedContent[i] : null;
-
-      if (newLine !== lastLine) {
-        const row = messageStartRow + i;
-        const col = messageWidth + 1;
-        if (newLine) {
-          output += `\x1b[${row};${col}H\x1b[K${newLine}`;
-        } else {
-          output += `\x1b[${row};${col}H\x1b[K`;
-        }
-      }
+    for (let i = 0; i < viewportHeight; i++) {
+      const row = messageStartRow + i;
+      const line = lines[i] || '';
+      // 定位到行首，清除该行，输出内容
+      output += `\x1b[${row};${startCol}H\x1b[K${line}`;
     }
-
-    // 更新缓存
-    this._lastRenderedContent = newLines;
 
     return output;
   }
@@ -531,12 +499,6 @@ class Sidebar {
     const tick = () => {
       const elapsed = Date.now() - this._progressAnimation.startTime;
       const progress = Math.min(elapsed / this._progressAnimation.duration, 1);
-
-      // 计算当前进度
-
-      // 更新渲染
-      this._renderVersion++;
-      this.layout.tui?.render();
 
       // 动画结束
       if (progress >= 1) {

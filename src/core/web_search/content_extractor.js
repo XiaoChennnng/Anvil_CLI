@@ -75,7 +75,7 @@ const NOISE_INDICATORS = [
  * @returns {string}
  */
 function decodeHtmlEntities(html) {
-  if (!html) return '';
+  if (!html) {return '';}
 
   const entities = {
     '&nbsp;': ' ',
@@ -200,7 +200,7 @@ function calculateTextDensity(html) {
   const textLength = text.length;
   const htmlLength = html.length;
 
-  if (htmlLength === 0) return 0;
+  if (htmlLength === 0) {return 0;}
 
   return textLength / htmlLength;
 }
@@ -214,7 +214,7 @@ function calculateContentScore(html) {
   const text = htmlToText(html);
   const textLength = text.length;
 
-  if (textLength < 100) return 0; // 太短的内容忽略
+  if (textLength < 100) {return 0;} // 太短的内容忽略
 
   const density = calculateTextDensity(html);
   const lowerHtml = html.toLowerCase();

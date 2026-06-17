@@ -419,7 +419,7 @@ function getModel(providerId, modelId) {
   }
 
   const provider = getProvider(providerId);
-  if (!provider) return null;
+  if (!provider) {return null;}
   return provider.models[modelId] || null;
 }
 
@@ -437,7 +437,7 @@ function isValidModel(providerId, modelId) {
   }
 
   const provider = getProvider(providerId);
-  if (!provider) return false;
+  if (!provider) {return false;}
   return !!provider.models[modelId];
 }
 
@@ -497,7 +497,7 @@ function getProviderList(includeCustom = true) {
  */
 function getModelList(providerId, includeCustom = true) {
   const provider = getProvider(providerId);
-  if (!provider) return [];
+  if (!provider) {return [];}
 
   const models = Object.values(provider.models).map((m) => ({
     id: m.id,
@@ -565,7 +565,7 @@ function detectProvider(modelId) {
  */
 function getProviderApiKey(providerId) {
   const provider = getProvider(providerId);
-  if (!provider) return undefined;
+  if (!provider) {return undefined;}
 
   // 自定义提供商直接返回存储的 apiKey
   if (provider.isCustom) {
@@ -609,7 +609,7 @@ function getClientConfig(providerId, config = {}) {
  */
 function isVisionModel(providerId, modelId) {
   const model = getModel(providerId, modelId);
-  if (!model) return false;
+  if (!model) {return false;}
   return model.vision === true;
 }
 
@@ -693,7 +693,7 @@ function formatImageForAnthropic(image) {
  * @returns {Array} 转换后的消息数组
  */
 function convertImagesInMessages(messages, format) {
-  if (!Array.isArray(messages)) return messages;
+  if (!Array.isArray(messages)) {return messages;}
 
   const formatFn = format === 'anthropic' ? formatImageForAnthropic : formatImageForOpenAI;
 

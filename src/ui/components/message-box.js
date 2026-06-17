@@ -30,9 +30,6 @@ class MessageBox {
     // 换行缓存（按 str|maxWidth）
     this._wrapLineCache = new Map();
     this._cjkCache = new Map();
-    // 文件操作去重：同一文件只显示一次结果
-    this._lastToolFile = null;
-    this._sameFileResultShown = false;
   }
 
   // 修剪 renderedLines 防止无限增长
@@ -184,20 +181,6 @@ class MessageBox {
     // 先 flush markdown 渲染器的缓冲区（避免内容被截断）
     this.flushContentBuffer();
 
-    // 文件操作工具去重：同一文件只显示一次结果（不管什么操作）
-    const filePath = this._getToolFilePath(name, toolCall);
-    if (filePath) {
-      if (this._lastToolFile === filePath && this._sameFileResultShown) {
-        return; // 跳过同一文件的重复结果
-      }
-      this._lastToolFile = filePath;
-      this._sameFileResultShown = true;
-    } else {
-      // 非文件操作，清除状态
-      this._lastToolFile = null;
-      this._sameFileResultShown = false;
-    }
-
     // 错误结果限制：只显示前20行，避免长堆栈撑爆显示
     let displayResult = result;
     const MAX_RESULT_LINES = 20;
@@ -314,9 +297,10 @@ class MessageBox {
         const padding = messageWidth - Math.min(visibleLen, messageWidth);
         // 确保 ANSI 样式被关闭，防止污染 padding 空格
         const safeLine = line.includes('\x1b') ? line + '\x1b[0m' : line;
-        output += `\x1b[${row};1H${safeLine}${' '.repeat(Math.max(0, padding))}`;
+        output += `\x1b[${row};1H${safeLine}${' '.repeat(Math.max(0, padding))}\x1b[K`;
       } else {
-        output += `\x1b[${row};1H${' '.repeat(messageWidth)}`;
+        // 使用 \x1b[K 清除到行尾，避免终端变窄时旧内容残留
+        output += `\x1b[${row};1H\x1b[K`;
       }
     }
 
@@ -553,25 +537,6 @@ class MessageBox {
     // 渲染相关缓存
     this._visibleLengthCache.clear();
     this._wrapLineCache.clear();
-    // 文件去重状态重置
-    this._lastToolFile = null;
-    this._sameFileResultShown = false;
-  }
-
-  // 获取工具调用的文件路径（用于去重判断）
-  _getToolFilePath(name, toolCall) {
-    // 优先从 result 获取文件路径
-    if (toolCall?.function?.arguments) {
-      try {
-        const args = typeof toolCall.function.arguments === 'string'
-          ? JSON.parse(toolCall.function.arguments)
-          : toolCall.function.arguments;
-        if (args.filePath) {return args.filePath;}
-        if (args.path) {return args.path;}
-        if (args.source) {return args.source;}
-      } catch {}
-    }
-    return null;
   }
 
   // 清空消息

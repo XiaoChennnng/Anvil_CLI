@@ -675,7 +675,7 @@ class AnvilAIClient extends EventEmitter {
       const estimatedOutput = estimateTokens(outputText);
       const inputText = (requestOptions.messages || [])
         .map(m => {
-          if (typeof m.content === 'string') return m.content;
+          if (typeof m.content === 'string') {return m.content;}
           if (Array.isArray(m.content)) {
             return m.content.map(c => c.text || '').join('');
           }

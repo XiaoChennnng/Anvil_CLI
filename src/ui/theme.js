@@ -19,9 +19,9 @@ const DARK_COLORS = {
   borderNormal: '#4b4c5c',
   borderFocused: '#fab283',
   borderDim: '#303030',
-  // Diff 色（1:1 复刻 opencode）
-  diffAdded: '#478247',
-  diffRemoved: '#7C4444',
+  // Diff 色（艳丽醒目）
+  diffAdded: '#00FF7F',
+  diffRemoved: '#FF4757',
   diffContext: '#a0a0a0',
   diffHunkHeader: '#a0a0a0',
   diffAddedBg: '#303A30',
@@ -76,9 +76,9 @@ const LIGHT_COLORS = {
   borderNormal: '#d3d3d3',
   borderFocused: '#3b7dd8',
   borderDim: '#e5e5e6',
-  // Diff 色（1:1 复刻 opencode）
-  diffAdded: '#2E7D32',
-  diffRemoved: '#C62828',
+  // Diff 色（艳丽醒目）
+  diffAdded: '#00C853',
+  diffRemoved: '#FF1744',
   diffContext: '#757575',
   diffHunkHeader: '#757575',
   diffAddedBg: '#E8F5E9',

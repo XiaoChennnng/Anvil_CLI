@@ -31,6 +31,7 @@ function createTransport(serverName, config, logger) {
       const options = {
         command: config.command,
         args: config.args || [],
+        stderr: 'pipe',  // 防止子进程输出污染 CLI 界面
       };
       // 可选的环境变量
       if (config.env && typeof config.env === 'object') {

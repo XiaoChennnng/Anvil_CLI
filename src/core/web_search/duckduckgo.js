@@ -83,7 +83,7 @@ function parseDuckDuckGoHTML(html, maxResults) {
   while (cursor < html.length && results.length < maxResults) {
     // 查找下一个 result 区块起点
     const startMatch = html.slice(cursor).match(/<div[^>]*class="result[^"]*"[^>]*>/i);
-    if (!startMatch) break;
+    if (!startMatch) {break;}
 
     const start = cursor + startMatch.index + startMatch[0].length;
 
@@ -94,7 +94,7 @@ function parseDuckDuckGoHTML(html, maxResults) {
       const openIdx = html.indexOf('<div', pos);
       const closeIdx = html.indexOf('</div>', pos);
 
-      if (closeIdx === -1) break; // 没有闭合标签
+      if (closeIdx === -1) {break;} // 没有闭合标签
 
       if (openIdx !== -1 && openIdx < closeIdx) {
         // 遇到开标签
@@ -110,11 +110,11 @@ function parseDuckDuckGoHTML(html, maxResults) {
     const end = pos;
     const segment = html.slice(start, end - 6); // 去掉最后的 </div>
     cursor = end;
-    if (results.length >= maxResults) break;
+    if (results.length >= maxResults) {break;}
 
     // 提取标题和链接
     const titleMatch = segment.match(DDG_SELECTORS.titleLink);
-    if (!titleMatch) continue;
+    if (!titleMatch) {continue;}
 
     let url = titleMatch[1];
     const rawTitle = titleMatch[2];
@@ -134,11 +134,13 @@ function parseDuckDuckGoHTML(html, maxResults) {
         } catch {
           continue;
         }
+      } else {
+        continue;
       }
     }
 
     const title = stripHtml(rawTitle);
-    if (!title || !url) continue;
+    if (!title || !url) {continue;}
 
     // 提取摘要
     const snippetMatch = segment.match(DDG_SELECTORS.snippetBlock);

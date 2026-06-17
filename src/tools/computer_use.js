@@ -29,6 +29,9 @@ try {
   // 可选依赖
 }
 
+// 上次截图尺寸缓存
+let lastScreenshotSize = null;
+
 /**
  * 注册 Computer Use 工具
  * @param {ToolRegistry} registry - 工具注册表
