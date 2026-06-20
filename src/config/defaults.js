@@ -47,6 +47,14 @@ const DEFAULTS = {
     keepRounds: { default: 8, explore: 4, implement: 10, debug: 12, review: 6 },
     fileContextMaxEntries: 30,
     fileContextMaxTokens: 15000,
+    // 语义预算压缩配置（level='semantic' 模式）
+    semanticBudget: {
+      min: 10_000,            // 硬性下限 1w tokens
+      max: 50_000,            // 硬性上限 5w tokens
+      default: 30_000,        // 默认预算 3w tokens
+      timeoutMs: 60_000,      // LLM 摘要超时
+      fallbackToStringSummary: true,  // LLM 失败时降级到字符串截取
+    },
   },
 
   mcpServers: {},
@@ -78,6 +86,29 @@ const DEFAULTS = {
       enabled: true,
       instance: null, // 自定义 SearXNG 实例 URL，如 'https://search.example.com'
     },
+  },
+
+  // 用户长期记忆（.anvil/Memory.md）
+  memory: {
+    fileName: 'Memory.md',
+    maxTokens: 5000,        // 软上限，尽量不超
+    autoLoad: true,         // 自动加载到 system prompt（Tier 1）
+    autoInject: false,      // 默认不注入普通对话
+    warnOnExceed: true,     // 超限时给 AI 警告
+    template: `# Anvil Memory — 用户长期记忆
+
+## 用户偏好
+<!-- 用户的工作习惯、代码风格、工具偏好 -->
+
+## 项目规则
+<!-- 用户对当前项目的硬性要求 -->
+
+## 常用约定
+<!-- 命名规范、目录结构、API 选择 -->
+
+## 待办事项
+<!-- 需要长期跟踪的事项 -->
+`,
   },
 
   i18n: {

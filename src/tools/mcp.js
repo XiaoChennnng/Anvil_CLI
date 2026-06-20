@@ -6,7 +6,6 @@
 function registerMCPTools(toolRegistry, mcpManager, config, logger) {
   const { saveMCPConfig } = require('../config/loader');
 
-  // ---- mcp_add_server ----
   toolRegistry.register({
     name: 'mcp_add_server',
     description: '添加并连接一个新的 MCP 服务器。AI 可以通过此工具动态连接外部的 MCP 服务器，连接后该服务器的工具将自动注册为 mcp__<服务器名>__<工具名> 格式供后续调用。',
@@ -111,7 +110,6 @@ function registerMCPTools(toolRegistry, mcpManager, config, logger) {
     },
   });
 
-  // ---- mcp_remove_server ----
   toolRegistry.register({
     name: 'mcp_remove_server',
     description: '断开并移除一个已连接的 MCP 服务器。移除后该服务器的所有工具将不再可用。',
@@ -158,7 +156,6 @@ function registerMCPTools(toolRegistry, mcpManager, config, logger) {
     },
   });
 
-  // ---- mcp_list_servers ----
   toolRegistry.register({
     name: 'mcp_list_servers',
     description: '列出所有已配置的 MCP 服务器及其状态、注册的工具列表。用于查看 MCP 服务器运行状况。',

@@ -273,7 +273,7 @@ class TUI {
     const msgLines = String(message).split('\n');
     for (const line of msgLines) {
       if (line.trim() === '') {continue;}
-      this.messageBox.renderedLines.push(`${t.error('✖')} ${line}`);
+      this.messageBox.renderedLines.push(`${t.error('[错误]')} ${line}`);
     }
     if (error) {
       const errText = error.message || String(error);

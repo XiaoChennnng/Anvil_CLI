@@ -175,7 +175,7 @@ class Sidebar {
       for (let i = 0; i < Math.min(this.todos.length, 5); i++) {
         if (lineIndex === line) {
           const todo = this.todos[i];
-          const status = todo.completed ? t.success('✔') : t.textMuted('◻');
+          const status = todo.completed ? t.success('[完成]') : t.textMuted('[ ]');
           // 使用可见宽度截断，兼容 CJK 双倍宽字符
           const text = this._visibleWidth(todo.text) > width - 6
             ? this._truncateToWidth(todo.text, width - 9) + '...'

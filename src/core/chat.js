@@ -72,6 +72,11 @@ class ChatEngine extends EventEmitter {
     this._planMode = false;
     this._planModeFilePath = null;
     this._awaitingPlanApproval = false;
+
+    // Memory 定期总结计数器：每 N 轮注入一次 reminder，让 AI 主动提取偏好
+    this._memoryCheckInterval = 5;
+    this._roundSinceMemoryCheck = 0;
+    this._totalRoundsProcessed = 0;
     this._planApproved = false;
     this._pendingPlan = null;
     this._pendingQuestionResolve = null;
@@ -144,7 +149,7 @@ class ChatEngine extends EventEmitter {
       if (this._isTodoClearRequest(input)) {
         this.clearTask('用户清空了任务列表');
         this.isProcessing = false;
-        return { content: '✅ 任务列表已清空，等待新的指令。', cleaned: true };
+        return { content: '[完成]任务列表已清空，等待新的指令。', cleaned: true };
       }
 
       this.messages.push({ role: 'user', content: input });
@@ -181,7 +186,7 @@ class ChatEngine extends EventEmitter {
         const compLevel = this.contextManager.getCompressionLevel(this.messages, currentTokens);
 
         if (compLevel.needsCompression) {
-	          this.emit('status', `⚡ ${compLevel.label} — 使用率 ${Math.round(compLevel.ratio * 100)}%`);
+	          this.emit('status', `[警告]${compLevel.label} — 使用率 ${Math.round(compLevel.ratio * 100)}%`);
 
 	          // 压缩上下文（实际执行压缩的方法是 compactContext）
 	          const compressResult = this.contextManager.compactContext(this.messages);
@@ -190,7 +195,7 @@ class ChatEngine extends EventEmitter {
 
           if (stats.compressed) {
             this.emit('status',
-              `✅ 压缩完成 (L${stats.level}): ${stats.beforeTokens.toLocaleString()} → ${stats.afterTokens.toLocaleString()} tokens (节省 ${stats.savedPercent}%)`
+              `[完成]压缩完成 (L${stats.level}): ${stats.beforeTokens.toLocaleString()} → ${stats.afterTokens.toLocaleString()} tokens (节省 ${stats.savedPercent}%)`
             );
 
             if (this.logger) {
@@ -199,7 +204,7 @@ class ChatEngine extends EventEmitter {
           }
         } else if (compLevel.level >= 1) {
           // 仅提示，不压缩
-          this.emit('status', `💡 ${compLevel.label} (${Math.round(compLevel.ratio * 100)}%)`);
+          this.emit('status', `[提示]${compLevel.label} (${Math.round(compLevel.ratio * 100)}%)`);
         }
       }
 
@@ -239,6 +244,14 @@ class ChatEngine extends EventEmitter {
         try {
           this.messages = this.contextManager.proactiveCompress(this.messages);
         } catch { /* 压缩失败不影响主流程 */ }
+      }
+
+      // Memory 定期总结检查点：每 N 轮注入一次 reminder 让 AI 主动提取偏好
+      this._roundSinceMemoryCheck++;
+      this._totalRoundsProcessed++;
+      if (this._roundSinceMemoryCheck >= this._memoryCheckInterval) {
+        this._injectMemoryCheckReminder();
+        this._roundSinceMemoryCheck = 0;
       }
 
       // 更新缓存（带上任务指纹提高复用率）
@@ -776,7 +789,7 @@ class ChatEngine extends EventEmitter {
           content: '继续',
         });
 
-        this.emit('status', `⏳ 响应被截断，自动继续... (${continueCount}/${maxContinues})`);
+        this.emit('status', `[等待]响应被截断，自动继续... (${continueCount}/${maxContinues})`);
 
         if (this.logger) {
           this.logger.info('响应截断，自动继续', { continueCount });
@@ -804,6 +817,11 @@ class ChatEngine extends EventEmitter {
       return { messages: this.messages, stats: { compressed: false, error: '上下文管理器未初始化' } };
     }
 
+    // 语义预算压缩：硬性 1w-5w tokens 预算，无条件触发
+    if (options.level === 'semantic') {
+      return this._semanticBudgetCompress(options);
+    }
+
     // 先执行实际压缩（基于当前消息）
     const result = this.contextManager.compactContext(this.messages, options);
     this.messages = result.messages;
@@ -829,6 +847,132 @@ class ChatEngine extends EventEmitter {
     return result;
   }
 
+  // 语义预算压缩（level='semantic'）：调 LLM 生成结构化摘要，硬性约束到 1w-5w tokens
+  async _semanticBudgetCompress(options = {}) {
+    const ctxCfg = this.config.context || {};
+    const semanticCfg = ctxCfg.semanticBudget || {};
+    const target = this.contextManager.validateSemanticBudget(options.budgetTokens || semanticCfg.default || 30_000);
+    const shouldRebuild = options.rebuild !== false;
+    const shouldForce = options.force !== false;
+
+    // 低使用率 + 未 force → 跳过（节省 API 调用）
+    if (!shouldForce) {
+      const currentTokens = this.contextManager.estimateMessagesTokenCount(this.messages);
+      const ratio = currentTokens / (this.contextManager.windowSize || 1_000_000);
+      if (ratio < 0.3) {
+        return {
+          messages: this.messages,
+          stats: {
+            compressed: false,
+            level: 'semantic',
+            name: 'SEMANTIC_BUDGET_SKIPPED',
+            reason: 'low_usage_not_forced',
+            beforeTokens: currentTokens,
+            afterTokens: currentTokens,
+            savedPercent: 0,
+            budget: target,
+            rebuilt: false,
+          },
+        };
+      }
+    }
+
+    // 1) 调 LLM 生成结构化摘要
+    let summary = '';
+    let fallback = null;
+    try {
+      summary = await this._generateSemanticSummary(target);
+    } catch (err) {
+      this.logger?.warn('语义压缩 LLM 摘要失败，尝试降级', err.message);
+      // 降级：字符串截取
+      if (semanticCfg.fallbackToStringSummary !== false) {
+        try {
+          summary = this.contextManager._fallbackStringSummary(this.messages, target);
+          fallback = 'string-truncate';
+        } catch (fbErr) {
+          this.logger?.error('字符串降级也失败', fbErr.message);
+        }
+      }
+    }
+
+    if (!summary) {
+      return {
+        messages: this.messages,
+        stats: {
+          compressed: false,
+          level: 'semantic',
+          name: 'SEMANTIC_BUDGET_FAILED',
+          error: '摘要生成失败',
+          beforeTokens: this.contextManager.estimateMessagesTokenCount(this.messages),
+          afterTokens: 0,
+          savedPercent: 0,
+          budget: target,
+          rebuilt: false,
+        },
+      };
+    }
+
+    // 2) 应用摘要到 messages（contextManager 负责 truncate + 注入 + 统计）
+    const applyResult = this.contextManager.applySemanticSummary(this.messages, summary, {
+      budgetTokens: target,
+      rebuild: shouldRebuild,
+    });
+    this.messages = applyResult.messages;
+
+    // 3) 完整重注 L0+L1+L2+L3
+    if (shouldRebuild) {
+      await this._rebuildFullContext();
+    }
+
+    // 4) 事件通知
+    const finalStats = { ...applyResult.stats, fallback };
+    this.emit('status', `[完成]语义压缩完成: ${finalStats.beforeTokens.toLocaleString()} → ${finalStats.afterTokens.toLocaleString()} tokens (预算 ${target.toLocaleString()}, 节省 ${finalStats.savedPercent}%)${shouldRebuild ? ' + System Prompt 已重建' : ''}`);
+    this.emit('context-rebuilt', {
+      tokensBefore: finalStats.beforeTokens,
+      tokensAfter: finalStats.afterTokens,
+      budget: target,
+      rebuilt: shouldRebuild,
+      fallback,
+    });
+
+    return { messages: this.messages, stats: finalStats };
+  }
+
+  // 完整重注上下文：L0 (System Prompt) + L1 (Project Overview) + Tier 2/3/4 重新组装
+  async _rebuildFullContext() {
+    if (!this.contextManager) {return;}
+
+    // 1) 清空文件 LRU 缓存（换新脑子，不带旧文件）
+    if (this.contextManager._fileContexts) {
+      this.contextManager._fileContexts.clear();
+      this.contextManager._fileContextTotalTokens = 0;
+    }
+
+    // 2) 重建 L0 (System Prompt)
+    this._updateSystemPrompt();
+
+    // 3) 重新扫描项目概览
+    if (typeof this.contextManager.buildProjectOverview === 'function') {
+      try {
+        await this.contextManager.buildProjectOverview();
+      } catch (err) {
+        this.logger?.warn('重建项目概览失败', err.message);
+      }
+    }
+
+    // 4) 重新组装所有 tier（Tier 0/1/2/3/4）
+    const sysPrompt = this.messages[0]?.content || this._buildSystemPrompt();
+    const historyMsgs = this.messages.slice(1).filter(
+      (m) => m.role !== 'system' || m._archiveTier !== undefined || m._semanticSummary,
+    );
+    this.messages = this.contextManager.assembleMessages(sysPrompt, historyMsgs);
+
+    this.logger?.info('完整重注完成', {
+      messageCount: this.messages.length,
+      totalTokens: this.contextManager.estimateMessagesTokenCount(this.messages),
+    });
+  }
+
   clearTask(reason = '用户清空了任务列表') {
     this.messages.push({
       role: 'user',
@@ -837,6 +981,64 @@ class ChatEngine extends EventEmitter {
     this._currentTask = null;
     this.emit('todo_change', []);
     if (this.logger) {this.logger.info('任务已清除', { reason });}
+  }
+
+  /**
+   * 注入 Memory 检查点 reminder
+   *
+   * 每隔 _memoryCheckInterval 轮（默认 5）触发一次：
+   * 1) 清理上一条 reminder（避免堆积）
+   * 2) 注入新 reminder 到消息历史末尾，提示 AI 主动调用 memory_append 提取用户长期偏好/规则
+   *
+   * reminder 用 role='user' 注入（跟 clearTask 一致），AI 看到后会理解这是"系统通知"而非用户真实输入。
+   * 同时发一个 status 事件让 TUI 提示用户"正在检查 Memory"。
+   */
+  _injectMemoryCheckReminder() {
+    // 1) 清理旧 reminder（避免堆积多条）
+    const before = this.messages.length;
+    this.messages = this.messages.filter((m) => !m._memoryCheckReminder);
+    const cleaned = before - this.messages.length;
+
+    // 2) 注入新 reminder
+    const reminder = {
+      role: 'user',
+      content: [
+        '[Memory 总结检查点]',
+        `你已经处理了 ${this._totalRoundsProcessed} 轮对话。请回顾本段对话（最近 ${this._memoryCheckInterval} 轮），`,
+        '如果用户表达了【长期偏好、规则、约定】（例如"以后都用 X"、"不要 Y"、"我偏好 Z"、"请务必 W"），',
+        '请使用 memory_append 工具写入 .anvil/Memory.md。',
+        '',
+        '【触发条件】用户消息含"记住/我要求/以后/不要/请务必/记得/偏好/习惯"等关键词，或重复表达同一偏好。',
+        '【不要写入】临时任务、一次性需求、单次调试偏好。',
+        '【不要回应该 reminder】无需在回复中提及本提醒，仅在确认有需要写入的内容时才调用 memory_append。',
+      ].join(''),
+      _memoryCheckReminder: true,
+      _injectedAt: new Date().toISOString(),
+    };
+    this.messages.push(reminder);
+
+    // 3) TUI 状态提示（让用户知道系统在做什么，但不打扰）
+    this.emit('status', `[Memory] 检查点 (第 ${this._totalRoundsProcessed} 轮) — AI 正在审视是否需要更新 .anvil/Memory.md`);
+
+    if (this.logger) {
+      this.logger.info('Memory 检查点触发', {
+        totalRounds: this._totalRoundsProcessed,
+        cleaned,
+        messagesAfter: this.messages.length,
+      });
+    }
+  }
+
+  /**
+   * 获取 Memory 检查点状态（供 UI/命令显示）
+   */
+  getMemoryCheckStatus() {
+    return {
+      interval: this._memoryCheckInterval,
+      roundsSinceLastCheck: this._roundSinceMemoryCheck,
+      totalRounds: this._totalRoundsProcessed,
+      nextCheckIn: this._memoryCheckInterval - this._roundSinceMemoryCheck,
+    };
   }
 
   // 检测用户输入是否为压缩请求
@@ -853,9 +1055,17 @@ class ChatEngine extends EventEmitter {
       /^压缩(一下|上下文|清理|整理)?$/,
       /^清理(上下文|一下|下)?$/,
       /^整理(一下|上下文)?$/,
-      /^释放(上下文|空间|token)/,
+      /^释放\s*(上下文|空间|token|tokens?)?/,
       /^compact/i,
       /^compress/i,
+      // 语义压缩：显式触发
+      /^语义压缩/,
+      // 带预算的压缩：隐式走 semantic 模式
+      /^压缩.*\d+(\.\d+)?\s*w/,
+      /^压缩.*\d+(\.\d+)?\s*万/,
+      /^压缩.*\d{4,6}\s*(?:tokens?|tok|t)\b/,
+      /^压到.*\d/,
+      /^压缩到.*\d/,
     ];
 
     // 只处理短消息（纯压缩请求，不带其他意图）
@@ -871,6 +1081,7 @@ class ChatEngine extends EventEmitter {
     // 解析 keep 参数: "压缩一下保留文件" 或 "压缩一下保留项目结构"
     let keep = ['recent', 'decisions'];
     let level = 'auto';
+    let budgetTokens = null;
 
     if (/保留.*文件/.test(trimmed) || /保留.*注入/.test(trimmed)) {
       keep.push('files');
@@ -891,6 +1102,17 @@ class ChatEngine extends EventEmitter {
       level = 'heavy';
     }
 
+    // 语义压缩：检测"语义"关键词或带预算数字 → 走 semantic 模式
+    // 预算数字（如 "2w" / "3w" / "20000 tokens"）隐含语义压缩意图
+    if (/语义/.test(trimmed)) {
+      level = 'semantic';
+    }
+    const parsedBudget = this._parseSemanticBudget(trimmed);
+    if (parsedBudget !== null) {
+      budgetTokens = parsedBudget;
+      level = 'semantic'; // 显式指定 budget → 强制走 semantic
+    }
+
     try {
       // 获取压缩前的 context 进度
       const beforeStatus = this.contextManager?.getStatusReport(this.messages);
@@ -903,8 +1125,16 @@ class ChatEngine extends EventEmitter {
         toPercent: 100,
       });
 
+      // 构造 compactContext 参数
+      const compactOptions = { level, keep };
+      if (level === 'semantic') {
+        compactOptions.budgetTokens = budgetTokens; // null 时内部用默认 3w
+        compactOptions.force = true;
+        compactOptions.rebuild = true;
+      }
+
       // 语义摘要由 compactContext 在压缩后自动生成（不再提前生成）
-      const result = await this.compactContext({ level, keep });
+      const result = await this.compactContext(compactOptions);
 
       // 计算压缩后进度
       const afterStatus = this.contextManager?.getStatusReport(this.messages);
@@ -922,10 +1152,22 @@ class ChatEngine extends EventEmitter {
         if (this.logger) {
           this.logger.info(`上下文压缩完成: ${stats.beforeTokens}→${stats.afterTokens} tokens (${stats.savedPercent}%)`);
         }
-        this.emit('status', `✅ 上下文已压缩: ${stats.beforeTokens.toLocaleString()} → ${stats.afterTokens.toLocaleString()} tokens (节省 ${stats.savedPercent}%)`);
+        // 语义压缩的特殊 status 文案
+        if (level === 'semantic') {
+          this.emit('status', `语义压缩完成: ${stats.beforeTokens.toLocaleString()} → ${stats.afterTokens.toLocaleString()} tokens (预算 ${stats.budget.toLocaleString()}, 节省 ${stats.savedPercent}%)`);
+        } else {
+          this.emit('status', `[完成]上下文已压缩: ${stats.beforeTokens.toLocaleString()} → ${stats.afterTokens.toLocaleString()} tokens (节省 ${stats.savedPercent}%)`);
+        }
         return {
-          content: `✅ 上下文已压缩\n\n压缩级别: ${stats.name || level}\n压缩前: ${stats.beforeTokens.toLocaleString()} tokens\n压缩后: ${stats.afterTokens.toLocaleString()} tokens\n节省: ${stats.savedPercent}%\n保留策略: ${(stats.preserved || keep).join(', ')}\n${stats.message ? '\n' + stats.message : ''}`,
+          content: this._formatCompressionResult(stats, level, keep, budgetTokens),
           compressed: stats,
+        };
+      }
+      // 语义压缩的低使用率跳过
+      if (level === 'semantic' && result.stats?.name === 'SEMANTIC_BUDGET_SKIPPED') {
+        return {
+          content: `[统计] 上下文使用率较低 (${result.stats.beforeTokens.toLocaleString()} tokens, <30%)，跳过语义压缩。如需强制执行请说"语义压缩强制"`,
+          compressed: false,
         };
       }
       return { content: '上下文使用率不高，无需压缩', compressed: false };
@@ -933,6 +1175,51 @@ class ChatEngine extends EventEmitter {
       if (this.logger) {this.logger.error('手动压缩失败', err.message);}
       return { error: `压缩失败: ${err.message}` };
     }
+  }
+
+  // 格式化压缩结果文案
+  _formatCompressionResult(stats, level, keep, budgetTokens) {
+    if (level === 'semantic') {
+      return `语义压缩完成\n\n级别: 语义预算压缩\n压缩前: ${stats.beforeTokens.toLocaleString()} tokens\n压缩后: ${stats.afterTokens.toLocaleString()} tokens\n预算: ${stats.budget.toLocaleString()} tokens\n节省: ${stats.savedPercent}%\n${stats.rebuilt ? '[完成] System Prompt 已重建 (L0+L1+L2+L3)' : ''}${stats.fallback ? '\n[警告] LLM 失败，降级到: ' + stats.fallback : ''}`;
+    }
+    return `[完成]上下文已压缩\n\n压缩级别: ${stats.name || level}\n压缩前: ${stats.beforeTokens.toLocaleString()} tokens\n压缩后: ${stats.afterTokens.toLocaleString()} tokens\n节省: ${stats.savedPercent}%\n保留策略: ${(stats.preserved || keep).join(', ')}\n${stats.message ? '\n' + stats.message : ''}`;
+  }
+
+  // 解析自然语言中的预算数字（"2w" / "3w" / "20000 tokens" / "2万"）
+  // 严格限制在 1w-5w 范围内，超出返回 null
+  _parseSemanticBudget(text) {
+    if (!text) {return null;}
+    let value = null;
+
+    // "2w" / "3.5w" / "1W"（w 大小写不敏感）
+    const wMatch = text.match(/(\d+(?:\.\d+)?)\s*w\b/i);
+    if (wMatch) {
+      value = Math.round(parseFloat(wMatch[1]) * 10_000);
+    } else {
+      // "2万" / "3.5万"
+      const wanMatch = text.match(/(\d+(?:\.\d+)?)\s*万/);
+      if (wanMatch) {
+        value = Math.round(parseFloat(wanMatch[1]) * 10_000);
+      } else {
+        // "20000 tokens" / "30000 tok" / "40000 t"（4-6 位数字 + 单位）
+        const tokMatch = text.match(/(\d{4,6})\s*(?:tokens?|tok|t)\b/i);
+        if (tokMatch) {
+          value = parseInt(tokMatch[1], 10);
+        } else {
+          // 纯 4-6 位数字（"30000" 或 "压缩到 30000"）—— 注意：3 位以下数字不会匹配，避免误判
+          const numMatch = text.match(/(?:^|\s|到|压到|压成|压为|成|为)(\d{4,6})(?:\s|$|tokens?|tok|t\b|万)/);
+          if (numMatch) {
+            value = parseInt(numMatch[1], 10);
+          }
+        }
+      }
+    }
+
+    // 范围校验：1w-5w tokens 才算有效
+    if (value !== null && value >= 10_000 && value <= 50_000) {
+      return value;
+    }
+    return null;
   }
 
   // 查找最后一条语义摘要的索引
@@ -1217,8 +1504,8 @@ class ChatEngine extends EventEmitter {
     this.emit('plan_mode_changed', false);
 
     this.messages.push({ role: 'user', content: '计划已批准，请按计划执行。' });
-    this.emit('status', '✅ 计划已批准，正在执行...');
-    await this.updatePlanInFile('\n\n## ✅ 计划已批准，正在执行...\n');
+    this.emit('status', '[完成]计划已批准，正在执行...');
+    await this.updatePlanInFile('\n\n## [完成]计划已批准，正在执行...\n');
 
     const result = await this._agentLoop(this._currentTask);
     return this._finishPlanResponse(result);
@@ -1234,8 +1521,8 @@ class ChatEngine extends EventEmitter {
       ? `计划被拒绝。用户反馈：${feedback}。请根据反馈提供修改后的计划。`
       : '计划被拒绝，请提供替代方案。';
     this.messages.push({ role: 'user', content: msg });
-    this.emit('status', '🔁 计划被拒绝，正在重新规划...');
-    await this.updatePlanInFile(`\n\n## ❌ 计划被拒绝\n\n**反馈**: ${feedback || '无'}\n\n正在重新规划...\n`);
+    this.emit('status', '[重做]计划被拒绝，正在重新规划...');
+    await this.updatePlanInFile(`\n\n## [失败]计划被拒绝\n\n**反馈**: ${feedback || '无'}\n\n正在重新规划...\n`);
 
     const result = await this._agentLoop(this._currentTask);
     return this._finishPlanResponse(result);
@@ -1248,8 +1535,8 @@ class ChatEngine extends EventEmitter {
     this._suppressUI = false;
 
     this.messages.push({ role: 'user', content: `对计划的修改建议：${feedback}` });
-    this.emit('status', '📝 收到计划反馈，正在调整...');
-    await this.updatePlanInFile(`\n\n## 💬 用户反馈\n\n${feedback}\n\n**正在调整计划...**\n`);
+    this.emit('status', '[状态] 收到计划反馈，正在调整...');
+    await this.updatePlanInFile(`\n\n## 用户反馈\n\n${feedback}\n\n**正在调整计划...**\n`);
 
     const result = await this._agentLoop(this._currentTask);
     return this._finishPlanResponse(result);

@@ -35,7 +35,7 @@ async function readFile(params, context) {
       throw openErr;
     }
 
-    // 检测二进制文件（前 512 字节检查 \0）
+    // 二进制文件检测：前 512 字节出现 \0 即视为二进制
     let isBinary = false;
     if (stat.size > 0) {
       const readSize = Math.min(512, stat.size);
@@ -56,7 +56,7 @@ async function readFile(params, context) {
       };
     }
 
-    // 大文件分段读取
+    // 按 maxLines/limit 分段读取，否则按字节上限截断
     const maxLines = params.maxLines || params.limit || 0;
     let content;
     if (maxLines > 0) {
@@ -124,18 +124,17 @@ async function writeFile(params, context) {
       }
     }
 
-    // 写入
     const writeMode = mode === 'append' ? 'a' : 'w';
     await fsp.writeFile(resolvedPath, content, { encoding: 'utf8', flag: writeMode });
 
-    // 记录时间戳用于冲突检测
+    // 记录 mtime 用于冲突检测
     if (context.fileTimestamps) {
       context.fileTimestamps[filePath] = Date.now();
     }
 
     const stat = await fsp.stat(resolvedPath);
 
-    // 追加模式时计算已有行数
+    // 追加模式：找到追加起始行号（用于 UI 标记）
     let appendStartLine = 0;
     if (writeMode === 'a') {
       const existingContent = await fsp.readFile(resolvedPath, 'utf8');
@@ -185,7 +184,6 @@ async function editFile(params, context) {
       throw readErr;
     }
 
-    // 单次遍历查找所有匹配
     const positions = [];
     let pos = 0;
     while (true) {
@@ -205,7 +203,6 @@ async function editFile(params, context) {
     }
 
     if (count > 1 && !replaceAll) {
-      // 找到所有匹配位置的行号
       const matchLines = positions.map(idx =>
         content.substring(0, idx).split('\n').length
       );
@@ -217,7 +214,6 @@ async function editFile(params, context) {
       };
     }
 
-    // 执行替换
     let newContent;
     let replacedCount;
     if (replaceAll) {
@@ -229,20 +225,17 @@ async function editFile(params, context) {
       replacedCount = 1;
     }
 
-    // 写回文件
     await fsp.writeFile(resolvedPath, newContent, 'utf8');
 
-    // 记录时间戳
     if (context.fileTimestamps) {
       context.fileTimestamps[filePath] = Date.now();
     }
 
-    // 计算修改的行范围（复用第一个匹配位置，避免再次 indexOf）
+    // 复用第一个匹配位置计算行范围（避免再次 indexOf）
     const beforeLines = content.substring(0, positions[0]).split('\n').length;
     const oldLines = oldString.split('\n').length;
     const newLines = newString.split('\n').length;
 
-    // 生成 diff
     const { diff, additions, removals } = generateDiff(content, newContent, filePath);
 
     return {
@@ -263,7 +256,6 @@ async function editFile(params, context) {
   }
 }
 
-// 删除文件
 async function deleteFile(params, context) {
   const { filePath } = params;
   const projectDir = context.projectDir;
@@ -297,7 +289,6 @@ async function deleteFile(params, context) {
   }
 }
 
-// 创建目录
 async function createDirectory(params, context) {
   const dirPath = params.path;
   const projectDir = context.projectDir;
@@ -315,7 +306,6 @@ async function createDirectory(params, context) {
   }
 }
 
-// 目录列表
 async function listDirectory(params, context) {
   const dirPath = params.dirPath || '.';
   const projectDir = context.projectDir;
@@ -396,7 +386,6 @@ async function listDirectory(params, context) {
   }
 }
 
-// glob 文件名模式匹配搜索
 async function globFiles(params, context) {
   const { pattern, ignore } = params;
   const cwd = params.cwd || '.';
@@ -429,7 +418,6 @@ async function globFiles(params, context) {
   }
 }
 
-// 跨文件内容搜索（类似 grep）
 async function searchInFiles(params, context) {
   const { pattern, include, maxResults, contextLines } = params;
   const cwd = params.cwd || '.';
@@ -527,7 +515,6 @@ async function searchInFiles(params, context) {
   }
 }
 
-// 移动/重命名文件
 async function moveFile(params, context) {
   const { source, destination, overwrite } = params;
   const projectDir = context.projectDir;
@@ -575,7 +562,6 @@ async function moveFile(params, context) {
   }
 }
 
-// 注册文件操作工具
 function registerFileTools(registry) {
   registry.register({
     name: 'read_file',

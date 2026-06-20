@@ -103,6 +103,9 @@ async function main() {
     if (!contextToolsRegistered && chatEngine) {
       const { registerContextTools } = require('../tools/context');
       registerContextTools(toolRegistry, chatEngine, logger);
+      // 注册 Memory 工具（用户长期记忆）
+      const { registerMemoryTools } = require('../tools/memory');
+      registerMemoryTools(toolRegistry, contextManager, config);
       contextToolsRegistered = true;
       logger.debug('上下文管理工具注册完成');
     }
@@ -373,7 +376,7 @@ async function main() {
 
   if (isFirstRun) {
     tui.messageBox.renderedLines.push(
-      `  ${chalk.green('✅ 配置完成！')} Anvil 已就绪。`
+      `  ${chalk.green('[完成] 配置完成！')} Anvil 已就绪。`
     );
     tui.messageBox.renderedLines.push(
       `  输入 /help 查看帮助，输入 /keys 查看快捷键。`
@@ -531,7 +534,7 @@ async function main() {
       mcpManager.stop().catch(() => {});
     }
 
-    console.log('\n  👋 再见！');
+    console.log('\n  [再见] 再见！');
 
     if (logger) {
       logger.info('Anvil 退出');
@@ -565,7 +568,7 @@ async function main() {
       logger.error('未捕获异常', err.message);
       logger.error('堆栈', err.stack);
     }
-    console.error(`\n  ${chalk.red('✖')} 发生错误: ${err.message}`);
+    console.error(`\n  ${chalk.red('[错误]')} 发生错误: ${err.message}`);
     console.error(`  ${chalk.dim('详细信息已记录到日志')}`);
 
     if (process.stdin.isTTY) {
@@ -584,6 +587,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(`\n✖ 启动失败: ${err.message}`);
+  console.error(`\n[错误] 启动失败: ${err.message}`);
   process.exit(1);
 });

@@ -140,7 +140,7 @@ class AnvilRenderer extends EventEmitter {
   renderHeader(model) {
     this._currentModel = model;
     const t = this.theme;
-    const icon = t.primary('⚒');
+    const icon = t.primary('[Anvil]');
     const ver = t.textMuted('Anvil v0.1.0-alpha');
     const modelName = t.secondary(model || 'deepseek-v4-flash');
     const help = t.textMuted('Ctrl+D 退出 · /help 帮助');
@@ -264,7 +264,7 @@ class AnvilRenderer extends EventEmitter {
       this._writeLine(`${marker} ${t.error('Error:')} ${result.error}`);
     } else if (result.success) {
       if (result.filePath) {
-        this._writeLine(`${marker} ${t.success('✓')} ${result.filePath}`);
+        this._writeLine(`${marker} ${t.success('[完成]')} ${result.filePath}`);
       } else if (result.output) {
         const lines = result.output.split('\n').slice(0, 10);
         for (const line of lines) {this._writeLine(`${marker} ${t.textMuted(line)}`);}
@@ -313,11 +313,11 @@ class AnvilRenderer extends EventEmitter {
       let stats = `${t.token(totalTokens.toLocaleString())} tokens`;
       if (roundCacheHit > 0) {
         const hitRate = Math.round((roundCacheHit / roundInput) * 100);
-        stats += ` ${chalk.dim('·')} ${t.textMuted('💾')} ${t.token(roundCacheHit.toLocaleString())} cached (${hitRate}%)`;
+        stats += ` ${chalk.dim('·')} ${t.textMuted('[缓存]')} ${t.token(roundCacheHit.toLocaleString())} cached (${hitRate}%)`;
       }
       if (cost > 0) {stats += ` ${chalk.dim('·')} ${t.accent('¥' + cost.toFixed(4))}`;}
 
-      this._writeLine(`${marker} ${t.textMuted('📊')} ${stats}`);
+      this._writeLine(`${marker} ${t.textMuted('[统计]')} ${stats}`);
     }
 
     this._writeLine('');
@@ -371,7 +371,7 @@ class AnvilRenderer extends EventEmitter {
     this.spinner.stop();  // 停止闪烁
     const t = this.theme;
     this._writeLine('');
-    this._writeLine(`${t.error('✖')} ${message}`);
+    this._writeLine(`${t.error('[错误]')} ${message}`);
     if (error) {this._writeLine(chalk.dim(`  ${error.message || error}`));}
   }
 

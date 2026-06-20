@@ -115,7 +115,7 @@ class StatusBar {
     let thinkingWidget = '';
     if (this.isThinking) {
       const elapsed = this._getElapsedTime();
-      thinkingWidget = chalk.bgHex(t.colors.warning).hex(t.colors.background).bold(` ✦ thinking ${elapsed} `);
+      thinkingWidget = chalk.bgHex(t.colors.warning).hex(t.colors.background).bold(` thinking ${elapsed} `);
     }
 
     // ─── Plan Mode Indicator ───
@@ -150,10 +150,10 @@ class StatusBar {
     if (errors > 0 || warnings > 0) {
       const diagParts = [];
       if (errors > 0) {
-        diagParts.push(chalk.hex(t.colors.error)(`✖ ${errors}`));
+        diagParts.push(chalk.hex(t.colors.error)(`[错误] ${errors}`));
       }
       if (warnings > 0) {
-        diagParts.push(chalk.hex(t.colors.warning)(`⚠ ${warnings}`));
+        diagParts.push(chalk.hex(t.colors.warning)(`[警告] ${warnings}`));
       }
       const diagInner = diagParts.join(' ');
       diagWidget = chalk.bgHex(t.colors.backgroundDarker)(` ${diagInner} `);

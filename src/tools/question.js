@@ -62,7 +62,7 @@ function registerQuestionTool(registry) {
               },
               customInput: {
                 type: 'boolean',
-                description: '是否允许用户输入自定义答案（默认 false）。启用时选项列表末尾会出现"✎ 自定义输入"选项，用户选择后可输入文字回答',
+                description: '是否允许用户输入自定义答案（默认 false）。启用时选项列表末尾会出现"自定义输入"选项，用户选择后可输入文字回答',
               },
             },
             required: ['question', 'header', 'options'],

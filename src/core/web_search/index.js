@@ -1,70 +1,43 @@
 'use strict';
 
-/**
- * 联网搜索统一入口
- * 支持多搜索引擎（SearXNG、DuckDuckGo、Bing），带缓存和降级策略
- */
-
 const { SearchCache } = require('./cache');
 const { searchBing } = require('./bing');
 const { searchDuckDuckGo } = require('./duckduckgo');
 const { searchSearXNG } = require('./searxng');
 
-// 单例缓存实例
 let globalCache = null;
 
-/**
- * 获取缓存实例
- * @param {object} config
- * @returns {SearchCache}
- */
 function getCache(config) {
   if (!globalCache) {
     const cacheConfig = config.cache || {};
     globalCache = new SearchCache({
       maxSize: cacheConfig.maxSize || 100,
-      defaultTTL: cacheConfig.ttl || 5 * 60 * 1000, // 默认 5 分钟
+      defaultTTL: cacheConfig.ttl || 5 * 60 * 1000,
     });
   }
   return globalCache;
 }
 
-/**
- * 构建缓存 key
- * @param {string} query
- * @param {string} engine
- * @param {object} options
- * @returns {string}
- */
 function buildCacheKey(query, engine, options = {}) {
   return SearchCache.buildKey(query, engine, options.timeRange, options.siteFilter);
 }
 
-/**
- * 获取引擎优先级列表
- * @param {string} preferredEngine
- * @param {object} config
- * @returns {Array<string>}
- */
+// 优先级: 用户指定引擎 > searxng(若配置实例) > duckduckgo > bing
 function getEnginePriority(preferredEngine, config) {
   if (preferredEngine && preferredEngine !== 'auto') {
     return [preferredEngine];
   }
 
-  // 根据配置过滤可用的引擎
   const available = [];
 
-  // SearXNG：如果配置了实例才优先
   if (config.searxng?.instance || config.searxng?.enabled !== false) {
     available.push('searxng');
   }
 
-  // DuckDuckGo：默认启用
   if (config.duckduckgo?.enabled !== false) {
     available.push('duckduckgo');
   }
 
-  // Bing：默认启用
   if (config.bing?.enabled !== false) {
     available.push('bing');
   }
@@ -72,14 +45,6 @@ function getEnginePriority(preferredEngine, config) {
   return available.length > 0 ? available : ['bing'];
 }
 
-/**
- * 执行单个引擎搜索
- * @param {string} engine
- * @param {string} query
- * @param {object} config
- * @param {object} logger
- * @returns {Promise<object>}
- */
 async function searchWithEngine(engine, query, config, logger) {
   const engineConfig = {
     ...config[engine],
@@ -102,13 +67,7 @@ async function searchWithEngine(engine, query, config, logger) {
   }
 }
 
-/**
- * 统一搜索入口
- * @param {string} query - 搜索关键词
- * @param {object} options - 搜索选项
- * @param {object} context - 上下文（包含 config, logger 等）
- * @returns {Promise<object>}
- */
+// 统一搜索入口：缓存 → 引擎优先级 → 单引擎搜索；任一成功即返回，全部失败则聚合错误
 async function search(query, options = {}, context = {}) {
   const config = context.config?.webSearch || {};
   const logger = context.logger;
@@ -127,10 +86,7 @@ async function search(query, options = {}, context = {}) {
   const timeRange = options.timeRange;
   const siteFilter = options.siteFilter;
 
-  // 构建缓存 key
   const cacheKey = buildCacheKey(trimmed, engine, { timeRange, siteFilter });
-
-  // 检查缓存
   const cache = config.cacheEnabled !== false ? getCache(config) : null;
   if (cache) {
     const cached = cache.get(cacheKey);
@@ -143,11 +99,9 @@ async function search(query, options = {}, context = {}) {
     }
   }
 
-  // 获取引擎优先级列表
   const engines = getEnginePriority(engine, config);
   logger?.debug?.('web_search 引擎优先级', { engines, query: trimmed });
 
-  // 依次尝试每个引擎
   const errors = [];
 
   for (const engineName of engines) {
@@ -169,29 +123,22 @@ async function search(query, options = {}, context = {}) {
     const result = await searchWithEngine(engineName, trimmed, engineConfig, logger);
 
     if (result.success) {
-      // 缓存结果
       if (cache) {
         cache.set(cacheKey, result);
       }
       return result;
     }
 
-    // 记录错误，继续下一个引擎
     errors.push({ engine: engineName, error: result.error });
     logger?.debug?.('web_search 引擎失败', { engine: engineName, error: result.error });
   }
 
-  // 所有引擎都失败
   logger?.warn?.('web_search 所有引擎失败', { query: trimmed, errors });
   return {
     error: `所有搜索引擎均不可用。尝试的引擎: ${errors.map(e => `${e.engine}(${e.error})`).join(', ')}`,
   };
 }
 
-/**
- * 获取缓存统计信息
- * @returns {object|null}
- */
 function getCacheStats() {
   if (!globalCache) {
     return null;
@@ -199,9 +146,6 @@ function getCacheStats() {
   return globalCache.getStats();
 }
 
-/**
- * 清空缓存
- */
 function clearCache() {
   if (globalCache) {
     globalCache.clear();
@@ -212,7 +156,6 @@ module.exports = {
   search,
   getCacheStats,
   clearCache,
-  // 导出底层实现供单独使用
   searchBing,
   searchDuckDuckGo,
   searchSearXNG,

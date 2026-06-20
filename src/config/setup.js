@@ -17,7 +17,7 @@ async function setupWizard(options = {}) {
     process.exit(1);
   }
 
-  console.log('\n⚒  欢迎使用 Anvil！首次启动需要进行一些配置...\n');
+  console.log('\n[Anvil] 欢迎使用 Anvil！首次启动需要进行一些配置...\n');
 
   // Step 1: 选择项目目录（带重试）
   let resolvedDir;
@@ -33,7 +33,7 @@ async function setupWizard(options = {}) {
 
     const trimmed = dir?.trim();
     if (!trimmed || trimmed.length === 0) {
-      console.log('⚠️  项目目录不能为空，请重新输入\n');
+      console.log('[警告] 项目目录不能为空，请重新输入\n');
       continue;
     }
     resolvedDir = path.resolve(trimmed);
@@ -82,7 +82,7 @@ async function setupWizard(options = {}) {
 
     // 检查是否为空
     if (!trimmed || trimmed.length === 0) {
-      console.log('⚠️  API Key 不能为空，请重新输入\n');
+      console.log('[警告] API Key 不能为空，请重新输入\n');
       continue;
     }
 
@@ -107,7 +107,7 @@ async function setupWizard(options = {}) {
 
       const trimmed = baseURLInput?.trim();
       if (!trimmed || trimmed.length === 0) {
-        console.log('⚠️  API URL 不能为空，请重新输入\n');
+        console.log('[警告] API URL 不能为空，请重新输入\n');
         continue;
       }
 
@@ -117,7 +117,7 @@ async function setupWizard(options = {}) {
         customBaseURL = trimmed;
         break;
       } catch {
-        console.log('⚠️  URL 格式无效，请输入有效的 URL（如 https://api.example.com/v1）\n');
+        console.log('[警告] URL 格式无效，请输入有效的 URL（如 https://api.example.com/v1）\n');
         continue;
       }
     }
@@ -155,7 +155,7 @@ async function setupWizard(options = {}) {
 
       const trimmed = customModel?.trim();
       if (!trimmed || trimmed.length === 0) {
-        console.log('⚠️  模型 ID 不能为空，请重新输入\n');
+        console.log('[警告] 模型 ID 不能为空，请重新输入\n');
         continue;
       }
 
@@ -196,7 +196,7 @@ async function setupWizard(options = {}) {
     customBaseURL: customBaseURL,
   });
 
-  console.log('\n✅ 配置完成！Anvil 已就绪。\n');
+  console.log('\n[完成] 配置完成！Anvil 已就绪。\n');
   console.log(`  提供商: ${providerConfig.name}`);
   console.log(`  模型: ${model}`);
   if (customBaseURL) {

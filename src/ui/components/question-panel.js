@@ -103,7 +103,7 @@ class QuestionPanel {
         return { action: 'question_next' };
       }
 
-      // 所有问题已回答 → 先刷新 tab 显示（最后一项变绿✓），再完成
+      // 所有问题已回答 → 先刷新 tab 显示（最后一项变绿[完成]），再完成
       this._renderToMessageBox();
       return this._finish();
     }
@@ -235,7 +235,7 @@ class QuestionPanel {
         if (isCurrent) {
           tag = chalk.bgHex(t.colors.primary).hex(t.colors.background).bold(` ${this.questions[i].header} `);
         } else if (isAnswered) {
-          tag = chalk.bgHex(t.colors.success).hex(t.colors.background).bold(` ✓ ${this.questions[i].header} `);
+          tag = chalk.bgHex(t.colors.success).hex(t.colors.background).bold(` [完成] ${this.questions[i].header} `);
         } else {
           tag = chalk.bgHex(t.colors.backgroundSecondary).hex(t.colors.textMuted)(` ${this.questions[i].header} `);
         }
@@ -245,7 +245,7 @@ class QuestionPanel {
       mb.renderedLines.push('');
     }
 
-    // 全部答完时跳过问题描述和选项（只留全✓ tab + 完成标记）
+    // 全部答完时跳过问题描述和选项（只留全 [完成] tab + 完成标记）
     if (!allAnswered) {
       // 问题描述
       const questionLines = current.question.split('\n');
@@ -302,7 +302,7 @@ class QuestionPanel {
       const ciIdx = current.options.length;
       const isSelected = this.cursorPos === ciIdx;
       const prefix = isSelected ? chalk.hex(t.colors.primary)('▸') : ' ';
-      const indicator = chalk.hex(t.colors.textMuted)('✎');
+      const indicator = chalk.hex(t.colors.textMuted)('[ ]');
       const label = isSelected
         ? chalk.hex(t.colors.text).bold('自定义输入')
         : t.text('自定义输入');
@@ -315,7 +315,7 @@ class QuestionPanel {
     let hint = chalk.dim(' ↑↓ 选择');
     hint += chalk.dim(current.multiSelect ? ' · Space 多选' : ' · Space 选中');
     hint += chalk.dim(' · Enter 确认');
-    if (this._customInput[this.currentQ]) {hint += chalk.dim(' · ✎ 自定义');}
+    if (this._customInput[this.currentQ]) {hint += chalk.dim(' · 自定义输入');}
     if (this.questions.length > 1) {hint += chalk.dim(' · Tab 切换');}
     hint += chalk.dim(' · Esc 跳过');
     mb.renderedLines.push(` ${hint}`);
@@ -350,7 +350,7 @@ class QuestionPanel {
 
     // 输入提示
     const cursor = chalk.hex(t.colors.primary)('▎');
-    const prompt = ` ${chalk.hex(t.colors.primary)('✎')} `;
+    const prompt = ` ${chalk.hex(t.colors.primary)('>')} `;
     const displayText = this._customInputBuffer
       ? this._customInputBuffer
       : chalk.hex(t.colors.textMuted)('在此输入你的答案...');
@@ -372,7 +372,7 @@ class QuestionPanel {
       const text = this._customInputBuffer.trim();
       if (!text) {return { action: 'question_input_empty' };} // 空输入不提交
       this._customInputMode = false;
-      this.result[this.currentQ] = `✎ ${text}`;
+      this.result[this.currentQ] = `[自定义] ${text}`;
       this.answered.add(this.currentQ);
 
       // 跳到下一个未回答问题

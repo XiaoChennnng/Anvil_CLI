@@ -24,11 +24,11 @@ const WINDOW_SIZES = {
 // 压缩级别（保留用于警告提示，不执行实际压缩）
 const COMPRESSION_LEVELS = {
   NONE:       { level: 0, threshold: 0.00, label: '正常' },
-  SOFT_WARN:  { level: 1, threshold: 0.70, label: '⚠ 上下文偏高' },
-  LIGHT_COMP: { level: 2, threshold: 0.80, label: '🔧 轻度压缩' },
-  MED_COMP:   { level: 3, threshold: 0.90, label: '📦 中度压缩' },
-  HEAVY_COMP: { level: 4, threshold: 0.95, label: '📚 深度压缩' },
-  CRITICAL:   { level: 5, threshold: 0.98, label: '🚨 极限压缩' },
+  SOFT_WARN:  { level: 1, threshold: 0.70, label: '[警告] 上下文偏高' },
+  LIGHT_COMP: { level: 2, threshold: 0.80, label: '[轻度] 轻度压缩' },
+  MED_COMP:   { level: 3, threshold: 0.90, label: '[中度] 中度压缩' },
+  HEAVY_COMP: { level: 4, threshold: 0.95, label: '[深度] 深度压缩' },
+  CRITICAL:   { level: 5, threshold: 0.98, label: '[极限] 极限压缩' },
 };
 
 // Token 估算缓存（LRU）
@@ -288,8 +288,6 @@ function _messagesFingerprint(messages) {
   return `${len}|${last3}`;
 }
 
-// ------------------------------------
-
 class ContextManager {
   constructor(config) {
     this.config = config || {};
@@ -349,6 +347,79 @@ class ContextManager {
     // 功能开关（可通过 config 禁用）
     this._enablePhaseDetection = config.adaptiveCompression !== false;
     this._enableCalibration = config.autoCalibrate !== false;
+
+    // Memory 配置（.anvil/Memory.md 用户长期记忆）
+    const memoryCfg = this.config.memory || {};
+    this._memoryCfg = {
+      fileName: memoryCfg.fileName || 'Memory.md',
+      maxTokens: memoryCfg.maxTokens || 5000,
+      autoLoad: memoryCfg.autoLoad !== false,
+      warnOnExceed: memoryCfg.warnOnExceed !== false,
+    };
+    this._memoryFilePath = path.join(this.projectDir, '.anvil', this._memoryCfg.fileName);
+    this._memoryCache = { content: null, loadedAt: 0, mtime: 0, tokens: 0 };
+    this._memoryCacheTtlMs = 60_000; // 60s 内复用 mtime 一致的内存缓存
+  }
+
+  /**
+   * 读取 Memory.md 内容（带 mtime 缓存）
+   * @returns {string}
+   */
+  loadMemoryContent() {
+    if (!this._memoryCfg.autoLoad) {return '';}
+    try {
+      const stat = fs.statSync(this._memoryFilePath);
+      const now = Date.now();
+      // 缓存命中条件：内容未变 且 TTL 未过期
+      if (
+        this._memoryCache.content !== null
+        && this._memoryCache.mtime === stat.mtimeMs
+        && now - this._memoryCache.loadedAt < this._memoryCacheTtlMs
+      ) {
+        return this._memoryCache.content;
+      }
+      const content = fs.readFileSync(this._memoryFilePath, 'utf8');
+      const tokens = estimateTokenCount(content);
+      // 超 maxTokens 时截断（按行截，不切到行中）
+      let final = content;
+      if (tokens > this._memoryCfg.maxTokens) {
+        const lines = content.split('\n');
+        let acc = '';
+        for (const line of lines) {
+          const next = acc ? acc + '\n' + line : line;
+          if (estimateTokenCount(next) > this._memoryCfg.maxTokens * 0.95) {break;}
+          acc = next;
+        }
+        final = acc + '\n\n... (剩余内容已省略，超出 5000 tokens 软上限)';
+      }
+      this._memoryCache = {
+        content: final,
+        loadedAt: now,
+        mtime: stat.mtimeMs,
+        tokens: estimateTokenCount(final),
+      };
+      return final;
+    } catch (err) {
+      // 文件不存在时返回空（首次启动很正常）
+      if (err.code === 'ENOENT') {return '';}
+      // 其他错误降级：不阻塞对话
+      return '';
+    }
+  }
+
+  /**
+   * 刷新 Memory 缓存（写操作后调用）
+   */
+  invalidateMemoryCache() {
+    this._memoryCache = { content: null, loadedAt: 0, mtime: 0, tokens: 0 };
+  }
+
+  getMemoryFilePath() {
+    return this._memoryFilePath;
+  }
+
+  getMemoryConfig() {
+    return { ...this._memoryCfg };
   }
 
   setWindowSize(size) {
@@ -999,6 +1070,86 @@ class ContextManager {
     return { messages: [...systemMsgs, ...semanticSummaryMsgs, archiveMsg, ...recent] };
   }
 
+  // 语义预算压缩（level='semantic'）：硬性 1w-5w tokens 预算，外部传入 LLM 摘要文本
+  // chat.js 负责调 LLM 生成摘要后，把摘要文本传进来，这里只做预算校验、truncate、注入
+  applySemanticSummary(messages, summaryText, options = {}) {
+    const MIN = 10_000;
+    const MAX = 50_000;
+    const target = Math.max(MIN, Math.min(MAX, options.budgetTokens || 30_000));
+
+    // 1) 硬性 truncate：超出预算就按行截到 ~95% 安全位
+    let finalSummary = summaryText || '';
+    const summaryTokens = estimateTokenCount(finalSummary);
+    if (summaryTokens > target) {
+      finalSummary = this._trimToTokens(finalSummary, Math.floor(target * 0.95));
+    }
+
+    // 2) 构造新 messages：保留原有 system 消息，注入语义摘要
+    const sysMsgs = messages.filter(
+      (m) => m.role === 'system' && !m._archiveTier && !m._semanticSummary,
+    );
+
+    const newMessages = [...sysMsgs];
+    newMessages.push({
+      role: 'system',
+      content: `[语义预算压缩 — 预算 ${target} tokens]\n${finalSummary}\n[压缩结束]`,
+      _semanticSummary: true,
+      _budgetTokens: target,
+      _compressedAt: new Date().toISOString(),
+    });
+
+    // 3) 统计
+    const beforeTokens = estimateMessageTokens(messages);
+    const afterTokens = estimateMessageTokens(newMessages);
+    this.compressionStats.totalCompressions++;
+    this.compressionStats.totalTokensSaved += Math.max(0, beforeTokens - afterTokens);
+    this.compressionStats.lastCompression = new Date().toISOString();
+
+    return {
+      messages: newMessages,
+      stats: {
+        compressed: true,
+        level: 'semantic',
+        name: 'SEMANTIC_BUDGET',
+        beforeTokens,
+        afterTokens,
+        savedPercent: beforeTokens > 0
+          ? Math.round((1 - afterTokens / beforeTokens) * 100)
+          : 0,
+        budget: target,
+        rebuilt: !!options.rebuild,
+      },
+    };
+  }
+
+  // 静态 clamp：把 budgetTokens 强制限制在 1w-5w 范围内
+  validateSemanticBudget(budgetTokens) {
+    // 注意：0/负数不能走 `||` 默认值（0 是 falsy），必须用 ?? 或显式 NaN 检查
+    const v = typeof budgetTokens === 'number' && !Number.isNaN(budgetTokens)
+      ? budgetTokens
+      : 30_000;
+    return Math.max(10_000, Math.min(50_000, v));
+  }
+
+  // 降级字符串摘要（LLM 失败时使用）
+  // 复用 _summarizeRoundL1 逐轮截取，目标 token 数
+  _fallbackStringSummary(messages, targetTokens) {
+    const historyMsgs = messages.filter(
+      (m) => m.role !== 'system' || m._archiveTier || m._semanticSummary,
+    );
+    const rounds = this._groupIntoRounds(historyMsgs);
+    if (rounds.length === 0) {return '';}
+
+    const lines = rounds.map((r, i) => this._summarizeRoundL1(r, i + 1));
+    let result = '';
+    for (const line of lines) {
+      const candidate = result ? `${result}\n${line}` : line;
+      if (estimateTokenCount(candidate) > targetTokens * 0.95) {break;}
+      result = candidate;
+    }
+    return result || lines.join('\n');
+  }
+
   // 主动后台压缩：70%+ 使用率时将最旧 20% 轮次压缩为 L1 摘要
   proactiveCompress(messages) {
     const usage = estimateMessageTokens(messages) / this.windowSize;
@@ -1439,17 +1590,86 @@ class ContextManager {
       assembled.push({ role: 'system', content: trimmed });
     }
 
+    // Tier 1.5: User Memory (用户长期记忆 .anvil/Memory.md)
+    // AI 在合适时机写入；启动时自动加载以保持上下文连贯
+    const memory = this.loadMemoryContent();
+    if (memory) {
+      assembled.push({
+        role: 'system',
+        content: `## 用户长期记忆 (.anvil/Memory.md)\n\n${memory}`,
+        _memoryTier: true,
+      });
+    }
+
     // Tier 2+4: 历史消息 + 压缩摘要 (去重前先检查预算)
     // _enforceBudget 会在 tier2/tier4 超预算时自动压缩（之前没调用点，死代码！）
     const budgetChecked = this._enforceBudget(historyMessages);
     const deduped = this._deduplicateMessages(budgetChecked);
     // 保留非 system 消息 + 带 _archiveTier 的归档摘要（别把压缩摘要过滤掉了，SB bug）
     const historyNonSystem = deduped.filter((m) => m.role !== 'system' || m._archiveTier !== undefined);
-    if (historyNonSystem.length > 0) {
-      assembled.push(...historyNonSystem);
+
+    // 最后一道防线：删除孤立的 tool 消息（OpenAI 要求 tool 必须跟在前面的 tool_calls 之后）
+    // 各种压缩路径可能让 assistant(tool_calls) 被摘要成 system 消息而 tool 消息保留——这种必须清理
+    const safe = this._validateToolPairs(historyNonSystem);
+
+    if (safe.length > 0) {
+      assembled.push(...safe);
     }
 
     return assembled;
+  }
+
+  /**
+   * 校验并清理孤立的 tool 消息
+   *
+   * OpenAI/Anthropic API 规则:
+   * - role=tool 的消息必须有前面的 assistant(tool_calls) 引用同一个 tool_call_id
+   * - 否则 API 返回 400 "Messages with role 'tool' must be a response to a preceding message with 'tool_calls'"
+   *
+   * 压缩过程中可能出现:
+   * - 早期 round 被压成 system 摘要（assistant tool_calls 也消失了），但 tool 消息保留
+   * - round 切片切到一半，把 assistant 留在 older，tool 留在 recent
+   *
+   * 修复策略: 扫描所有保留消息的 assistant.tool_calls 收集 tool_call_ids，
+   *          删除任何 tool_call_id 不在集合里的 role=tool 消息
+   *
+   * @param {Array} messages
+   * @returns {Array} 修复后的消息
+   */
+  _validateToolPairs(messages) {
+    if (!messages || messages.length === 0) {return messages || [];}
+
+    // 1) 收集所有保留的 assistant tool_call_ids
+    const validToolIds = new Set();
+    for (const m of messages) {
+      if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+        for (const tc of m.tool_calls) {
+          if (tc && tc.id) {validToolIds.add(tc.id);}
+        }
+      }
+    }
+
+    // 2) 过滤掉孤立的 tool 消息
+    const fixed = [];
+    let dropped = 0;
+    for (const m of messages) {
+      if (m.role === 'tool') {
+        if (m.tool_call_id && validToolIds.has(m.tool_call_id)) {
+          fixed.push(m);
+        } else {
+          dropped++;
+        }
+      } else {
+        fixed.push(m);
+      }
+    }
+
+    if (dropped > 0) {
+      this.compressionStats = this.compressionStats || {};
+      this.compressionStats.droppedOrphanTools = (this.compressionStats.droppedOrphanTools || 0) + dropped;
+    }
+
+    return fixed;
   }
 
   // Phase 3: 压缩遗憾检测
@@ -1679,6 +1899,17 @@ module.exports = {
   COMPRESSION_LEVELS,
   TOOL_IMPORTANCE,
   CONVERSATION_PHASES,
+  applySemanticSummary: (messages, summaryText, options) => {
+    // 工厂方法：不需要构造 ContextManager 也能调，方便测试
+    const cm = new ContextManager({});
+    return cm.applySemanticSummary(messages, summaryText, options);
+  },
+  validateSemanticBudget: (budgetTokens) => {
+    const v = typeof budgetTokens === 'number' && !Number.isNaN(budgetTokens)
+      ? budgetTokens
+      : 30_000;
+    return Math.max(10_000, Math.min(50_000, v));
+  },
   // 内部方法（用于测试）
   _countCharsByRatio,
   _messageFingerprint: (msg) => crypto.createHash('md5').update(`${msg.role}|${(msg.content || '').slice(0, 200)}|${(msg.tool_calls || []).map((t) => t.function?.name).join(',')}`).digest('hex'),

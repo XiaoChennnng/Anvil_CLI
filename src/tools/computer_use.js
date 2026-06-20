@@ -414,8 +414,6 @@ function unregisterComputerUseTools(registry) {
   }
 }
 
-// ==================== 工具执行函数 ====================
-
 /**
  * 执行截图
  */

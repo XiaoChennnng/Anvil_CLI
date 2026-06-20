@@ -35,14 +35,14 @@ class Spinner {
   succeed(text) {
     this._stop();
     if (text) {
-      process.stdout.write(`${chalk.green('✓')} ${text}\n`);
+      process.stdout.write(`${chalk.green('[完成]')} ${text}\n`);
     }
   }
 
   fail(text) {
     this._stop();
     if (text) {
-      process.stdout.write(`${chalk.red('✗')} ${text}\n`);
+      process.stdout.write(`${chalk.red('[失败]')} ${text}\n`);
     }
   }
 

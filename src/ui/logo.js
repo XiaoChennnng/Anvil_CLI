@@ -26,7 +26,7 @@ function showLogo(options = {}) {
   const logoStr = logoLines.join('\n');
   const colored = chalk[color] ? chalk[color](logoStr) : chalk.cyan(logoStr);
   console.log(colored);
-  console.log(chalk.dim(`  ⚒  ${projectName}  —  Powered by Anvil\n`));
+  console.log(chalk.dim(`  [Anvil]  ${projectName}  —  Powered by Anvil\n`));
 }
 
 module.exports = { showLogo };
