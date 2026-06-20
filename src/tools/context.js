@@ -73,7 +73,7 @@ function registerContextTools(toolRegistry, chatEngine, logger) {
             rebuilt: stats.rebuilt,
             fallback: stats.fallback || null,
             message: stats.message || '',
-            summary: `[完成] 语义压缩完成: ${stats.beforeTokens.toLocaleString()} → ${stats.afterTokens.toLocaleString()} tokens (预算 ${stats.budget.toLocaleString()}, 节省 ${stats.savedPercent}%)${stats.rebuilt ? ' + System Prompt 已重建' : ''}`,
+            summary: `✓ 语义压缩: ${stats.beforeTokens.toLocaleString()} → ${stats.afterTokens.toLocaleString()} tokens (预算 ${stats.budget.toLocaleString()}, 节省 ${stats.savedPercent}%)${stats.rebuilt ? ' + System Prompt 已重建' : ''}`,
           };
         }
 

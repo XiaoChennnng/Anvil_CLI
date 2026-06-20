@@ -345,7 +345,7 @@ class ToolRenderer {
         if (output) {
           const outputLines = output.split('\n').filter(l => l.trim());
           if (outputLines.length === 0) {
-            lines.push(`${indent}${branch} ${t.success('[完成]')} Command executed successfully`);
+            lines.push(`${indent}${branch} ${t.success('✓')} Command executed successfully`);
           } else {
             const displayCount = maxLines > 0 ? Math.min(outputLines.length, maxLines) : outputLines.length;
             const contIndent = indent + '   ';
@@ -366,7 +366,7 @@ class ToolRenderer {
             }
           }
         } else if (result.success) {
-          lines.push(`${indent}${branch} ${t.success('[完成]')} Command executed successfully`);
+          lines.push(`${indent}${branch} ${t.success('✓')} Command executed successfully`);
         }
         break;
       }
@@ -435,7 +435,7 @@ class ToolRenderer {
             }
           }
         } else if (result.success) {
-          lines.push(`${indent}${branch} ${t.success('[完成]')} Updated ${filePath}`);
+          lines.push(`${indent}${branch} ${t.success('✓')} Updated ${filePath}`);
         }
         break;
       }
@@ -481,7 +481,7 @@ class ToolRenderer {
 
           // 显示摘要：新建/覆盖 + 文件路径 + 大小
           const modeLabel = result.mode === 'append' ? 'Appended to' : 'Written to';
-          lines.push(`${indent}${branch} ${t.success('[完成]')} ${modeLabel} ${filePath}${t.dim(size)}`);
+          lines.push(`${indent}${branch} ${t.success('✓')} ${modeLabel} ${filePath}${t.dim(size)}`);
 
           // 展示写入的内容（正常颜色+行号，不用全绿）
           const content = args.content || '';
@@ -509,7 +509,7 @@ class ToolRenderer {
       case 'delete_file':
       case 'delete': {
         if (result.success) {
-          lines.push(`${indent}${branch} ${t.success('[完成]')} Deleted ${this._formatPath(result.filePath || '')}`);
+          lines.push(`${indent}${branch} ${t.success('✓')} Deleted ${this._formatPath(result.filePath || '')}`);
         }
         break;
       }
@@ -517,14 +517,14 @@ class ToolRenderer {
       case 'create_directory':
       case 'mkdir': {
         if (result.success) {
-          lines.push(`${indent}${branch} ${t.success('[完成]')} Created ${this._formatPath(result.path || '')}`);
+          lines.push(`${indent}${branch} ${t.success('✓')} Created ${this._formatPath(result.path || '')}`);
         }
         break;
       }
 
       case 'move_file': {
         if (result.success) {
-          lines.push(`${indent}${branch} ${t.success('[完成]')} Moved to ${this._formatPath(result.destination || '')}`);
+          lines.push(`${indent}${branch} ${t.success('✓')} Moved to ${this._formatPath(result.destination || '')}`);
         }
         break;
       }
@@ -564,7 +564,7 @@ class ToolRenderer {
           if (!desc && todoId) {desc = `id=${todoId.substring(0, 10)}...`;}
           // 如果有 todo 完整对象，优先使用其 text
           if (!desc && result.todo?.text) {desc = this._truncate(result.todo.text, 40);}
-          lines.push(`${indent}${branch} ${t.success('[完成]')} ${action}${desc ? ': ' + t.dim(desc) : ''}`);
+          lines.push(`${indent}${branch} ${t.success('✓')} ${action}${desc ? ': ' + t.dim(desc) : ''}`);
         }
         break;
       }
@@ -572,6 +572,20 @@ class ToolRenderer {
       case 'task_complete':
         // 任务完成摘要已由 AI 文字回复输出，不再重复渲染
         break;
+
+      case 'compact_context': {
+        // 语义压缩：由 default 通道统一渲染 summary（已带 ✓ 前缀，避免重复）
+        const outputText = result.content || result.output || result.result || result.summary || result.message || '';
+        if (outputText) {
+          const outputLines = outputText.split('\n').filter(l => l.trim()).slice(0, maxLines);
+          for (const line of outputLines) {
+            lines.push(`${indent}${branch} ${t.dim(this._truncate(line, contentWidth))}`);
+          }
+        } else if (result.success) {
+          lines.push(`${indent}${branch} ${t.success('✓')} Done`);
+        }
+        break;
+      }
 
       case 'ask_user_question':
         // 用户已回答，不需要重复展示结果
@@ -582,7 +596,7 @@ class ToolRenderer {
           const completed = result.todos.filter(td => td.completed).length;
           lines.push(`${indent}${branch} ${t.dim(`Tasks (${completed}/${result.todos.length})`)}`);
           for (const todo of result.todos.slice(0, maxLines - 1)) {
-            const status = todo.completed ? t.success('[完成]') : t.textMuted('[ ]');
+            const status = todo.completed ? t.success('✓') : t.textMuted('[ ]');
             const text = todo.text || '';
             lines.push(`${indent}${indent}${status} ${t.text(this._truncate(text, contentWidth - 4))}`);
           }
@@ -607,7 +621,7 @@ class ToolRenderer {
             }
           }
         } else if (result.success) {
-          lines.push(`${indent}${branch} ${t.success('[完成]')} Done`);
+          lines.push(`${indent}${branch} ${t.success('✓')} Done`);
         }
       }
     }

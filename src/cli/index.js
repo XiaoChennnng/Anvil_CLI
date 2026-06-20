@@ -376,7 +376,7 @@ async function main() {
 
   if (isFirstRun) {
     tui.messageBox.renderedLines.push(
-      `  ${chalk.green('[完成] 配置完成！')} Anvil 已就绪。`
+      `  ${chalk.green('✓ 配置就绪！')} Anvil 已就绪。`
     );
     tui.messageBox.renderedLines.push(
       `  输入 /help 查看帮助，输入 /keys 查看快捷键。`

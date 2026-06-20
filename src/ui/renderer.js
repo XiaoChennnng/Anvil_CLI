@@ -264,7 +264,7 @@ class AnvilRenderer extends EventEmitter {
       this._writeLine(`${marker} ${t.error('Error:')} ${result.error}`);
     } else if (result.success) {
       if (result.filePath) {
-        this._writeLine(`${marker} ${t.success('[完成]')} ${result.filePath}`);
+        this._writeLine(`${marker} ${t.success('✓')} ${result.filePath}`);
       } else if (result.output) {
         const lines = result.output.split('\n').slice(0, 10);
         for (const line of lines) {this._writeLine(`${marker} ${t.textMuted(line)}`);}

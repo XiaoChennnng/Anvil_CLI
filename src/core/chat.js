@@ -126,7 +126,50 @@ class ChatEngine extends EventEmitter {
     if (Array.isArray(messages)) {
       const systemMsgs = this.messages.filter((m) => m.role === 'system');
       const historyMsgs = messages.filter((m) => m.role !== 'system' || m._archiveTier !== undefined);
-      this.messages = [...systemMsgs, ...historyMsgs];
+      this.messages = [...systemMsgs, ...this._validateToolPairs(historyMsgs)];
+    }
+  }
+
+  // 过滤孤立的 tool 消息（OpenAI 要求 tool 必须跟在带 tool_calls 的 assistant 之后）
+  // 规则：tool 消息必须能匹配到前面某条 assistant 声明的 tool_calls.id
+  _validateToolPairs(messages) {
+    const validToolIds = new Set();
+    for (const m of messages) {
+      if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
+        for (const tc of m.tool_calls) {
+          if (tc && tc.id) {validToolIds.add(tc.id);}
+        }
+      }
+    }
+    return messages.filter((m) => {
+      if (m.role === 'tool') {
+        return m.tool_call_id && validToolIds.has(m.tool_call_id);
+      }
+      return true;
+    });
+  }
+
+  // 中断后清理：删除没有配对 tool 的 assistant(tool_calls) 和孤立 tool
+  _cleanupInterruptedToolCalls() {
+    const before = this.messages.length;
+    this.messages = this._validateToolPairs(this.messages);
+
+    // 额外处理：assistant 声明了 tool_calls 但所有 tool 都被丢弃的情况
+    const existingToolIds = new Set();
+    for (const m of this.messages) {
+      if (m.role === 'tool' && m.tool_call_id) {existingToolIds.add(m.tool_call_id);}
+    }
+    this.messages = this.messages.filter((m) => {
+      if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+        const hasAnyTool = m.tool_calls.some((tc) => tc.id && existingToolIds.has(tc.id));
+        return hasAnyTool;
+      }
+      return true;
+    });
+
+    const dropped = before - this.messages.length;
+    if (dropped > 0 && this.logger) {
+      this.logger.info('中断清理孤立 tool 调用', { dropped });
     }
   }
 
@@ -559,8 +602,11 @@ class ChatEngine extends EventEmitter {
     while (loopCount < maxLoops) {
       loopCount++;
 
+      // 关键防线：过滤孤立 tool 消息（避免 OpenAI 400）
+      const safeMessages = this._validateToolPairs(this.messages);
+
       // 准备 API 请求：带 tool_calls 的 assistant 消息必须携带 reasoning_content
-      const apiMessages = this.messages.map((m) => {
+      const apiMessages = safeMessages.map((m) => {
         const msg = {
           role: m.role,
           content: m.content || '',
@@ -924,9 +970,8 @@ class ChatEngine extends EventEmitter {
       await this._rebuildFullContext();
     }
 
-    // 4) 事件通知
+    // 4) 事件通知（仅发 context-rebuilt，状态文案由工具渲染通道统一输出，避免重复）
     const finalStats = { ...applyResult.stats, fallback };
-    this.emit('status', `[完成]语义压缩完成: ${finalStats.beforeTokens.toLocaleString()} → ${finalStats.afterTokens.toLocaleString()} tokens (预算 ${target.toLocaleString()}, 节省 ${finalStats.savedPercent}%)${shouldRebuild ? ' + System Prompt 已重建' : ''}`);
     this.emit('context-rebuilt', {
       tokensBefore: finalStats.beforeTokens,
       tokensAfter: finalStats.afterTokens,
@@ -1341,6 +1386,8 @@ class ChatEngine extends EventEmitter {
       this.aiClient.abort();
     }
     this.isProcessing = false;
+    // 清理中断残留的孤立 tool 消息（避免下一轮触发 400）
+    this._cleanupInterruptedToolCalls();
     this.emit('interrupted');
   }
 

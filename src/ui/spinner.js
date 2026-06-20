@@ -35,7 +35,7 @@ class Spinner {
   succeed(text) {
     this._stop();
     if (text) {
-      process.stdout.write(`${chalk.green('[完成]')} ${text}\n`);
+      process.stdout.write(`${chalk.green('✓')} ${text}\n`);
     }
   }
 

@@ -196,7 +196,7 @@ async function setupWizard(options = {}) {
     customBaseURL: customBaseURL,
   });
 
-  console.log('\n[完成] 配置完成！Anvil 已就绪。\n');
+  console.log('\n✓ 配置就绪！Anvil 已就绪。\n');
   console.log(`  提供商: ${providerConfig.name}`);
   console.log(`  模型: ${model}`);
   if (customBaseURL) {
