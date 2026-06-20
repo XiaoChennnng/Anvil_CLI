@@ -429,14 +429,12 @@ class Sidebar {
     }
   }
 
-  // 获取已加载的 Skills 数量
   _getSkillCount() {
     if (!this.toolRegistry) {return 0;}
     const skills = this.toolRegistry.listSkills();
     return skills.length;
   }
 
-  // 获取缓存信息
   _getCacheInfo() {
     const { totalRequests, cacheHits, totalInputTokens, cachedTokens } = this.cacheStats;
     const hitRate = totalInputTokens > 0
@@ -514,7 +512,6 @@ class Sidebar {
     tick(); // 立即执行一次
   }
 
-  // 获取当前动画进度
   _getAnimationProgress() {
     if (!this._progressAnimation.active) {return null;}
 
@@ -525,7 +522,6 @@ class Sidebar {
       (this._progressAnimation.to - this._progressAnimation.from) * progress;
   }
 
-  // 获取 Todo 统计摘要
   _getTodoStats() {
     const total = this.todos.length;
     if (total === 0) {return '';}

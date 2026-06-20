@@ -228,7 +228,6 @@ class StatusBar {
     return `${Math.floor(elapsed / 60000)}m${Math.floor((elapsed % 60000) / 1000)}s`;
   }
 
-  // 计算字符串的可见长度
   _visibleLength(str) {
     return visibleLength(str);
   }

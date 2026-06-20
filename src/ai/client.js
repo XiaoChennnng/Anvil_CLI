@@ -2,7 +2,7 @@
 
 const { EventEmitter } = require('events');
 const { estimateTokens } = require('../ui/tokens');
-const { getClientConfig, detectProvider, getProviderApiKey, convertImagesInMessages, isVisionModel } = require('./providers');
+const { getClientConfig, detectProvider, convertImagesInMessages, isVisionModel } = require('./providers');
 
 class AnvilAIClient extends EventEmitter {
   constructor(config) {

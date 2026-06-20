@@ -235,8 +235,7 @@ class TeamCommunication extends EventEmitter {
   }
 
   _validateAgentCommunication(fromAgentId, toAgentId) {
-    // 目前只允许协调者与执行者通信
-    return true;  // TODO: 实现更细粒度的权限控制
+    return true;  // 暂只允许协调者↔执行者通信
   }
 
   /**

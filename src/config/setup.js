@@ -217,21 +217,6 @@ async function setupWizard(options = {}) {
 }
 
 /**
- * 获取 API Key 环境变量名
- * @param {string} providerId - 提供商 ID
- * @returns {string} 环境变量名
- */
-function getApiKeyEnvName(providerId) {
-  const envNames = {
-    deepseek: 'DEEPSEEK_API_KEY',
-    openai: 'OPENAI_API_KEY',
-    anthropic: 'ANTHROPIC_API_KEY',
-    kimi: 'MOONSHOT_API_KEY',
-  };
-  return envNames[providerId] || `${providerId.toUpperCase()}_API_KEY`;
-}
-
-/**
  * 获取提供商基础 URL
  * @param {string} providerId - 提供商 ID
  * @returns {string} API 基础 URL

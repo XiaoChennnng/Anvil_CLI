@@ -10,9 +10,6 @@ const { searchBing } = require('./bing');
 const { searchDuckDuckGo } = require('./duckduckgo');
 const { searchSearXNG } = require('./searxng');
 
-// 搜索引擎优先级（auto 模式）
-const ENGINE_PRIORITY = ['searxng', 'duckduckgo', 'bing'];
-
 // 单例缓存实例
 let globalCache = null;
 

@@ -266,7 +266,6 @@ class MessageBox {
     output += `\x1b[${messageStartRow + 1};1H${headerLine}${headerPad}`;
     output += `\x1b[${messageStartRow + 2};1H${' '.repeat(messageWidth)}`;
 
-    // 计算可见行
     const viewportStart = messageStartRow + 3;
     const visibleLines = this.renderedLines.slice(
       Math.max(0, this.renderedLines.length - messageViewportHeight - this.scrollOffset),
@@ -385,7 +384,6 @@ class MessageBox {
     return result;
   }
 
-  // 判断是否为 CJK 双倍宽字符（带缓存）
   _isCJK(char) {
     if (char.length === 0) {return false;}
     // 快速路径：ASCII 字符不是 CJK
@@ -411,7 +409,6 @@ class MessageBox {
     return result;
   }
 
-  // 计算字符串的可见长度（带缓存）
   _visibleLength(str) {
     if (!str) {return 0;}
 

@@ -11,18 +11,25 @@ const DEFAULT_MAX_ITERATIONS = 100;
 
 // 解析 task_complete 结果，处理各种格式
 function parseTaskCompleteResult(content) {
-  if (!content) { return { complete: null, reason: 'no_result' }; }
+  if (!content) { return { complete: null, reason: 'no_result', summary: '' }; }
   try {
     const result = JSON.parse(content);
-    return { complete: result.complete === true, reason: 'json_parse' };
+    return {
+      complete: result.complete === true,
+      reason: 'json_parse',
+      summary: typeof result.summary === 'string' ? result.summary : '',
+    };
   } catch {
+    let summary = '';
     if (/任务完成|已完成|all\s+done|completed/i.test(content)) {
-      return { complete: true, reason: 'text_affirmative' };
+      // 文本模式下没有结构化 summary，截取可能的"完成说明"部分（去除前缀关键词）
+      summary = content.replace(/^\s*(任务完成|已完成|all\s+done|completed)[：:。\s]*/i, '').trim();
+      return { complete: true, reason: 'text_affirmative', summary };
     }
     if (/\d+\s*个?未完成|还有.*要做|pending/i.test(content)) {
-      return { complete: false, reason: 'text_unfinished' };
+      return { complete: false, reason: 'text_unfinished', summary: '' };
     }
-    return { complete: null, reason: 'parse_failed' };
+    return { complete: null, reason: 'parse_failed', summary: '' };
   }
 }
 
@@ -450,13 +457,16 @@ class ChatEngine extends EventEmitter {
         const parsed = parseTaskCompleteResult(lastToolMsg?.content || '');
         if (parsed.complete === true) {
           this.logger?.info('任务完成', { reason: parsed.reason, iterationCount });
-          // 补发被抑制的 UI 事件（检查阶段的完整总结内容从未渲染到 UI）
-          this.emit('content', checkResult.content || '');
-          if (checkResult.thinking) {
-            this.emit('thinking', checkResult.thinking);
+          // checkResult.content 是 AI 在自主循环检查阶段对系统说的内部汇报（如"已完成，用户消息右侧显示..."），
+          // 不属于面向用户的内容，禁止渲染到 UI。
+          // 只渲染 task_complete 工具的 summary 参数（这是 AI 写给用户的完成说明）。
+          const userFacingSummary = parsed.summary || '';
+          if (userFacingSummary) {
+            this.emit('content', userFacingSummary);
           }
-          // 使用检查结果作为最终返回值，而非上一轮的旧内容
-          result = checkResult;
+          // 使用检查结果作为最终返回值，但把 content 替换成 summary，
+          // 避免 'complete' 事件 payload 里残留 AI 内部汇报
+          result = { ...checkResult, content: userFacingSummary };
           break;
         }
         // 有未完成或不确定，继续执行

@@ -361,7 +361,6 @@ class ContextManager {
     return this.windowSize;
   }
 
-  // 获取当前窗口配置
   getWindowConfig() {
     return {
       size: this.windowSize,
@@ -520,7 +519,6 @@ class ContextManager {
 
     const cacheKey = options.limit ? `${relative}:${options.offset}:${options.limit}` : relative;
 
-    // 检查缓存
     if (this._fileContexts.has(cacheKey)) {
       const entry = this._fileContexts.get(cacheKey);
       entry.accessCount = (entry.accessCount || 0) + 1;
@@ -676,7 +674,6 @@ class ContextManager {
       compressLevel = autoLevel.level;
     }
 
-    // 检查是否需要压缩
     if (compressLevel < COMPRESSION_LEVELS.LIGHT_COMP.level) {
       return {
         messages,
@@ -696,7 +693,6 @@ class ContextManager {
     this.compressionStats.totalCompressions++;
     this.compressionStats.lastCompression = new Date().toISOString();
 
-    // 执行实际压缩
     let result;
     if (options.keep && options.keep.length > 0) {
       // 聚焦保留模式
@@ -845,9 +841,8 @@ class ContextManager {
       }
     }
 
-    // 需要保留 project — 不动 project overview
     if (preserve.has('project')) {
-      // keep project overview as-is
+      // 跳过 project overview 的处理（由其他 tier 负责）
     }
 
     // 对存档轮次生成摘要
@@ -1338,7 +1333,6 @@ class ContextManager {
       .reduce((sum, e) => sum + estimateTokenCount(e.content || ''), 0);
   }
 
-  // 检查并强制执行每层预算
   _enforceBudget(messages) {
     this._computeTierTokens(messages);
 
@@ -1631,7 +1625,6 @@ class ContextManager {
     // 空闲空间
     const freeTokens = Math.max(0, this.windowSize - total);
 
-    // 计算各类别百分比
     const pctOf = (val) => this.windowSize > 0 ? Math.round((val / this.windowSize) * 1000) / 10 : 0;
 
     // 构建分解列表（按 token 数降序，>0 才显示）

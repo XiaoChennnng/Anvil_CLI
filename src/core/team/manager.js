@@ -153,7 +153,6 @@ class TeamManager extends EventEmitter {
       /api.{0,10}(和|与|以及|.+)界面/,
     ];
 
-    // 计算复杂度评分 (0-100)
     let complexityScore = 0;
 
     // 可并行执行的任务 (+20-40)
@@ -256,7 +255,6 @@ class TeamManager extends EventEmitter {
     // 状态转换
     this._transitionTo(TeamState.PLANNING);
 
-    // 创建子Agent
     const createdAgents = await this._createTeamAgents(evaluation.suggestedAgents);
 
     // 分配初始任务

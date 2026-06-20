@@ -193,6 +193,27 @@ function registerTodoTools(registry) {
     },
     execute: clearCompleted,
   });
+
+  registry.register({
+    name: 'clear_all_todos',
+    description: '清空所有任务（已完成 + 未完成）。新任务开始前调用，避免新旧任务 todo 混在一起。',
+    parameters: {
+      type: 'object',
+      properties: {},
+    },
+    execute: clearAllTodos,
+  });
+}
+
+async function clearAllTodos(params, context) {
+  const todoManager = context.todoManager;
+  todoManager.clearAll();
+
+  if (context.onTodoChange) {
+    context.onTodoChange(todoManager.getAll());
+  }
+
+  return { success: true };
 }
 
 module.exports = { registerTodoTools };

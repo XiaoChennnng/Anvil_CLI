@@ -222,7 +222,6 @@ class TeamErrorHandler {
   }
 
   _getAgentRole(agentId) {
-    // TODO: 从Agent元数据获取角色
     return 'executor';
   }
 

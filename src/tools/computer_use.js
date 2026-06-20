@@ -6,9 +6,6 @@
  * 仅对支持 vision 的模型有效
  */
 
-const fs = require('fs');
-const path = require('path');
-
 // 桌面自动化依赖（可选）
 let robot = null;
 try {
@@ -29,17 +26,12 @@ try {
   // 可选依赖
 }
 
-// 上次截图尺寸缓存
-let lastScreenshotSize = null;
-
 /**
  * 注册 Computer Use 工具
  * @param {ToolRegistry} registry - 工具注册表
  * @param {Object} context - 上下文对象 { tui, chatEngine }
  */
 function registerComputerUseTools(registry, context) {
-  const { tui } = context;
-
   // 截图工具 - 观察当前屏幕状态
   registry.register({
     name: 'computer',
@@ -454,7 +446,6 @@ async function executeScreenshot(params) {
     // 备选：使用 robotjs 截图
     if (robot) {
       const screenSize = robot.getScreenSize();
-      lastScreenshotSize = screenSize;
 
       return {
         success: true,

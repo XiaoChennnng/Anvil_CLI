@@ -54,7 +54,6 @@ function truncateToWidth(str, maxWidth, suffix = '...') {
   return result;
 }
 
-// 判断是否为 CJK 双倍宽字符
 function isCJK(char) {
   if (!char || char.length === 0) {return false;}
   const code = char.charCodeAt(0);

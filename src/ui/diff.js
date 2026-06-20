@@ -18,7 +18,6 @@ function parseUnifiedDiff(diffText) {
   const hunkHeaderRe = /^@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@/;
   const lines = diffText.split('\n');
 
-  // 解析文件名
   for (const line of lines) {
     if (line.startsWith('--- a/')) {
       result.fileName = line.substring(5).split('\t')[0];
@@ -35,7 +34,6 @@ function parseUnifiedDiff(diffText) {
       continue;
     }
 
-    // 解析 hunk 头
     const matches = hunkHeaderRe.exec(line);
     if (matches) {
       if (currentHunk) {
@@ -170,7 +168,6 @@ function renderDiffBox(diffText, width, maxLines = 10) {
     return [];
   }
 
-  // 计算边框宽度
   const borderWidth = width - 1; // 减去边框字符
   const contentWidth = borderWidth - 4; // 减去左右的 padding
 
@@ -267,7 +264,6 @@ function renderBashBox(output, width, maxLines = 10) {
       content = content.substring(0, contentWidth - 3) + '...';
     }
 
-    // 检查是否包含错误关键字
     const isError = /\b(error|failed|exception|cannot|unable)\b/i.test(content);
     const lineColor = isError ? t.error : t.text;
     const lineStr = lineColor(content);
@@ -466,8 +462,6 @@ function createDiffFromContent(oldContent, newContent, fileName) {
 module.exports = {
   // 常量
   LineType,
-
-  // 解析
   parseUnifiedDiff,
 
   // 渲染

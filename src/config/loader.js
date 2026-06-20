@@ -113,11 +113,11 @@ function loadConfig(cliOptions = {}) {
   if (model && providerConfig?.models && !providerConfig.models[model]) {
     // 当前模型不属于该提供商，切换到提供商的默认模型
     model = providerConfig?.defaultModel;
-    config.defaultModel = model; // 更新配置中的模型
+    config.defaultModel = model;
   }
   if (!model) {
     model = providerConfig?.defaultModel || 'deepseek-v4-flash';
-    config.defaultModel = model; // 更新配置中的模型
+    config.defaultModel = model;
   }
   const detectedWindow = getModelContextWindow(provider, model);
 
