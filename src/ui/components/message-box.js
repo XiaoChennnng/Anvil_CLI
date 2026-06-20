@@ -86,9 +86,10 @@ class MessageBox {
     this._contentStarted = true;
     this._firstContentBlock = true;  // 重置第一个内容块标志
 
-    // 输出剩余思考缓冲（跳过空行）
+    // 输出剩余思考缓冲（跳过空行）。注意：必须应用 thinkingFallback 灰色样式，
+    // 否则流式输出时思考内容最后一行（没有 \n 结尾的残留 buffer）会以默认色显示
     if (this._thinkingBuffer && this._thinkingBuffer.trim() !== '') {
-      this.renderedLines.push(this._thinkingBuffer);
+      this.renderedLines.push(this.theme.thinkingFallback(this._thinkingBuffer));
       this._thinkingBuffer = '';
     }
     // 不添加空行，让后续内容紧贴思考内容
