@@ -64,11 +64,6 @@ const COMMANDS = {
     description: '切换 Plan Mode（计划模式）',
     usage: '/plan',
   },
-  compact: {
-    name: '/compact',
-    description: '手动压缩上下文，释放 token 空间',
-    usage: '/compact [keep <aspects>] [/compact light|medium|heavy|semantic [2w|3w]]',
-  },
   mcp: {
     name: '/mcp',
     description: '查看 MCP 服务器状态',
@@ -81,42 +76,6 @@ function isCommand(input) {
   const parts = input.trim().split(/\s+/);
   const cmd = parts[0].toLowerCase();
   return !!COMMANDS[cmd.slice(1)];
-}
-
-// 解析 /compact 命令中的预算数字（"2w" / "3w" / "20000 tokens" / "2万"）
-// 严格限制在 1w-5w 范围内，超出返回 null
-function parseCompactBudget(text) {
-  if (!text) {return null;}
-  let value = null;
-
-  // "2w" / "3.5w" / "1W"
-  const wMatch = text.match(/(\d+(?:\.\d+)?)\s*w\b/i);
-  if (wMatch) {
-    value = Math.round(parseFloat(wMatch[1]) * 10_000);
-  } else {
-    // "2万" / "3.5万"
-    const wanMatch = text.match(/(\d+(?:\.\d+)?)\s*万/);
-    if (wanMatch) {
-      value = Math.round(parseFloat(wanMatch[1]) * 10_000);
-    } else {
-      // "20000 tokens" / "30000 tok" / "40000 t"
-      const tokMatch = text.match(/(\d{4,6})\s*(?:tokens?|tok|t)\b/i);
-      if (tokMatch) {
-        value = parseInt(tokMatch[1], 10);
-      } else {
-        // 纯 4-6 位数字
-        const numMatch = text.match(/(\d{4,6})/);
-        if (numMatch) {
-          value = parseInt(numMatch[1], 10);
-        }
-      }
-    }
-  }
-
-  if (value !== null && value >= 10_000 && value <= 50_000) {
-    return value;
-  }
-  return null;
 }
 
 async function handleCommand(input, chatEngine, options = {}) {
@@ -425,82 +384,6 @@ Anvil — AI-driven CLI Programming Assistant
         handled: true,
         response: `Plan Mode ${enabled ? '[完成]已开启' : '[暂停]已关闭'}。${enabled ? '复杂任务将先展示计划，等待批准后执行。' : ''}`,
       };
-    }
-
-    case 'compact': {
-      const chatEngine = options.chatEngine;
-      if (!chatEngine || !chatEngine.contextManager) {
-        return { handled: true, response: '[失败]对话引擎未初始化' };
-      }
-
-      const argStr = args.join(' ').toLowerCase();
-      let level = 'auto';
-      let keep = ['recent', 'decisions'];
-      let budgetTokens = null;
-
-      if (/keep/.test(argStr)) {
-        const keepPart = argStr.replace(/keep\s*/i, '').trim();
-        if (keepPart) {
-          const aspects = keepPart.split(/[,，\s]+/).filter(Boolean);
-          const validAspects = ['files', 'project', 'recent', 'tools', 'decisions', 'all'];
-          const requested = aspects.filter(a => validAspects.includes(a));
-          if (requested.length > 0) {
-            keep = requested;
-          }
-        }
-      } else if (/semantic|语义/.test(argStr)) {
-        // 语义压缩：/compact semantic 2w
-        level = 'semantic';
-        budgetTokens = parseCompactBudget(argStr);
-      } else if (/light|轻度/.test(argStr)) {
-        level = 'light';
-      } else if (/medium|中度/.test(argStr)) {
-        level = 'medium';
-      } else if (/heavy|深度/.test(argStr) || /deep/.test(argStr)) {
-        level = 'heavy';
-      } else if (/critical|极限/.test(argStr)) {
-        level = 'critical';
-      } else {
-        // 只有数字（"2w"）也走语义压缩
-        const parsedBudget = parseCompactBudget(argStr);
-        if (parsedBudget !== null) {
-          level = 'semantic';
-          budgetTokens = parsedBudget;
-        }
-      }
-
-      try {
-        const compactOptions = { level, keep };
-        if (level === 'semantic') {
-          compactOptions.budgetTokens = budgetTokens;
-          compactOptions.force = true;
-          compactOptions.rebuild = true;
-        }
-        const result = await chatEngine.compactContext(compactOptions);
-        const stats = result.stats || {};
-
-        if (stats.compressed) {
-          if (level === 'semantic') {
-            return {
-              handled: true,
-              response: `语义压缩完成\n\n级别: 语义预算压缩\n${stats.beforeTokens.toLocaleString()} → ${stats.afterTokens.toLocaleString()} tokens\n预算: ${stats.budget.toLocaleString()} tokens\n节省 ${stats.savedPercent}%\n${stats.rebuilt ? '[完成] System Prompt 已重建' : ''}${stats.fallback ? '\n[警告] 降级: ' + stats.fallback : ''}`,
-            };
-          }
-          return {
-            handled: true,
-            response: `[完成]上下文已压缩\n\n级别: ${stats.name || level}\n${stats.beforeTokens.toLocaleString()} → ${stats.afterTokens.toLocaleString()} tokens\n节省 ${stats.savedPercent}%\n保留: ${(stats.preserved || keep).join(', ')}\n${stats.message || ''}`,
-          };
-        }
-        if (level === 'semantic' && stats.name === 'SEMANTIC_BUDGET_SKIPPED') {
-          return {
-            handled: true,
-            response: `[统计] 上下文使用率较低 (${stats.beforeTokens.toLocaleString()} tokens, <30%)，跳过语义压缩`,
-          };
-        }
-        return { handled: true, response: '[统计] 上下文使用率不高，无需压缩' };
-      } catch (err) {
-        return { handled: true, response: `[失败]压缩失败: ${err.message}` };
-      }
     }
 
     case 'mcp': {

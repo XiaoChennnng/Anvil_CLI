@@ -106,8 +106,11 @@ async function main() {
       // 注册 Memory 工具（用户长期记忆）
       const { registerMemoryTools } = require('../tools/memory');
       registerMemoryTools(toolRegistry, contextManager, config);
+      // 注册 Prompt 分层按需加载工具（get_system_layer）
+      const { registerSystemLayerTools } = require('../tools/system_layer');
+      registerSystemLayerTools(toolRegistry, chatEngine);
       contextToolsRegistered = true;
-      logger.debug('上下文管理工具注册完成');
+      logger.debug('上下文管理工具注册完成（含 system_layer）');
     }
   }
 

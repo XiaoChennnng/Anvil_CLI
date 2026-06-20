@@ -128,7 +128,6 @@ npx anvil -d ./project      # 临时使用（无需全局安装）
 | `/review [file]`                     | 代码审查         |
 | `/todo add \| done \| list \| clear` | 任务管理         |
 | `/plan`                              | 计划模式         |
-| `/compact`                           | 手动压缩上下文      |
 | `/undo` / `/redo`                    | 撤销 / 重做      |
 | `/mcp`                               | 查看 MCP 状态    |
 | `/skills`                            | 查看已加载 Skills |

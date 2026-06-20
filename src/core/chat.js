@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const path = require('path');
 const { EventEmitter } = require('events');
 const SessionCache = require('../ai/cache');
-const { getSystemPrompt, getAgentCheckPrompt, getAgentContinuePrompt } = require('../ai/prompts');
+const { getSystemPrompt, getLayerContent, getAgentCheckPrompt, getAgentContinuePrompt, PromptLayer, L3Granularity } = require('../ai/prompts');
 
 // AI 自主循环上限
 const DEFAULT_MAX_ITERATIONS = 100;
@@ -182,13 +182,6 @@ class ChatEngine extends EventEmitter {
     this.isProcessing = true;
 
     try {
-      if (this._isCompressionRequest(input)) {
-        // 不要添加到消息历史，直接处理压缩请求
-        const result = this._handleCompressionRequest(input);
-        this.isProcessing = false;
-        return result;
-      }
-
       if (this._isTodoClearRequest(input)) {
         this.clearTask('用户清空了任务列表');
         this.isProcessing = false;
@@ -863,9 +856,20 @@ class ChatEngine extends EventEmitter {
       return { messages: this.messages, stats: { compressed: false, error: '上下文管理器未初始化' } };
     }
 
+    // 触发动画：从当前进度 → 100%（覆盖普通压缩和语义压缩两条路径）
+    const beforeStatus = this.contextManager?.getStatusReport(this.messages);
+    const beforePercent = beforeStatus?.usagePercent || 0;
+    this.emit('compression_animation', {
+      phase: 'start',
+      fromPercent: beforePercent,
+      toPercent: 100,
+    });
+
     // 语义预算压缩：硬性 1w-5w tokens 预算，无条件触发
     if (options.level === 'semantic') {
-      return this._semanticBudgetCompress(options);
+      const result = await this._semanticBudgetCompress(options);
+      this._emitCompressionAnimationEnd(result, beforePercent);
+      return result;
     }
 
     // 先执行实际压缩（基于当前消息）
@@ -890,7 +894,24 @@ class ChatEngine extends EventEmitter {
       }
     }
 
+    this._emitCompressionAnimationEnd(result, beforePercent);
     return result;
+  }
+
+  // 压缩结束后触发动画收尾（100% → 实际压缩后进度）
+  _emitCompressionAnimationEnd(result, beforePercent) {
+    const afterStatus = this.contextManager?.getStatusReport(this.messages);
+    const afterPercent = afterStatus?.usagePercent || 0;
+    this.emit('compression_animation', {
+      phase: 'end',
+      fromPercent: 100,
+      toPercent: afterPercent,
+    });
+    // status 文本也发一份，让 TUI 显示压缩完成信息
+    const stats = result?.stats;
+    if (stats && stats.compressed) {
+      this.emit('status', `[完成]上下文已压缩: ${stats.beforeTokens.toLocaleString()} → ${stats.afterTokens.toLocaleString()} tokens (节省 ${stats.savedPercent}%)`);
+    }
   }
 
   // 语义预算压缩（level='semantic'）：调 LLM 生成结构化摘要，硬性约束到 1w-5w tokens
@@ -1084,187 +1105,6 @@ class ChatEngine extends EventEmitter {
       totalRounds: this._totalRoundsProcessed,
       nextCheckIn: this._memoryCheckInterval - this._roundSinceMemoryCheck,
     };
-  }
-
-  // 检测用户输入是否为压缩请求
-  _isCompressionRequest(input) {
-    if (!input || typeof input !== 'string') {return false;}
-    const trimmed = input.trim().toLowerCase();
-
-    // 精确匹配短命令
-    const exactCommands = ['/compact', '/compress', '/compact keep', '/compress keep'];
-    if (exactCommands.includes(trimmed.split(/\s+/)[0])) {return true;}
-
-    // 中文自然语言压缩请求
-    const patterns = [
-      /^压缩(一下|上下文|清理|整理)?$/,
-      /^清理(上下文|一下|下)?$/,
-      /^整理(一下|上下文)?$/,
-      /^释放\s*(上下文|空间|token|tokens?)?/,
-      /^compact/i,
-      /^compress/i,
-      // 语义压缩：显式触发
-      /^语义压缩/,
-      // 带预算的压缩：隐式走 semantic 模式
-      /^压缩.*\d+(\.\d+)?\s*w/,
-      /^压缩.*\d+(\.\d+)?\s*万/,
-      /^压缩.*\d{4,6}\s*(?:tokens?|tok|t)\b/,
-      /^压到.*\d/,
-      /^压缩到.*\d/,
-    ];
-
-    // 只处理短消息（纯压缩请求，不带其他意图）
-    if (trimmed.length > 30) {return false;}
-
-    return patterns.some(p => p.test(trimmed));
-  }
-
-  // 处理上下文压缩请求
-  async _handleCompressionRequest(input) {
-    const trimmed = input.trim().toLowerCase();
-
-    // 解析 keep 参数: "压缩一下保留文件" 或 "压缩一下保留项目结构"
-    let keep = ['recent', 'decisions'];
-    let level = 'auto';
-    let budgetTokens = null;
-
-    if (/保留.*文件/.test(trimmed) || /保留.*注入/.test(trimmed)) {
-      keep.push('files');
-    }
-    if (/保留.*项目/.test(trimmed) || /保留.*结构/.test(trimmed)) {
-      keep.push('project');
-    }
-    if (/保留.*工具/.test(trimmed)) {
-      keep.push('tools');
-    }
-    if (/保留.*全部/.test(trimmed) || /保留.*所有/.test(trimmed)) {
-      keep = ['all'];
-    }
-    if (/轻度/.test(trimmed) || /light/.test(trimmed)) {
-      level = 'light';
-    }
-    if (/深度/.test(trimmed) || /heavy/.test(trimmed)) {
-      level = 'heavy';
-    }
-
-    // 语义压缩：检测"语义"关键词或带预算数字 → 走 semantic 模式
-    // 预算数字（如 "2w" / "3w" / "20000 tokens"）隐含语义压缩意图
-    if (/语义/.test(trimmed)) {
-      level = 'semantic';
-    }
-    const parsedBudget = this._parseSemanticBudget(trimmed);
-    if (parsedBudget !== null) {
-      budgetTokens = parsedBudget;
-      level = 'semantic'; // 显式指定 budget → 强制走 semantic
-    }
-
-    try {
-      // 获取压缩前的 context 进度
-      const beforeStatus = this.contextManager?.getStatusReport(this.messages);
-      const beforePercent = beforeStatus?.usagePercent || 0;
-
-      // 触发动画：从当前进度 → 100%
-      this.emit('compression_animation', {
-        phase: 'start',
-        fromPercent: beforePercent,
-        toPercent: 100,
-      });
-
-      // 构造 compactContext 参数
-      const compactOptions = { level, keep };
-      if (level === 'semantic') {
-        compactOptions.budgetTokens = budgetTokens; // null 时内部用默认 3w
-        compactOptions.force = true;
-        compactOptions.rebuild = true;
-      }
-
-      // 语义摘要由 compactContext 在压缩后自动生成（不再提前生成）
-      const result = await this.compactContext(compactOptions);
-
-      // 计算压缩后进度
-      const afterStatus = this.contextManager?.getStatusReport(this.messages);
-      const afterPercent = afterStatus?.usagePercent || 0;
-
-      // 触发动画：从 100% → 压缩后进度
-      this.emit('compression_animation', {
-        phase: 'end',
-        fromPercent: 100,
-        toPercent: afterPercent,
-      });
-
-      if (result.stats && result.stats.compressed) {
-        const stats = result.stats;
-        if (this.logger) {
-          this.logger.info(`上下文压缩完成: ${stats.beforeTokens}→${stats.afterTokens} tokens (${stats.savedPercent}%)`);
-        }
-        // 语义压缩的特殊 status 文案
-        if (level === 'semantic') {
-          this.emit('status', `语义压缩完成: ${stats.beforeTokens.toLocaleString()} → ${stats.afterTokens.toLocaleString()} tokens (预算 ${stats.budget.toLocaleString()}, 节省 ${stats.savedPercent}%)`);
-        } else {
-          this.emit('status', `[完成]上下文已压缩: ${stats.beforeTokens.toLocaleString()} → ${stats.afterTokens.toLocaleString()} tokens (节省 ${stats.savedPercent}%)`);
-        }
-        return {
-          content: this._formatCompressionResult(stats, level, keep, budgetTokens),
-          compressed: stats,
-        };
-      }
-      // 语义压缩的低使用率跳过
-      if (level === 'semantic' && result.stats?.name === 'SEMANTIC_BUDGET_SKIPPED') {
-        return {
-          content: `[统计] 上下文使用率较低 (${result.stats.beforeTokens.toLocaleString()} tokens, <30%)，跳过语义压缩。如需强制执行请说"语义压缩强制"`,
-          compressed: false,
-        };
-      }
-      return { content: '上下文使用率不高，无需压缩', compressed: false };
-    } catch (err) {
-      if (this.logger) {this.logger.error('手动压缩失败', err.message);}
-      return { error: `压缩失败: ${err.message}` };
-    }
-  }
-
-  // 格式化压缩结果文案
-  _formatCompressionResult(stats, level, keep, budgetTokens) {
-    if (level === 'semantic') {
-      return `语义压缩完成\n\n级别: 语义预算压缩\n压缩前: ${stats.beforeTokens.toLocaleString()} tokens\n压缩后: ${stats.afterTokens.toLocaleString()} tokens\n预算: ${stats.budget.toLocaleString()} tokens\n节省: ${stats.savedPercent}%\n${stats.rebuilt ? '[完成] System Prompt 已重建 (L0+L1+L2+L3)' : ''}${stats.fallback ? '\n[警告] LLM 失败，降级到: ' + stats.fallback : ''}`;
-    }
-    return `[完成]上下文已压缩\n\n压缩级别: ${stats.name || level}\n压缩前: ${stats.beforeTokens.toLocaleString()} tokens\n压缩后: ${stats.afterTokens.toLocaleString()} tokens\n节省: ${stats.savedPercent}%\n保留策略: ${(stats.preserved || keep).join(', ')}\n${stats.message ? '\n' + stats.message : ''}`;
-  }
-
-  // 解析自然语言中的预算数字（"2w" / "3w" / "20000 tokens" / "2万"）
-  // 严格限制在 1w-5w 范围内，超出返回 null
-  _parseSemanticBudget(text) {
-    if (!text) {return null;}
-    let value = null;
-
-    // "2w" / "3.5w" / "1W"（w 大小写不敏感）
-    const wMatch = text.match(/(\d+(?:\.\d+)?)\s*w\b/i);
-    if (wMatch) {
-      value = Math.round(parseFloat(wMatch[1]) * 10_000);
-    } else {
-      // "2万" / "3.5万"
-      const wanMatch = text.match(/(\d+(?:\.\d+)?)\s*万/);
-      if (wanMatch) {
-        value = Math.round(parseFloat(wanMatch[1]) * 10_000);
-      } else {
-        // "20000 tokens" / "30000 tok" / "40000 t"（4-6 位数字 + 单位）
-        const tokMatch = text.match(/(\d{4,6})\s*(?:tokens?|tok|t)\b/i);
-        if (tokMatch) {
-          value = parseInt(tokMatch[1], 10);
-        } else {
-          // 纯 4-6 位数字（"30000" 或 "压缩到 30000"）—— 注意：3 位以下数字不会匹配，避免误判
-          const numMatch = text.match(/(?:^|\s|到|压到|压成|压为|成|为)(\d{4,6})(?:\s|$|tokens?|tok|t\b|万)/);
-          if (numMatch) {
-            value = parseInt(numMatch[1], 10);
-          }
-        }
-      }
-    }
-
-    // 范围校验：1w-5w tokens 才算有效
-    if (value !== null && value >= 10_000 && value <= 50_000) {
-      return value;
-    }
-    return null;
   }
 
   // 查找最后一条语义摘要的索引
@@ -1484,13 +1324,50 @@ class ChatEngine extends EventEmitter {
     return this._planMode;
   }
 
-  // 根据 planMode/teamMode 构建 System Prompt
+  // 构建 System Prompt——按级按需加载（6 级 L0-L5）
+  // 默认仅 L0；planMode 启动时自动追加 L4；teamMode 启动时自动追加 L5
+  // 其他层（L1/L2/L3）由 AI 通过 get_system_layer 工具按需查询
   _buildSystemPrompt() {
-    return getSystemPrompt({
-      planMode: this._planMode,
-      teamMode: this.teamMode,
-      includeTools: !this._planMode, // plan mode 期间不需要工具详细说明
-    });
+    const layers = [PromptLayer.L0];
+    if (this._planMode) {layers.push(PromptLayer.L4);}
+    if (this.teamMode) {layers.push(PromptLayer.L5);}
+    return getSystemPrompt({ layers });
+  }
+
+  // 按需把指定层注入到 system 消息（供 get_system_layer 工具调用）
+  // layerName: L0/L1/L2/L3/L4/L5；granularity: L3 内部粒度（required/detail），其他层忽略
+  // 同层重复调用幂等；L3 的两种粒度可同时存在
+  injectPromptLayer(layerName, granularity = L3Granularity.DETAIL) {
+    const content = getLayerContent(layerName, granularity);
+    if (!content) {return { success: false, error: `未知层级: ${layerName}` };}
+
+    // L3 内部两种粒度用不同标记，避免 detail 覆盖 required
+    const tag = layerName === PromptLayer.L3 ? `[Layer: ${layerName} (${granularity})]` : `[Layer: ${layerName}]`;
+
+    const sysIdx = this.messages.findIndex(m => m.role === 'system');
+    if (sysIdx >= 0) {
+      const sysContent = this.messages[sysIdx].content;
+      // 幂等检查：已注入过的层（含粒度）不重复添加
+      if (sysContent.includes(tag)) {
+        return { success: true, layer: layerName, granularity: layerName === PromptLayer.L3 ? granularity : null, action: 'already_loaded' };
+      }
+      this.messages[sysIdx].content = sysContent + `\n\n${tag}\n${content}`;
+    } else {
+      this.messages.unshift({
+        role: 'system',
+        content: `${tag}\n${content}`,
+      });
+    }
+    return { success: true, layer: layerName, granularity: layerName === PromptLayer.L3 ? granularity : null, action: 'loaded' };
+  }
+
+  // 查看当前已注入的层级（含粒度，供 get_system_layer 工具的 list 操作）
+  // 返回格式: ['L0', 'L3 (detail)', 'L4'] 等
+  listLoadedLayers() {
+    const sysIdx = this.messages.findIndex(m => m.role === 'system');
+    if (sysIdx < 0) {return [];}
+    const matches = this.messages[sysIdx].content.match(/\[Layer: ([A-Z0-9_]+(?:\s\([a-z]+\))?)\]/g) || [];
+    return matches.map(m => m.match(/\[Layer: ([A-Z0-9_]+(?:\s\([a-z]+\))?)\]/)[1]);
   }
 
   // 更新 System Prompt（Plan/Team Mode 切换后重建 system 消息）
@@ -1719,7 +1596,7 @@ class ChatEngine extends EventEmitter {
       }
 
       this.teamMode = true;
-      // Team Mode 启动：注入 L4_TEAM 规则到 system prompt
+      // Team Mode 启动：注入 L5 规则到 system prompt
       this._updateSystemPrompt();
       this.emit('team_mode_start', {
         complexityScore: evaluation.complexityScore,
