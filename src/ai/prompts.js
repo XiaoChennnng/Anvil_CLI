@@ -320,7 +320,7 @@ Memory.md 是项目级用户长期记忆文件，位于项目 .anvil 目录下�
   - **section**：\`user_preferences\` / \`work_requirements\` / \`project_rules\` / \`notes\` 之一（也可自定义但要保持一致）
   - **content**：要追加的条目内容（一行或多行 Markdown 列表项）
   - **使用场景**：用户说"记住..."时最常用
-  - **自动行为**：自动维护时间戳，section 不存在则自动创建
+  - **自动行为**：section 不存在则自动创建，条目按时间倒序插入到 section 头部
 
 - **memory_search(query)** — 搜索 Memory.md 中包含关键词的条目
   - **使用场景**：检查某条偏好/要求是否已记录

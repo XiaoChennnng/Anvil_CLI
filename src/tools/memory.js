@@ -67,46 +67,79 @@ function registerMemoryTools(toolRegistry, contextManager, config = {}) {
   }
 
   /**
-   * 解析所有 section
-   * 返回 [{ title, body, lineStart }]
+   * 解析 Memory.md 全文为结构化文档对象
+   *
+   * 4 种元素识别：
+   * - `# Title`     → preamble.title
+   * - `<!-- ... -->` → 累积到最近的 description（preamble / section）
+   * - `## Title`    → 新 section（自动 flush 上一段 description）
+   * - `- text`      → section.items
+   * 其它行（空行、段落、### 等）忽略
+   *
+   * @returns {{ preamble: {title, description}, sections: Array<{title, description, items}> }}
    */
-  function parseSections(content) {
-    const lines = content.split('\n');
-    const sections = [];
-    let current = null;
+  function parseDoc(content) {
+    const doc = {
+      preamble: { title: '', description: '' },
+      sections: [],
+    };
+    let currentSection = null;
+    let descBuffer = null;
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      // 匹配 ## 或 ### 开头的标题
-      const m = line.match(/^(#{1,3})\s+(.+)$/);
-      if (m) {
-        if (current) {sections.push(current);}
-        current = {
-          level: m[1].length,
-          title: m[2].trim(),
-          body: [],
-          lineStart: i,
-        };
-      } else if (current) {
-        current.body.push(line);
+    const flushDesc = () => {
+      if (!descBuffer) {return;}
+      const text = descBuffer.join(' ').trim();
+      if (currentSection) {
+        currentSection.description = text;
       } else {
-        // 头部（## 之前的所有内容）
-        if (!sections.preamble) {sections.preamble = [];}
-        sections.preamble.push(line);
+        doc.preamble.description = text;
       }
+      descBuffer = null;
+    };
+
+    const lines = content.split('\n');
+    for (const line of lines) {
+      const m1 = line.match(/^#\s+(.+)$/);
+      const m2 = line.match(/^##\s+(.+)$/);
+      const mComment = line.match(/^<!--\s*(.*?)\s*-->$/);
+      const mItem = line.match(/^-\s+(.+)$/);
+
+      if (m1) {
+        flushDesc();
+        doc.preamble.title = m1[1].trim();
+        currentSection = null;
+        continue;
+      }
+      if (m2) {
+        flushDesc();
+        currentSection = { title: m2[1].trim(), description: '', items: [] };
+        doc.sections.push(currentSection);
+        continue;
+      }
+      if (mComment) {
+        if (!descBuffer) {descBuffer = [];}
+        descBuffer.push(mComment[1]);
+        continue;
+      }
+      if (mItem) {
+        flushDesc();
+        if (currentSection) {currentSection.items.push(mItem[1].trim());}
+        continue;
+      }
+      // 其它行（空行、### 误用、段落）忽略，避免污染结构
     }
-    if (current) {sections.push(current);}
-    return sections;
+    flushDesc();
+    return doc;
   }
 
   /**
-   * 找到或创建 section
+   * 找到或创建 section（不修改文档顺序，只在末尾追加）
    */
-  function findOrCreateSection(sections, title) {
-    let section = sections.find(s => s.title === title);
+  function findOrCreateSection(doc, title) {
+    let section = doc.sections.find(s => s.title === title);
     if (!section) {
-      section = { level: 2, title, body: [], lineStart: -1 };
-      sections.push(section);
+      section = { title, description: '', items: [] };
+      doc.sections.push(section);
     }
     return section;
   }
@@ -183,7 +216,7 @@ function registerMemoryTools(toolRegistry, contextManager, config = {}) {
   // ────────────────── memory_append ──────────────────
   toolRegistry.register({
     name: 'memory_append',
-    description: `追加新条目到 Memory.md 的指定 section。AI 应在检测到用户表达偏好、规则、约定、长期待办时调用，自动加时间戳。`,
+    description: `追加新条目到 Memory.md 的指定 section。AI 应在检测到用户表达偏好、规则、约定、长期待办时调用。section 不存在则自动创建。`,
     parameters: {
       type: 'object',
       properties: {
@@ -194,15 +227,6 @@ function registerMemoryTools(toolRegistry, contextManager, config = {}) {
         entry: {
           type: 'string',
           description: '要追加的条目内容（单行或简短 Markdown）。建议一句话概括',
-        },
-        asSubsection: {
-          type: 'boolean',
-          default: false,
-          description: '是否作为子条目（### 标题 + 内容块）。适合多行/详细描述',
-        },
-        subsectionTitle: {
-          type: 'string',
-          description: '子条目标题（asSubsection=true 时使用）',
         },
       },
       required: ['section', 'entry'],
@@ -216,23 +240,14 @@ function registerMemoryTools(toolRegistry, contextManager, config = {}) {
 
       try {
         const current = readMemory();
-        const sections = parseSections(current);
-        const section = findOrCreateSection(sections, sectionName);
-        const timestamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+        const doc = parseDoc(current);
+        const section = findOrCreateSection(doc, sectionName);
 
-        let newEntry;
-        if (params.asSubsection && params.subsectionTitle) {
-          newEntry = `\n### ${params.subsectionTitle} (${timestamp})\n\n${entry}\n`;
-        } else {
-          newEntry = `- ${entry} _(记录于 ${timestamp})_\n`;
-        }
+        // 插入到 items 头部（最新内容优先可见）
+        section.items.unshift(entry);
 
-        // 插入到 section body 的开头（最新内容优先可见）
-        section.body.unshift(newEntry);
-
-        // 重建全文
-        const rebuilt = rebuildContent(sections);
-        const tokens = estimateTokens(rebuilt);
+        const serialized = serializeDoc(doc);
+        const tokens = estimateTokens(serialized);
 
         if (tokens > maxTokens * 1.3) {
           return {
@@ -242,7 +257,7 @@ function registerMemoryTools(toolRegistry, contextManager, config = {}) {
           };
         }
 
-        writeMemory(rebuilt);
+        writeMemory(serialized);
         return {
           success: true,
           path: memoryFilePath,
@@ -316,19 +331,38 @@ function registerMemoryTools(toolRegistry, contextManager, config = {}) {
   });
 
   /**
-   * 重建全文（用于追加后写回）
+   * 按结构化文档对象序列化为 Memory.md 文本
+   *
+   * 严格输出格式：
+   * - 标题、描述、列表项各占独立行
+   * - description 为空则省略整行
+   * - section 间用单个空行分隔
+   * - 列表项统一 `- ` 前缀
    */
-  function rebuildContent(sections) {
-    const parts = [];
-    if (sections.preamble && sections.preamble.length > 0) {
-      parts.push(sections.preamble.join('\n').trim());
+  function serializeDoc(doc) {
+    const lines = [];
+
+    // 1) 文档标题
+    if (doc.preamble.title) {
+      lines.push(`# ${doc.preamble.title}`);
     }
-    for (const s of sections) {
-      const prefix = '#'.repeat(s.level);
-      parts.push(`${prefix} ${s.title}`);
-      parts.push(s.body.join('\n').trimEnd());
+    if (doc.preamble.description) {
+      lines.push(`<!-- ${doc.preamble.description} -->`);
     }
-    return parts.join('\n\n') + '\n';
+
+    // 2) 各 section
+    for (const section of doc.sections) {
+      if (lines.length > 0) {lines.push('');}  // section 间空行
+      lines.push(`## ${section.title}`);
+      if (section.description) {
+        lines.push(`<!-- ${section.description} -->`);
+      }
+      for (const item of section.items) {
+        lines.push(`- ${item}`);
+      }
+    }
+
+    return lines.join('\n') + '\n';
   }
 }
 
