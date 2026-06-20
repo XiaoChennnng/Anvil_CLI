@@ -1,211 +1,100 @@
-# ⚒ Anvil
+# Anvil
 
-**AI-Driven CLI Programming Assistant** — 在终端里锻造代码。
+**AI-Driven CLI 编程助手** —— 在终端里锻造代码。
 
-基于多模态 AI 的全屏 TUI 编程助手，支持 DeepSeek、Kimi、OpenAI、Anthropic 等多家模型提供商，具备自主 Agent 模式、多轮对话、工具调用、MCP 扩展、Computer Use 电脑控制等能力。
+多提供商 AI 客户端 + 全屏 TUI + 自主 Agent + 工具系统 + MCP 扩展 + 团队协作，一站式终端开发环境。
 
 ## 特性
 
-### 多模型提供商支持
+### AI 引擎
 
-支持多家 AI 提供商，灵活切换：
-
-| 提供商 | 模型 | 特点 |
-|--------|------|------|
-| DeepSeek | V4 Flash / V4 Pro | 中文优秀、支持思考模式 |
-| Kimi | K2.5 / K2.6 / K2.7 | 超长上下文 (256K)、支持多模态 |
-| OpenAI | GPT-4o / o1 / o3 | 需自行添加模型配置 |
-| Anthropic | Claude 3.5/3.7 Sonnet | 需自行添加模型配置 |
-
-支持自定义提供商和模型，兼容 OpenAI Chat Completions 和 Anthropic Messages API 格式。
-
-### Computer Use 电脑控制
-
-支持多模态模型（如 Kimi K2.5）控制电脑：
-
-- **截图** - 获取屏幕状态供 AI 分析
-- **点击** - 在指定坐标点击鼠标
-- **输入** - 键盘输入文本
-- **移动** - 移动鼠标到目标位置
-- **拖拽** - 拖拽操作
-- **滚动** - 滚动页面内容
-
-使用场景：自动化操作、界面测试、流程演示等。
-
-### 多模态支持
-
-支持图片输入，可以：
-- 分析截图内容
-- 识别 UI 元素位置
-- 理解视觉信息并执行相应操作
-
-### 自主 Agent 循环
-
-接收任务后自动规划、执行、验证、检查，直到任务完成，无需中间干预。
-
-### UI 状态符号
-
-TUI 状态标识统一使用 Unicode 符号：
-
-| 符号 | 含义 |
-|------|------|
-| `✓` | 操作完成（统一前缀，替代 `[完成]`） |
-| `[失败]` | 操作失败 |
-| `[暂停]` | 已关闭/暂停状态 |
-| `[列表]` | 列表/枚举 |
-
-工具执行结果（命令/文件/Todo 等）的成功状态统一通过 `t.success('✓')` 渲染，避免不同通道重复输出。
+- **多提供商**：DeepSeek / Kimi ，支持添加OpenAI Chat Completions 与 Anthropic Messages API 协议模型
+- **多模态**：Kimi K2.x 系列支持图片输入、截图分析、UI 元素识别
+- **Computer Use**：截图、点击、输入、拖拽、滚动，AI 直接控制桌面
+- **自主 Agent 循环**：自动规划 → 执行 → 验证 → 复盘，无需中间干预
+- **思考模式**：DeepSeek (reasoning\_effort + thinking) / Kimi (thinking) / OpenAI (reasoning\_effort) / Anthropic (thinking + budget) 各家差异自动适配
 
 ### 上下文管理
 
-多层级上下文窗口（支持 1M tokens），支持自适应渐进压缩：
+- **6 层 Tier 架构**：Immutable → CacheFriendly → WorkingMemory → FileContext → Archive → Transient
+- **5 级自适应压缩**：softWarn（>70%）→ light（>80%）→ medium（>90%）→ heavy（>95%）→ critical（>98%）
+- **相位感知**：explore / implement / debug / review 阶段动态调整策略与 keepRounds
+- **语义预算压缩**：调 LLM 生成结构化摘要，硬性约束到 1w-5w tokens
+- **Tool 配对校验**：API 出口处过滤孤立 tool 消息
+- **Memory 注入**：`.anvil/Memory.md` 自动加载到 Tier 1.5
 
-- **6 层架构**：System Prompt → 项目概览 → 工作记忆 → 文件上下文 → 压缩存档 → 瞬时结果
-- **5 级压缩**：从轻度警告到极限压缩，自动触发
-- **相位感知**：根据探索/实现/调试/审查阶段动态调整策略
-- **语义预算压缩**：调 LLM 生成结构化摘要，硬性约束到 1w-5w tokens 预算
-- **Tool 配对校验**：API 请求出口处过滤孤立 tool 消息，根除 `400 Messages with role 'tool' must be a response to a preceding message with 'tool_calls'`
+### 工具系统
 
-### MCP 扩展
+- **文件**：read / write / edit / glob / grep，全路径安全校验
+- **代码分析**：符号、引用、定义、依赖（基于 LSP 语义）
+- **Shell**：执行 + GBK 编码兼容（Windows 中文输出）
+- **Computer Use**：截图、点击、输入、键盘、拖拽、滚动
+- **联网搜索**：Bing / DuckDuckGo / SearXNG 三引擎，5 分钟 LRU 缓存，自动降级
+- **网页抓取**：URL → 正文提取，三模式（article / text / html）
+- **Todo 管理**：任务跟踪、列表、清空、完成检测
+- **MCP 协议**：动态添加/移除外部工具
+- **团队协作**：多 Agent 并行，自动任务分解与结果汇总
+- **技能系统**：自定义 slash command，启动时扫描 `.anvil/skills/`
 
-支持 [Model Context Protocol](https://modelcontextprotocol.io) 服务器，AI 可在对话中动态添加/移除外部工具。
+### 用户体验
 
-### 团队协作模式
+- **统一状态符号**：`✓` / `[失败]` / `[暂停]` / `[列表]`，全局视觉规范
+- **上下文使用率**：状态栏实时显示，>70% 警告，>98% 极限压缩
+- **会话持久化**：`.anvil/sessions/`，`npm start -- -r <sessionId>` 恢复
+- **日志系统**：日期轮转 `.anvil/logs/YYYY-MM-DD.log`
+- **流式渲染**：32KB 反压限流 + 50ms 节流队列 + 差量屏幕缓冲
 
-支持多 Agent 并行工作，自动分解任务并协同完成。
+## 快速开始
 
-### 技能系统
-
-支持自定义技能（slash commands），放在 `.anvil/skills/` 目录下自动加载。
-
-### 联网搜索
-
-内置 `web_search` 工具，AI 可主动联网查最新版本、官方文档、新闻等实时信息。
-
-## 安装
-
-### 环境要求
-
-```bash
-node >= 18.0.0
-```
-
-### 克隆并安装
+### 安装
 
 ```bash
 git clone <repo-url> && cd anvil
 npm install
-```
-
-### 全局安装（推荐）
-
-安装后可在任意目录直接输入 `anvil` 启动：
-
-```bash
 npm run install-global    # 一键全局安装
-# 或
-npm link                  # 链接到全局
 ```
 
-验证安装：
+验证：
 
 ```bash
 anvil --version
 anvil --help
 ```
 
-### 临时使用（无需安装）
+### 配置 API Key
+
+按所选提供商设置环境变量：
 
 ```bash
-npx anvil -d /path/to/project
+export DEEPSEEK_API_KEY=sk-xxx       # DeepSeek
+export MOONSHOT_API_KEY=sk-xxx       # Kimi
+export OPENAI_API_KEY=sk-xxx         # OpenAI
+export ANTHROPIC_API_KEY=sk-ant-xxx  # Anthropic
 ```
 
-## 启动
-
-### 全局安装后启动（推荐）
+### 启动
 
 ```bash
-# 设置 API Key（根据所选提供商）
-export DEEPSEEK_API_KEY=sk-your-key-here   # DeepSeek
-export MOONSHOT_API_KEY=sk-your-key-here   # Kimi
-export OPENAI_API_KEY=sk-your-key-here     # OpenAI
-export ANTHROPIC_API_KEY=sk-ant-...        # Anthropic
-
-# 启动（任意目录）
-anvil                    # 在当前目录启动
-anvil -d /path/to/project # 指定工作目录
+anvil                       # 当前目录启动
+anvil -d /path/to/project   # 指定工作目录
+npx anvil -d ./project      # 临时使用（无需全局安装）
 ```
 
-### 开发模式启动
-
-```bash
-npm start                # 开发调试
-node bin/anvil.js        # 直接运行
-```
-
-首次启动自动打开配置向导，引导设置：
-- 项目工作目录
-- 模型提供商
-- API Key
-- 默认模型
-
-## 使用
-
-### 对话
-
-直接输入自然语言指令即可：
-
-- `写一个二分查找函数`
-- `创建一个 Vue 组件`
-- `审查 src/index.js 的代码质量`
-- `帮我看看这个报错`
-- `打开浏览器访问 example.com` (Computer Use)
-
-### 快捷键
-
-| 按键 | 作用 |
-|------|------|
-| `Enter` | 发送 |
-| `Ctrl+J` | 换行 |
-| `↑/↓` | 浏览历史 |
-| `Ctrl+C` | 中断回复 |
-| `Ctrl+D` | 退出 |
-| `Ctrl+U` | 清空输入 |
-| `←/→` | 移动光标 |
-| `Home/End` | 行首/行尾 |
-| `PageUp/Down` | 翻页 |
-
-### 内置命令
-
-| 命令 | 作用 |
-|------|------|
-| `/help` | 帮助信息 |
-| `/keys` | 快捷键列表 |
-| `/clear` | 清屏 |
-| `/provider [id]` | 切换或查看提供商 |
-| `/provider add <id> <name> <url> <key>` | 添加自定义提供商 |
-| `/model [id]` | 切换或查看模型 |
-| `/model add <id> <name>` | 添加自定义模型 |
-| `/review [file]` | 代码审查 |
-| `/todo add \| done \| list \| clear` | 任务管理 |
-| `/plan` | 计划模式 |
-| `/compact` | 手动压缩上下文 |
-| `/undo /redo` | 撤销/重做 |
-| `/mcp` | 查看 MCP 状态 |
-| `/skills` | 查看已加载 Skills |
-| `/team` | 团队协作模式 |
+首次启动自动打开配置向导，引导设置工作目录、提供商、API Key、默认模型。
 
 ## 模型配置
 
-### 内置模型
+### 内置提供商
 
-| 模型 | 上下文窗口 | 多模态 | 思考模式 |
-|------|------------|--------|----------|
-| DeepSeek V4 Flash | 1M | ✗ | ✓ |
-| DeepSeek V4 Pro | 1M | ✗ | ✓ |
-| Kimi K2.5 | 256K | ✓ | ✓ |
-| Kimi K2.6 | 256K | ✓ | ✓ |
-| Kimi K2.7 Code | 256K | ✓ | ✓ |
+| 提供商      | 模型        | 上下文  | 多模态 | 思考模式 |
+| -------- | --------- | ---- | --- | ---- |
+| DeepSeek | V4 Flash  | 1M   | -   | 支持   |
+| DeepSeek | V4 Pro    | 1M   | -   | 支持   |
+| Kimi     | K2.5      | 256K | 支持  | 支持   |
+| Kimi     | K2.6      | 256K | 支持  | 支持   |
+| Kimi     | K2.7 Code | 256K | 支持  | 支持   |
+
+> OpenAI / Anthropic 无预设模型，通过 `/model add` 自行添加。
 
 ### 自定义提供商
 
@@ -213,7 +102,7 @@ node bin/anvil.js        # 直接运行
 /provider add my-openai "My OpenAI" https://api.openai.com/v1 sk-xxx openai false
 ```
 
-参数：`id` `名称` `baseURL` `apiKey` `format(openai/anthropic)` `thinkingMode`
+参数：`id` `名称` `baseURL` `apiKey` `format` `thinkingMode`
 
 ### 自定义模型
 
@@ -221,29 +110,197 @@ node bin/anvil.js        # 直接运行
 /model add gpt-4o "GPT-4o" true true 128000
 ```
 
-参数：`id` `名称` `vision(true/false)` `thinkingMode(true/false)` `contextWindow`
+参数：`id` `名称` `vision` `thinkingMode` `contextWindow`
+
+## 使用
+
+### 内置命令
+
+| 命令                                   | 作用           |
+| ------------------------------------ | ------------ |
+| `/help`                              | 帮助信息         |
+| `/keys`                              | 快捷键列表        |
+| `/clear`                             | 清屏           |
+| `/provider [id]`                     | 切换或查看提供商     |
+| `/provider add ...`                  | 添加自定义提供商     |
+| `/model [id]`                        | 切换或查看模型      |
+| `/model add ...`                     | 添加自定义模型      |
+| `/review [file]`                     | 代码审查         |
+| `/todo add \| done \| list \| clear` | 任务管理         |
+| `/plan`                              | 计划模式         |
+| `/compact`                           | 手动压缩上下文      |
+| `/undo` / `/redo`                    | 撤销 / 重做      |
+| `/mcp`                               | 查看 MCP 状态    |
+| `/skills`                            | 查看已加载 Skills |
+| `/team`                              | 团队协作模式       |
+
+### 快捷键
+
+| 按键                    | 作用      |
+| --------------------- | ------- |
+| `Enter`               | 发送      |
+| `Ctrl+J`              | 换行      |
+| `↑` / `↓`             | 浏览历史    |
+| `Ctrl+C`              | 中断回复    |
+| `Ctrl+D`              | 退出      |
+| `Ctrl+U`              | 清空输入    |
+| `Home` / `End`        | 行首 / 行尾 |
+| `PageUp` / `PageDown` | 翻页      |
+
+## Computer Use
+
+支持多模态模型直接控制电脑。
+
+### 工作流
+
+1. **截图观察**：AI 调用 `computer` 工具获取当前屏幕
+2. **分析规划**：识别目标元素坐标（必要时用 `computer_get_screen_size` 换算）
+3. **执行操作**：移动 / 点击 / 输入 / 拖拽 / 滚动
+4. **验证结果**：再次截图确认
+
+### 安全机制
+
+- 所有动作需要 `requiresConfirm` 弹出确认
+- AI 必须先截图分析坐标再执行（避免盲操作）
+- 可随时 `Ctrl+C` 中断操作序列
+
+## 架构
+
+### 分层结构
+
+```
+入口层    bin/anvil.js              启动入口 + cwd 修正（npm start 场景）
+
+CLI 层    src/cli/                  主流程 + 事件总线 + 命令
+  index.js                              事件总线、输入循环
+  commands.js                            内置命令（/help /provider /model /todo ...）
+  options.js                             命令行参数解析
+
+引擎层    src/core/                 核心引擎
+  chat.js                                ChatEngine（EventEmitter），状态机
+  context.js                             6 层 Tier + 5 级压缩 + Memory 注入
+  session.js                             会话持久化
+  todo.js                                Todo 管理
+  web_search/                            联网搜索（Bing / DuckDuckGo / SearXNG）
+  team/                                  多 Agent 并行协作
+
+AI 层     src/ai/                  AI 客户端
+  client.js                              双协议（OpenAI / Anthropic）+ 流式 + 重试
+  providers.js                           多提供商配置 + 模型上下文窗口探测
+  models.js                              模型定义 + 定价
+  prompts.js                             6 级分层 System Prompt（L0-L4）
+  cache.js                               会话级 LRU 缓存
+
+工具层    src/tools/               工具注册
+  registry.js                            统一注册中心 → OpenAI schema
+  file.js / code.js / command.js         文件 / 代码分析 / Shell
+  computer_use.js / web_search.js        Computer Use / 联网搜索
+  web_fetch.js / todo.js                 网页抓取 / Todo
+  context.js / memory.js                 上下文压缩 / Memory 工具
+  plan_mode.js / team_tools.js           计划模式 / 团队工具
+  mcp.js / skill.js                      MCP / 技能
+  question.js / task_complete.js         用户提问 / 任务完成
+
+MCP 层    src/mcp/                 MCP 服务器管理
+  manager.js                             连接 / 断开 / 重试 / 状态
+  transport.js                           stdio / SSE / HTTP 传输
+  integration.js                         工具桥接热挂载
+
+配置层    src/config/              配置系统
+  loader.js                              加载 + 合并（命令行 > 环境变量 > 项目 > 全局 > 默认）
+  defaults.js                            默认配置 + i18n
+  setup.js                               首次启动向导
+  logger.js                              日期轮转日志
+  proxy.js                               代理解析
+
+UI 层     src/ui/                  TUI 自绘
+  tui.js                                 组件容器 + 光标控制 + 32KB 反压限流
+  render-queue.js / screen-buffer.js     50ms 节流队列 + 差量更新
+  ansi.js / theme.js / markdown.js       CJK 宽度截断 / 主题 / Markdown 渲染
+  diff.js / tokens.js                    Diff 展示 / Token 统计
+  tool-renderer.js                       工具调用渲染
+  components/                            布局 / 消息 / 侧边栏 / 编辑器 / 状态栏
+```
+
+### 数据流
+
+```
+用户输入
+    |
+    v
+CLI 事件总线 (src/cli/index.js)
+    |
+    v
+ChatEngine (src/core/chat.js)
+    |                            上行事件: thinking / content / tool_calls
+    |                            tool_result / usage / complete / error
+    |                            下行事件: processInput / interrupt
+    |                                       approvePlan / resolveQuestion
+    v
+AI Client (src/ai/client.js) --- 协议适配 --- 提供商 API
+    |                                     (DeepSeek / Kimi / OpenAI / Anthropic)
+    v
+工具执行
+    |    文件 / Shell / Computer / 联网 / Todo / Memory / MCP
+    v
+结果回流 + 上下文管理
+    |    6 层 Tier + 5 级压缩 + Memory 注入 + 工具配对校验
+    v
+TUI 渲染 (src/ui/)
+```
+
+### 关键模块
+
+**ChatEngine**（src/core/chat.js）
+
+- 状态机：`_planMode` / `_awaitingPlanApproval` / `teamManager`
+- 事件总线：上行 (AI→UI) 与下行 (UI→Engine) 完全双向
+- Tool 配对校验：API 出口处自动过滤孤立 tool 消息，杜绝 OpenAI 400
+- 工具执行 + 中断恢复 + 上下文压缩集成
+
+**ContextManager**（src/core/context.js）
+
+- 6 层 Tier：System / Project / Working / File / Archive / Transient
+- 5 级压缩：从软警告到极限压缩自动触发
+- 相位感知：根据 explore / implement / debug / review 动态调整 keepRounds
+- Memory 注入：`.anvil/Memory.md` 启动时自动加载到 Tier 1.5
+- Token 校准：根据实际 API usage 反馈修正估算
+
+**AI Client**（src/ai/client.js）
+
+- 双协议：OpenAI Chat Completions / Anthropic Messages API 自动识别
+- 流式输出：thinking / content / tool\_calls 实时回流
+- 思考模式：四家提供商参数差异统一封装
+- 缓存命中：DeepSeek `prompt_cache_hit_tokens` / Anthropic `prompt_caching_tokens` / OpenAI `cached_tokens` 统一转换
+- 错误重试：网络错误 + 5xx 自动重试，4xx 透传
+
+**ToolRegistry**（src/tools/registry.js）
+
+- 统一注册：`register({ name, description, parameters, execute, requiresConfirm })`
+- OpenAI Schema 转换：`getOpenAITools()`
+- 热挂载：MCP 工具动态注册
+- 路径安全：所有文件工具过 `isPathSafe()` 校验
 
 ## 配置
 
-优先级：**命令行 > 环境变量 > 项目配置 > 全局配置 > 默认值**
+### 优先级
 
-```bash
-# 命令行参数
-node bin/anvil.js -d /path/to/project -m kimi-k2.5 --no-thinking
+命令行参数 > 环境变量 > 项目配置 > 全局配置 > 默认值
 
-# 环境变量
-DEEPSEEK_API_KEY       # DeepSeek API Key
-MOONSHOT_API_KEY       # Kimi API Key
-OPENAI_API_KEY         # OpenAI API Key
-ANTHROPIC_API_KEY      # Anthropic API Key
-HTTP_PROXY             # HTTP 代理
-HTTPS_PROXY            # HTTPS 代理
-ANVIL_PROJECT_DIR      # 默认工作目录
-WEB_SEARCH_TIMEOUT     # 联网搜索超时（毫秒）
-WEB_SEARCH_DISABLED    # =1 禁用联网搜索
-```
+### 环境变量
 
-配置文件（JSON）：
+| 变量                           | 说明                |
+| ---------------------------- | ----------------- |
+| `DEEPSEEK_API_KEY`           | DeepSeek API Key  |
+| `MOONSHOT_API_KEY`           | Kimi API Key      |
+| `OPENAI_API_KEY`             | OpenAI API Key    |
+| `ANTHROPIC_API_KEY`          | Anthropic API Key |
+| `HTTP_PROXY` / `HTTPS_PROXY` | 代理                |
+| `ANVIL_PROJECT_DIR`          | 默认工作目录            |
+| `WEB_SEARCH_TIMEOUT`         | 联网搜索超时（毫秒）        |
+| `WEB_SEARCH_DISABLED`        | `=1` 禁用联网搜索       |
+
+### 配置文件
 
 - 项目级：`.anvil/config.json`
 - 全局级：`~/.anvil/config.json`
@@ -266,128 +323,53 @@ WEB_SEARCH_DISABLED    # =1 禁用联网搜索
 }
 ```
 
-## Computer Use 使用指南
-
-Computer Use 功能允许 AI 控制你的电脑，**仅在使用支持多模态（vision）的模型时可用**（如 Kimi K2.5）。
-
-### 操作流程
-
-1. **截图观察** - AI 调用 `computer` 工具获取屏幕截图
-2. **分析规划** - AI 分析截图内容，确定目标元素位置
-3. **执行操作** - 移动鼠标、点击、输入等
-4. **验证结果** - 再次截图确认操作成功
-
-### 示例任务
+### .anvil 目录结构
 
 ```
-用户：打开计算器计算 123+456
-
-AI 执行步骤：
-1. computer (截图看桌面)
-2. computer_click x=50 y=50 (点击开始菜单)
-3. computer_wait seconds=1 (等待菜单弹出)
-4. computer (截图验证菜单打开)
-5. computer_type text="计算器" (输入搜索词)
-6. computer_key key="enter" (确认搜索)
-7. computer_wait seconds=2 (等待计算器打开)
-8. computer (截图验证计算器已打开)
-9. computer_click x=... (依次点击 1, 2, 3, +, 4, 5, 6, =)
-10. computer (截图查看计算结果)
-```
-
-### 坐标换算
-
-截图分辨率可能与实际屏幕不同，使用 `computer_get_screen_size` 获取实际分辨率后换算：
-
-```
-实际坐标 = 截图坐标 × (实际分辨率 / 截图分辨率)
-```
-
-### 安全提示
-
-- Computer Use 工具需要用户确认后才能执行
-- 涉及点击、输入的操作会询问用户批准
-- 可随时按 `Ctrl+C` 中断正在执行的操作序列
-
-## 架构
-
-```
-bin/anvil.js             入口
-src/
-├── cli/                 主流程 + 命令处理
-│   ├── index.js         启动、事件总线、输入循环
-│   ├── commands.js      内置命令（/provider /model /todo 等）
-│   └── options.js       命令行参数解析
-├── ai/                  AI 客户端
-│   ├── client.js        多提供商 API 客户端（OpenAI/Anthropic 格式）
-│   ├── providers.js     多提供商配置（DeepSeek/Kimi/OpenAI/Anthropic）
-│   ├── models.js        模型定义和定价
-│   ├── prompts.js       分层 System Prompt（L0-L4）
-│   ├── cache.js         会话级 LRU 缓存
-│   └── sensitive.js     输出敏感内容过滤
-├── core/                核心引擎
-│   ├── chat.js          对话引擎 + 自主 Agent 循环
-│   ├── context.js       智能上下文管理（1M tokens 窗口）
-│   ├── session.js       会话持久化
-│   ├── todo.js          Todo 管理器
-│   ├── web_search/      联网搜索多引擎实现
-│   │   ├── index.js     统一入口 + 引擎调度
-│   │   ├── bing.js      Bing 搜索
-│   │   ├── duckduckgo.js DuckDuckGo 搜索
-│   │   └── searxng.js   SearXNG 私有实例
-│   └── team/            团队协作模式
-├── tools/               工具系统
-│   ├── registry.js      工具注册中心
-│   ├── file.js          文件读写/编辑/删除
-│   ├── code.js          代码分析（符号/引用/定义）
-│   ├── command.js       命令执行
-│   ├── computer_use.js  Computer Use 电脑控制（截图/点击/输入）
-│   ├── web_search.js    联网搜索
-│   ├── web_fetch.js     网页内容获取
-│   ├── todo.js          Todo 工具
-│   ├── question.js      用户提问工具
-│   ├── task_complete.js 任务完成声明
-│   ├── plan_mode.js     计划模式工具
-│   ├── team_tools.js    团队协作工具
-│   ├── mcp.js           MCP 管理工具
-│   └── skill.js         技能系统
-├── mcp/                 MCP 服务器管理
-│   ├── manager.js       连接/断开/重试
-│   ├── transport.js     传输层（stdio/SSE/HTTP）
-│   └── integration.js   工具桥接
-├── config/              配置系统
-│   ├── loader.js        加载/合并配置
-│   ├── defaults.js      默认值
-│   ├── setup.js         首次启动向导
-│   ├── logger.js        日期轮转日志
-│   └── proxy.js         代理解析
-└── ui/                  TUI 全屏界面
-    ├── tui.js           主入口
-    ├── components/      UI 组件
-    └── ...
+.anvil/
+├── config.json         # 项目级配置
+├── logs/               # 日期轮转日志 (YYYY-MM-DD.log)
+├── sessions/           # 会话持久化 (<sessionId>.json)
+├── checkpoints/        # 异常恢复检查点
+├── Memory.md           # 用户长期记忆（自动加载到 Tier 1.5）
+└── skills/             # 自定义技能目录
+    ├── my-skill.md
+    └── my-skill-pack/SKILL.md
 ```
 
 ## 开发
 
 ```bash
-npm test              # 运行测试
-npm run test:unit     # 单元测试
-npm run test:integration # 集成测试
-npm run lint          # 代码检查
-npm run format        # 格式化
+npm start              # 开发模式启动
+npm test               # 全部 Jest 测试
+npm run test:unit      # 单元测试
+npm run test:integration  # 集成测试（需 WEB_SEARCH_INTEGRATION=1）
+npm run lint           # ESLint 检查 src/
+npm run format         # Prettier 格式化 src/**/*.js
 ```
+
+测试覆盖率门槛：branches 60% / functions 70% / lines 70% / statements 70%。
+
+## 调试
+
+- **实时日志**：`.anvil/logs/YYYY-MM-DD.log`
+- **会话恢复**：`npm start -- -r <sessionId>`
+- **技能目录**：`.anvil/skills/` 放自定义 skill（`.md` 文件或含 `SKILL.md` 的子目录）
+- **TUI 渲染卡顿**：检查 `src/ui/tui.js` 的 `MAX_RENDER_OUTPUT`（32KB）是否被超长输出打爆
+- **联网搜索调试**：`node -e "require('./src/core/web_search').search('关键词', {maxResults:3}, {config:{webSearch:{}}}).then(console.log)"`
 
 ## 技术栈
 
-| 层 | 技术 |
-|----|------|
-| 运行时 | Node.js 18+ (CommonJS) |
-| AI | DeepSeek / Kimi / OpenAI / Anthropic |
-| CLI | Commander.js |
-| UI | Chalk + marked-terminal |
-| 自动化 | robotjs + screenshot-desktop |
-| MCP | @modelcontextprotocol/sdk |
-| 测试 | Jest |
+| 层    | 技术                                        |
+| ---- | ----------------------------------------- |
+| 运行时  | Node.js 18+ (CommonJS)                    |
+| AI   | DeepSeek / Kimi / OpenAI / Anthropic      |
+| CLI  | Commander.js                              |
+| UI   | Ink + Chalk + marked-terminal             |
+| 自动化  | @hurdlegroup/robotjs + screenshot-desktop |
+| MCP  | @modelcontextprotocol/sdk                 |
+| 测试   | Jest                                      |
+| 代码检查 | ESLint (Flat Config) + Prettier           |
 
 ## 许可
 
