@@ -8,34 +8,78 @@
 
 // 桌面自动化依赖（可选）
 let robot = null;
+let robotLoadError = null;
 try {
   robot = require('@hurdlegroup/robotjs');
-} catch {
+} catch (err1) {
   try {
     robot = require('robotjs');
-  } catch {
-    // 可选依赖，未安装时只能使用文本截图
+  } catch (err2) {
+    // 记录错误用于启动时给用户明确提示，避免静默降级
+    robotLoadError = err1.code === 'MODULE_NOT_FOUND' ? err1 : err2;
   }
 }
 
 // 截图依赖
 let screenshotDesktop = null;
+let screenshotLoadError = null;
 try {
   screenshotDesktop = require('screenshot-desktop');
-} catch {
-  // 可选依赖
+} catch (err) {
+  screenshotLoadError = err;
+}
+
+// 依赖能力标志（注册工具时基于这个决定跳过哪些）
+const CAPABILITIES = {
+  hasScreenshot: !!screenshotDesktop,
+  hasRobot: !!robot,
+  hasCore: true, // 纯文本工具（如 computer_wait）始终可用
+};
+
+/** 打印依赖缺失警告（每进程仅一次） */
+let _warnedDeps = false;
+function _warnMissingDepsOnce() {
+  if (_warnedDeps) {return;}
+  _warnedDeps = true;
+
+  const lines = [];
+  if (!robot) {
+    lines.push('[computer_use] robotjs/@hurdlegroup/robotjs 未安装');
+    if (robotLoadError?.code === 'MODULE_NOT_FOUND') {
+      lines.push('  安装命令: npm install @hurdlegroup/robotjs');
+      lines.push('  注: robotjs 需要原生编译，Windows 可能需要 build tools');
+    } else if (robotLoadError) {
+      lines.push(`  加载失败: ${robotLoadError.message}`);
+    }
+    lines.push('  影响: computer_get_screen_size / computer_click / computer_move / computer_type / computer_key / computer_scroll / computer_drag 等鼠标键盘工具不可用');
+  }
+  if (!screenshotDesktop) {
+    lines.push('[computer_use] screenshot-desktop 未安装');
+    if (screenshotLoadError?.code === 'MODULE_NOT_FOUND') {
+      lines.push('  安装命令: npm install screenshot-desktop');
+    } else if (screenshotLoadError) {
+      lines.push(`  加载失败: ${screenshotLoadError.message}`);
+    }
+    lines.push('  影响: computer 工具无法截屏，只能返回文本信息');
+  }
+  if (lines.length > 0) {
+    console.warn(lines.join('\n'));
+  }
 }
 
 /**
- * 注册 Computer Use 工具
+ * 注册 Computer Use 工具（按 CAPABILITIES 选择性注册，AI 看到的列表就是实际可用的）。
  * @param {ToolRegistry} registry - 工具注册表
  * @param {Object} context - 上下文对象 { tui, chatEngine }
  */
 function registerComputerUseTools(registry, context) {
-  // 截图工具 - 观察当前屏幕状态
+  _warnMissingDepsOnce();
+
+  // computer（截图）：screenshot 不可用时注册为返回明确错误的占位实现
   registry.register({
     name: 'computer',
-    description: `截取当前屏幕截图，供 AI 观察电脑状态。
+    description: CAPABILITIES.hasScreenshot
+      ? `截取当前屏幕截图，供 AI 观察电脑状态。
 
 使用时机：
 - 任务开始时，了解初始桌面/应用状态
@@ -50,7 +94,11 @@ function registerComputerUseTools(registry, context) {
 4. 再次调用 computer 验证结果
 
 参数说明：
-- wait: 截图前等待毫秒数（默认500）。用于等待界面动画完成、窗口加载等。`,
+- wait: 截图前等待毫秒数（默认500）。用于等待界面动画完成、窗口加载等。`
+      : `[不可用] screenshot-desktop 依赖未安装，无法截屏。
+
+解决方法：npm install screenshot-desktop
+安装后重启 Anvil 即可使用。`,
     parameters: {
       type: 'object',
       properties: {
@@ -62,9 +110,53 @@ function registerComputerUseTools(registry, context) {
       },
       required: [],
     },
-    execute: async (params) => executeScreenshot(params),
+    execute: CAPABILITIES.hasScreenshot
+      ? async (params) => executeScreenshot(params)
+      : async () => ({
+          error: 'computer 工具不可用：screenshot-desktop 未安装。请运行 `npm install screenshot-desktop` 后重启。',
+        }),
     requiresConfirm: false,
   });
+
+  // computer_wait：不依赖任何原生模块，始终可用
+  registry.register({
+    name: 'computer_wait',
+    description: `等待一段时间，让界面变化稳定。
+
+使用场景：
+- 点击按钮后等待界面响应
+- 等待窗口/弹窗加载完成
+- 等待页面加载
+- 两次操作之间留出缓冲时间
+
+参数说明：
+- seconds: 等待秒数（0.5-60，默认2）
+
+使用技巧：
+- 网络操作建议等待 3-5 秒
+- 本地操作 1-2 秒通常足够
+- 等待后务必截图验证结果`,
+    parameters: {
+      type: 'object',
+      properties: {
+        seconds: {
+          type: 'number',
+          description: '等待秒数（0.5-60）',
+          minimum: 0.5,
+          maximum: 60,
+          default: 2,
+        },
+      },
+      required: [],
+    },
+    execute: async (params) => executeWait(params),
+    requiresConfirm: false,
+  });
+
+  // robot 不可用时不注册鼠标键盘工具，AI 看到的列表就不包含不可用的
+  if (!CAPABILITIES.hasRobot) {return;}
+
+  // 以下工具全部依赖 robotjs，仅在 robot 可用时注册
 
   // 获取屏幕尺寸
   registry.register({
@@ -304,41 +396,6 @@ function registerComputerUseTools(registry, context) {
     },
     execute: async (params) => executeScroll(params),
     requiresConfirm: true,
-  });
-
-  // 等待
-  registry.register({
-    name: 'computer_wait',
-    description: `等待一段时间，让界面变化稳定。
-
-使用场景：
-- 点击按钮后等待界面响应
-- 等待窗口/弹窗加载完成
-- 等待页面加载
-- 两次操作之间留出缓冲时间
-
-参数说明：
-- seconds: 等待秒数（0.5-60，默认2）
-
-使用技巧：
-- 网络操作建议等待 3-5 秒
-- 本地操作 1-2 秒通常足够
-- 等待后务必截图验证结果`,
-    parameters: {
-      type: 'object',
-      properties: {
-        seconds: {
-          type: 'number',
-          description: '等待秒数（0.5-60）',
-          minimum: 0.5,
-          maximum: 60,
-          default: 2,
-        },
-      },
-      required: [],
-    },
-    execute: async (params) => executeWait(params),
-    requiresConfirm: false,
   });
 
   // 拖拽

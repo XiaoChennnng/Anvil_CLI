@@ -19,8 +19,10 @@ class AgentSpawner extends EventEmitter {
     // Agent实例管理
     this.activeAgents = new Map();  // agentId -> AgentInstance
 
-    // Agent配置
-    this.defaultModel = options.config?.defaultModel || 'deepseek-v4-flash';
+    // Agent配置：之前硬编码 'deepseek-v4-flash'（不存在），子 Agent 一直 404；改为读取 config.model 或退回 deepseek-chat
+    this.defaultModel = options.config?.model
+      || options.config?.defaultModel
+      || 'deepseek-chat';
     this.defaultTimeout = options.defaultTimeout || 30 * 60 * 1000;
 
     // 提示词生成器
@@ -80,16 +82,18 @@ class AgentSpawner extends EventEmitter {
       systemPrompt,
       tasks,
       timeout = this.defaultTimeout,
+      priority, // 之前 run 解构时丢弃 priority，manager 传入的优先级失效
     } = options;
 
     const startTime = Date.now();
     agent.status = 'running';
+    agent._priority = priority; // 挂到 agent 上供 _agentLoop 内部读取
 
     try {
       // 构建消息
       const messages = [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: this._buildTaskPrompt(tasks) },
+        { role: 'user', content: this._buildTaskPrompt(tasks, priority) },
       ];
 
       // 获取工具列表（从parentAgent的toolRegistry）
@@ -131,13 +135,19 @@ class AgentSpawner extends EventEmitter {
         throw new Error(`Agent执行超时 (${timeoutMs / 1000}s)`);
       }
 
+      // 响应 abort 信号（terminate 调用 aiClient.abort 后这里立即跳出，不再跑完 maxIterations）
+      if (agent.status === 'terminated') {
+        throw new Error('Agent 已被终止');
+      }
+
       iterationCount++;
 
-      // 发送请求
+      // priority 透传给 AI client 用于上游调度
       const response = await agent.aiClient.chat(messages, {
         model: this.defaultModel,
         thinkingMode: true,
         tools,
+        priority: agent._priority,
       });
 
       fullContent += response.content || '';
@@ -255,20 +265,24 @@ class AgentSpawner extends EventEmitter {
   /**
    * 构建任务提示词
    */
-  _buildTaskPrompt(tasks) {
+  _buildTaskPrompt(tasks, overallPriority) {
     if (!tasks || tasks.length === 0) {
       return '请执行分配给你的任务。完成后调用 task_complete 工具声明完成，一句话说明即可。';
     }
 
     let prompt = '## 任务列表\n\n';
+    if (overallPriority !== undefined) {
+      prompt += `整体优先级: ${overallPriority}\n\n`;
+    }
     prompt += '请按以下任务列表顺序执行：\n\n';
 
     for (const task of tasks) {
       const taskId = task.id || task.title || 'unknown';
       const description = task.description || task.text || String(task);
-      const priority = task.priority !== undefined ? ` [优先级: ${task.priority}]` : '';
+      // 内层变量改名 taskPriority，避免和外层形参 priority 重名
+      const taskPriority = task.priority !== undefined ? ` [优先级: ${task.priority}]` : '';
 
-      prompt += `- **${taskId}**${priority}: ${description}\n`;
+      prompt += `- **${taskId}**${taskPriority}: ${description}\n`;
     }
 
     prompt += '\n关键进展时简要汇报。所有任务完成后调用 task_complete，一句话说明即可，不要重复总结。';

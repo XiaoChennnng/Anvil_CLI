@@ -234,7 +234,7 @@ class TaskDistributor {
   }
 
   /**
-   * 添加隐式依赖关系
+   * 添加隐式依赖关系（拷贝后排序，避免污染调用方原数组）。
    */
   _addImplicitDependencies(tasks) {
     const typeOrder = {
@@ -246,12 +246,25 @@ class TaskDistributor {
       [TaskTypes.COORDINATE]: 5,
     };
 
-    // 按类型排序，建立依赖
-    tasks.sort((a, b) => typeOrder[a.type] - typeOrder[b.type]);
+    // 用 slice() 拷贝再排序，避免污染原数组
+    const sortedTasks = tasks.slice().sort((a, b) => typeOrder[a.type] - typeOrder[b.type]);
 
-    for (let i = 1; i < tasks.length; i++) {
-      if (!tasks[i].dependencies.includes(tasks[i - 1].id)) {
-        tasks[i].dependencies.push(tasks[i - 1].id);
+    for (let i = 1; i < sortedTasks.length; i++) {
+      if (!sortedTasks[i].dependencies.includes(sortedTasks[i - 1].id)) {
+        sortedTasks[i].dependencies.push(sortedTasks[i - 1].id);
+      }
+    }
+
+    // 把排序+依赖关系写回原数组的元素对象（不重排原数组顺序，只更新每个 task 的 dependencies）
+    // 这样既保持原数组顺序，又让依赖关系正确建立
+    const depMap = new Map();
+    for (let i = 1; i < sortedTasks.length; i++) {
+      depMap.set(sortedTasks[i].id, sortedTasks[i].dependencies);
+    }
+    for (const task of tasks) {
+      const deps = depMap.get(task.id);
+      if (deps) {
+        task.dependencies = [...deps];
       }
     }
   }

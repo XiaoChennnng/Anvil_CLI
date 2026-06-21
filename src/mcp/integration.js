@@ -64,34 +64,79 @@ function unregisterMCPServerTools(toolRegistry, serverName) {
   _serverToolNames.delete(serverName);
 }
 
-let _wired = false;
+/**
+ * 幂等保护：用嵌套 WeakMap 按对象身份追踪 (toolRegistry, mcpManager) 对。
+ * key 必须是对象引用本身（Symbol.toString() 每次都不同，会导致 wire/unwire key 不一致）。
+ */
+const _wireHandlers = new WeakMap(); // toolRegistry -> WeakMap<mcpManager, handlers>
+
+function _getHandlers(toolRegistry, mcpManager) {
+  return _wireHandlers.get(toolRegistry)?.get(mcpManager);
+}
+
+function _setHandlers(toolRegistry, mcpManager, handlers) {
+  let inner = _wireHandlers.get(toolRegistry);
+  if (!inner) {
+    inner = new WeakMap();
+    _wireHandlers.set(toolRegistry, inner);
+  }
+  inner.set(mcpManager, handlers);
+}
+
+function _deleteHandlers(toolRegistry, mcpManager) {
+  const inner = _wireHandlers.get(toolRegistry);
+  if (!inner) {return false;}
+  return inner.delete(mcpManager);
+}
 
 function wireMCPEvents(toolRegistry, mcpManager, logger) {
-  // 幂等保护：防止重复绑定事件处理器
-  if (_wired) {return;}
-  _wired = true;
+  // 幂等保护：同一对 (registry, manager) 只绑定一次
+  if (_getHandlers(toolRegistry, mcpManager)) {return;}
 
-  mcpManager.on('server_connected', ({ name, tools }) => {
-    registerMCPServerTools(toolRegistry, mcpManager, name, tools);
-    if (logger) {
-      logger.info(`[mcp] 工具已注册: ${name} (${tools.length} 个)`);
-    }
-  });
+  const handlers = {
+    connected: ({ name, tools }) => {
+      registerMCPServerTools(toolRegistry, mcpManager, name, tools);
+      if (logger) {
+        logger.info(`[mcp] 工具已注册: ${name} (${tools.length} 个)`);
+      }
+    },
+    disconnected: ({ name }) => {
+      unregisterMCPServerTools(toolRegistry, name);
+      if (logger) {
+        logger.warn(`[mcp] 工具已卸载: ${name}`);
+      }
+    },
+    error: ({ name }) => {
+      unregisterMCPServerTools(toolRegistry, name);
+    },
+  };
 
-  mcpManager.on('server_disconnected', ({ name }) => {
-    unregisterMCPServerTools(toolRegistry, name);
-    if (logger) {
-      logger.warn(`[mcp] 工具已卸载: ${name}`);
-    }
-  });
+  mcpManager.on('server_connected', handlers.connected);
+  mcpManager.on('server_disconnected', handlers.disconnected);
+  mcpManager.on('server_error', handlers.error);
 
-  mcpManager.on('server_error', ({ name }) => {
-    unregisterMCPServerTools(toolRegistry, name);
-  });
+  _setHandlers(toolRegistry, mcpManager, handlers);
 }
+
+/** 解除事件绑定（测试用）— 只移除我们自己注册的 handler */
+function unwireMCPEvents(toolRegistry, mcpManager) {
+  const handlers = _getHandlers(toolRegistry, mcpManager);
+  if (!handlers) {return false;}
+  _deleteHandlers(toolRegistry, mcpManager);
+
+  if (handlers.connected) {mcpManager.off('server_connected', handlers.connected);}
+  if (handlers.disconnected) {mcpManager.off('server_disconnected', handlers.disconnected);}
+  if (handlers.error) {mcpManager.off('server_error', handlers.error);}
+  return true;
+}
+
+/** 测试钩子：清空所有 wire 状态（WeakMap 无 clear 方法，仅作占位） */
+function _resetWiredState() {}
 
 module.exports = {
   registerMCPServerTools,
   unregisterMCPServerTools,
   wireMCPEvents,
+  unwireMCPEvents,
+  _resetWiredState,
 };

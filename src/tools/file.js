@@ -6,9 +6,66 @@ const path = require('path');
 const { generateDiff } = require('../ui/diff');
 const { minimatch } = require('minimatch');
 
+// 缓存 projectDir 的真实路径（解析符号链接后的绝对路径）
+// 同一 projectDir 多次访问时只解析一次，避免重复 IO
+const _projectDirRealpathCache = new Map();
+
+function _getProjectDirRealpath(projectDir) {
+  if (!projectDir) {return projectDir;}
+  if (_projectDirRealpathCache.has(projectDir)) {
+    return _projectDirRealpathCache.get(projectDir);
+  }
+  try {
+    // 用 native 版本，行为在 Win/macOS/Linux 一致
+    const realpath = fs.realpathSync.native(projectDir);
+    _projectDirRealpathCache.set(projectDir, realpath);
+    return realpath;
+  } catch {
+    // 解析失败时 fallback 到原路径（不缓存，下次重试）
+    return projectDir;
+  }
+}
+
+// 解析路径的真实路径，文件不存在时逐级向上解析到已存在的祖先目录
+// 返回 null 表示无法安全解析
+function _realpathFor(targetPath) {
+  try {
+    return fs.realpathSync.native(targetPath);
+  } catch (err) {
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
+      // 文件不存在 → 解析父目录 + 拼回 basename
+      const parent = path.dirname(targetPath);
+      if (parent === targetPath) {return null;} // 已到根
+      const parentReal = _realpathFor(parent);
+      if (!parentReal) {return null;}
+      return path.join(parentReal, path.basename(targetPath));
+    }
+    return null; // EACCES 等其他错误：保守拒绝
+  }
+}
+
+/**
+ * 路径安全检查：解析符号链接后判断是否在项目目录内（防 symlink 穿越）。
+ * @param {string} targetPath - 目标路径（绝对路径）
+ * @param {string} projectDir - 项目根目录（绝对路径）
+ * @returns {boolean} 是否安全
+ */
 function isPathSafe(targetPath, projectDir) {
-  const relative = path.relative(projectDir, targetPath);
+  if (!targetPath || !projectDir) {return false;}
+
+  const projectReal = _getProjectDirRealpath(projectDir);
+  const targetReal = _realpathFor(targetPath);
+
+  // 无法解析真实路径（权限/不存在），保守拒绝
+  if (!targetReal) {return false;}
+
+  const relative = path.relative(projectReal, targetReal);
   return !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+// 测试钩子：清空 realpath 缓存
+function _clearRealpathCache() {
+  _projectDirRealpathCache.clear();
 }
 
 const MAX_FILE_READ_SIZE = 2 * 1024 * 1024;
@@ -723,4 +780,5 @@ module.exports = {
   moveFile,
   registerFileTools,
   isPathSafe,
+  _clearRealpathCache, // 测试用：清空 realpath 缓存
 };

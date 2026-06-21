@@ -31,10 +31,9 @@ const COMPRESSION_LEVELS = {
   CRITICAL:   { level: 5, threshold: 0.98, label: '[极限] 极限压缩' },
 };
 
-// Token 估算缓存（LRU）
+// Token 估算 LRU 缓存（直接用 Map.size，不再维护冗余计数器避免泄漏风险）
 const _tokenCache = new Map();
 const TOKEN_CACHE_MAX = 500;
-let _tokenCacheSize = 0;
 
 // Token 估算缓存键（前 200 字 + 长度做摘要）
 function _makeTokenCacheKey(text) {
@@ -50,7 +49,7 @@ function _getCachedTokenCount(text) {
   if (!key) {return undefined;}
   if (_tokenCache.has(key)) {
     const val = _tokenCache.get(key);
-    // LRU 提升：删除再设置以更新顺序
+    // LRU 提升：删除再设置以更新顺序（Map 保证迭代顺序 = 插入顺序）
     _tokenCache.delete(key);
     _tokenCache.set(key, val);
     return val;
@@ -62,19 +61,16 @@ function _setCachedTokenCount(text, count) {
   if (!text || typeof text !== 'string') {return;}
   const key = _makeTokenCacheKey(text);
   if (!key) {return;}
+  // 已存在则先删除（保证新值在 Map 末尾 → 最近访问）
   if (_tokenCache.has(key)) {
     _tokenCache.delete(key);
-  } else {
-    _tokenCacheSize++;
   }
   _tokenCache.set(key, count);
-  // 超限淘汰
-  if (_tokenCacheSize > TOKEN_CACHE_MAX) {
+  // 超限淘汰最旧的 key（Map 头部 = 最久未访问）
+  while (_tokenCache.size > TOKEN_CACHE_MAX) {
     const firstKey = _tokenCache.keys().next().value;
-    if (firstKey !== undefined) {
-      _tokenCache.delete(firstKey);
-      _tokenCacheSize--;
-    }
+    if (firstKey === undefined) {break;}
+    _tokenCache.delete(firstKey);
   }
 }
 
