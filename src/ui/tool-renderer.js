@@ -258,13 +258,27 @@ class ToolRenderer {
         }
         break;
 
+      case 'start_team_task':
+        mainParam = this._truncate(args.task || '', 50);
+        if (args.force) {subParams.push('force=true');}
+        if (Array.isArray(args.suggestedRoles) && args.suggestedRoles.length > 0) {
+          // 关键修复:数组不能直接 toString,旧代码会显示 [object Object],[object Object]
+          // 改成 "[role × count, ...]" 简短摘要
+          const rolesStr = args.suggestedRoles
+            .map(r => `${r.role}×${r.count || 1}`)
+            .join(', ');
+          subParams.push(`roles=[${this._truncate(rolesStr, 60)}]`);
+        }
+        break;
+
       default:
         // 通用格式
         const entries = Object.entries(args);
         if (entries.length === 1) {
-          mainParam = this._formatPath(String(entries[0][1]));
+          mainParam = this._formatPath(this._stringifyValue(entries[0][1]));
         } else {
-          const keyValues = entries.slice(0, 3).map(([k, v]) => `${k}=${this._escape(String(v))}`);
+          const keyValues = entries.slice(0, 3).map(([k, v]) =>
+            `${k}=${this._escape(this._stringifyValue(v))}`);
           return keyValues.join(', ');
         }
     }
@@ -306,6 +320,35 @@ class ToolRenderer {
   _truncate(str, maxLen) {
     if (!str || str.length <= maxLen) {return str;}
     return str.substring(0, maxLen - 3) + '...';
+  }
+
+  /**
+   * 把任意值转成可显示的字符串
+   * 关键修复:对象/数组直接 String() 会变 "[object Object]",导致 TUI 渲染糊掉
+   * - 数组 → JSON.stringify(短截断)
+   * - 对象 → JSON.stringify(短截断)
+   * - 其他 → String()
+   */
+  _stringifyValue(v) {
+    if (v === null || v === undefined) {return String(v);}
+    if (Array.isArray(v)) {
+      // 数组:简短摘要,避免 JSON 全文糊一坨
+      try {
+        const json = JSON.stringify(v);
+        return this._truncate(json, 50);
+      } catch {
+        return '[array]';
+      }
+    }
+    if (typeof v === 'object') {
+      try {
+        const json = JSON.stringify(v);
+        return this._truncate(json, 50);
+      } catch {
+        return '[object]';
+      }
+    }
+    return String(v);
   }
 
   /**

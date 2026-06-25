@@ -506,9 +506,7 @@ class ChatEngine extends EventEmitter {
         const parsed = parseTaskCompleteResult(lastToolMsg?.content || '');
         if (parsed.complete === true) {
           this.logger?.info('任务完成', { reason: parsed.reason, iterationCount });
-          // checkResult.content 是 AI 在自主循环检查阶段对系统说的内部汇报（如"已完成，用户消息右侧显示..."），
-          // 不属于面向用户的内容，禁止渲染到 UI。
-          // 只渲染 task_complete 工具的 summary 参数（这是 AI 写给用户的完成说明）。
+          // 只渲染 task_complete 工具的 summary 参数(写给用户的完成说明)
           const userFacingSummary = parsed.summary || '';
           if (userFacingSummary) {
             this.emit('content', userFacingSummary);
@@ -715,8 +713,8 @@ class ChatEngine extends EventEmitter {
             args = {};
           }
 
-          // 执行工具（含 120s 超时保护）
-          const TOOL_TIMEOUT = 120 * 1000; // 120s
+          // 执行工具（含 120s 超时保护，start_team_task 可能运行数分钟用 30 分钟超时）
+          const TOOL_TIMEOUT = name === 'start_team_task' ? 30 * 60 * 1000 : 120 * 1000;
           let result;
           let toolTimeoutId;
           try {
@@ -991,7 +989,7 @@ class ChatEngine extends EventEmitter {
       await this._rebuildFullContext();
     }
 
-    // 4) 事件通知（仅发 context-rebuilt，状态文案由工具渲染通道统一输出，避免重复）
+    // 只发 context-rebuilt,状态文案由工具渲染通道统一输出
     const finalStats = { ...applyResult.stats, fallback };
     this.emit('context-rebuilt', {
       tokensBefore: finalStats.beforeTokens,
@@ -1228,6 +1226,18 @@ class ChatEngine extends EventEmitter {
     this.isProcessing = false;
     // 清理中断残留的孤立 tool 消息（避免下一轮触发 400）
     this._cleanupInterruptedToolCalls();
+    // 团队模式中断：强制解散 teamManager，避免子 Agent 在后台继续消耗 token
+    if (this.teamManager) {
+      const teamManager = this.teamManager;
+      this.teamManager = null;
+      this.teamMode = false;
+      this._updateSystemPrompt();
+      this.emit('team_mode_end', { reason: 'interrupted' });
+      // 异步强制解散，不阻塞 interrupt 返回
+      teamManager.dissolve({ force: true }).catch(err => {
+        this.logger?.error('中断时解散团队失败', err.message);
+      });
+    }
     this.emit('interrupted');
   }
 
@@ -1324,9 +1334,7 @@ class ChatEngine extends EventEmitter {
     return this._planMode;
   }
 
-  // 构建 System Prompt——按级按需加载（6 级 L0-L5）
-  // 默认仅 L0；planMode 启动时自动追加 L4；teamMode 启动时自动追加 L5
-  // 其他层（L1/L2/L3）由 AI 通过 get_system_layer 工具按需查询
+  // 默认 L0,planMode 追加 L4,teamMode 追加 L5,其他按需
   _buildSystemPrompt() {
     const layers = [PromptLayer.L0];
     if (this._planMode) {layers.push(PromptLayer.L4);}
@@ -1370,13 +1378,26 @@ class ChatEngine extends EventEmitter {
     return matches.map(m => m.match(/\[Layer: ([A-Z0-9_]+(?:\s\([a-z]+\))?)\]/)[1]);
   }
 
-  // 更新 System Prompt（Plan/Team Mode 切换后重建 system 消息）
+  // 更新 System Prompt(Plan/Team Mode 切换后重建)
+  // 保留 AI 主动加载的 L1/L2/L3 detail 层,不因 planMode/teamMode 切换而丢失
   _updateSystemPrompt() {
     const sysPrompt = this._buildSystemPrompt();
-    // 替换第一条 system 消息
     const sysIdx = this.messages.findIndex(m => m.role === 'system');
+
     if (sysIdx >= 0) {
-      this.messages[sysIdx] = { role: 'system', content: sysPrompt };
+      const sysContent = this.messages[sysIdx].content;
+      // 提取所有 [Layer: L1/L2/L3 (xxx)] 标签的完整 block(AI 主动加载的层)
+      const additionalLayers = [];
+      const layerRegex = /\[Layer: (L[123](?:\s\([a-z]+\))?)\][\s\S]*?(?=\n\[Layer: |$)/g;
+      let match;
+      while ((match = layerRegex.exec(sysContent)) !== null) {
+        additionalLayers.push(match[0].trim());
+      }
+      // 新内容 = base (L0 + L4 + L5) + 保留的 L1-L3 detail
+      const newContent = additionalLayers.length > 0
+        ? sysPrompt + '\n\n' + additionalLayers.join('\n\n')
+        : sysPrompt;
+      this.messages[sysIdx] = { role: 'system', content: newContent };
     } else {
       this.messages.unshift({ role: 'system', content: sysPrompt });
     }
@@ -1569,6 +1590,21 @@ class ChatEngine extends EventEmitter {
         parentAgent: this,
         projectDir: this.config.projectDir || process.cwd(),
       });
+      // 转发 manager 事件到 chatEngine,子 Agent 事件通过 _subAgent 标记路由
+      const TEAM_EVENTS = [
+        'team_created', 'team_dissolved', 'team_degraded',
+        'agent_created', 'agent_started', 'agent_completed',
+        'agent_terminated', 'agent_respawned',
+        'state_changed',
+        'thinking', 'content',  // 子 Agent 流式事件(带 _subAgent 标记)
+        'tool_calls', 'tool_result',  // 子 Agent 工具调用事件(带 _subAgent 标记)
+        'subagent_usage', 'subagent_heartbeat',
+      ];
+      for (const evt of TEAM_EVENTS) {
+        this.teamManager.on(evt, (data) => {
+          this.emit(evt, data);
+        });
+      }
     }
     return this.teamManager;
   }
@@ -1585,14 +1621,40 @@ class ChatEngine extends EventEmitter {
     return await teamManager.evaluateTaskComplexity(taskDescription, context);
   }
 
-  async _startTeamTask(taskDescription) {
+  async _startTeamTask(taskDescription, options = {}) {
+    const force = options.force === true;
+    // suggestedRoles:AI 通过工具调用传的角色配置(可选)
+    const suggestedRoles = Array.isArray(options.suggestedRoles) ? options.suggestedRoles : null;
+    // 追踪 team_mode_start 是否已发出,确保 team_mode_end 成对出现
+    let teamModeStarted = false;
     try {
-      // 评估是否需要团队
-      const evaluation = await this._evaluateTeamNeed(taskDescription);
+      // force=true(用户明确要求)时跳过复杂度评估,直接进入 teamMode
+      // 角色配置由 AI 决定(suggestedRoles),不再硬编码 1 executor
+      let evaluation;
+      if (force) {
+        // chat 层算 suggestedAgents,UI 与 manager 共享同一份计数
+        const finalRoles = (suggestedRoles && suggestedRoles.length > 0)
+          ? suggestedRoles
+          : [{ role: 'executor', count: 1 }];  // 兜底
+        evaluation = {
+          complexityScore: 100,
+          needsTeam: true,
+          reason: '用户明确要求启动团队(force=true)',
+          suggestedAgents: finalRoles.map(r => ({
+            role: r.role,
+            count: Math.max(1, r.count || 1),
+            description: r.description || `${r.role} - AI 指定的角色配置`,
+          })),
+          complexityFactors: { forceStart: true },
+        };
+      } else {
+        // 评估是否需要团队
+        evaluation = await this._evaluateTeamNeed(taskDescription);
 
-      if (!evaluation.needsTeam) {
-        // 任务足够简单，不需要团队
-        return { needsTeam: false, reason: evaluation.reason };
+        if (!evaluation.needsTeam) {
+          // 任务足够简单，不需要团队
+          return { needsTeam: false, reason: evaluation.reason };
+        }
       }
 
       this.teamMode = true;
@@ -1601,17 +1663,52 @@ class ChatEngine extends EventEmitter {
       this.emit('team_mode_start', {
         complexityScore: evaluation.complexityScore,
         suggestedAgents: evaluation.suggestedAgents,
+        forced: force,
       });
+      teamModeStarted = true;
 
       const teamManager = await this._getTeamManager();
       const result = await teamManager.startTeamTask(taskDescription, {
         messageCount: this.messages.length,
+      }, { force, suggestedRoles });
+
+      // 成功路径:任务完成,补发 team_mode_end 让 UI 状态栏恢复
+      // (之前漏 emit,导致团队跑完后状态栏永远卡在"团队模式中")
+      this._updateSystemPrompt();
+      this.emit('team_mode_end', {
+        reason: result?.result?.degraded ? 'degraded' : 'completed',
+        teamId: result?.teamId,
+        degraded: result?.result?.degraded,
+        degradedReason: result?.result?.degradedReason,
       });
+
+      // 关键:如果团队跑完但实际没产出(子 agent 全失败/没干活),
+      // 把 degraded 标志 + 原因提到 result 顶层,避免 AI 漏看嵌套字段。
+      // AI 必须明确知道"团队没真正干活",不能假装研究完成。
+      if (result?.result?.degraded) {
+        this.logger?.warn('团队模式 degraded: ' + result.result.degradedReason);
+        return {
+          ...result,
+          degraded: true,
+          degradedReason: result.result.degradedReason,
+          warning: '⚠️ 团队任务完成度不足,子 Agent 可能未正常产出(degraded)。' +
+            '请检查:1) 团队配置/角色 2) 子 Agent 是否能调通 AI API 3) 考虑用单 Agent 模式重做或拆任务。',
+        };
+      }
 
       return result;
     } catch (error) {
       this.logger?.error('团队模式执行失败', error.message);
       this.teamMode = false;
+      // 关键:失败时清空 teamManager 引用,下次 _getTeamManager 会重建干净实例
+      // 避免失败后 manager 内部 state 卡在 PLANNING/EXECUTING 等非终态,
+      // 污染下次 start 触发状态机死锁(配合 manager.js 内部 state 重置形成双保险)
+      this.teamManager = null;
+      // 只有 start emit 过才补发 end,避免重复或误发
+      if (teamModeStarted) {
+        this._updateSystemPrompt();
+        this.emit('team_mode_end', { reason: 'failed', error: error.message });
+      }
       return { needsTeam: false, error: error.message };
     } finally {
       this.teamMode = false;
@@ -1633,6 +1730,11 @@ class ChatEngine extends EventEmitter {
       return { success: true, message: '团队已解散' };
     } catch (error) {
       this.logger?.error('解散团队失败', error.message);
+      // 失败时也清空引用,避免半 cleanup 状态被复用
+      this.teamManager = null;
+      this.teamMode = false;
+      this._updateSystemPrompt();
+      this.emit('team_mode_end', { reason: 'dissolve_failed', error: error.message });
       return { success: false, error: error.message };
     }
   }

@@ -211,6 +211,15 @@ class TaskStateManager {
       this.tasks.set(taskId, task);
       this.logger?.error(`任务 ${taskId} 执行超时`);
     }
+    // 清理 timer 引用,避免 Node unref 警告和潜在内存泄漏
+    // timeout timer 已触发,只需清理 warning timer
+    const timers = this.timeoutHandlers.get(taskId);
+    if (timers) {
+      if (timers.warning) {
+        clearTimeout(timers.warning);
+      }
+      this.timeoutHandlers.delete(taskId);
+    }
   }
 
   _isTaskTimedOut(task) {

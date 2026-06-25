@@ -7,6 +7,7 @@ const Sidebar = require('./components/sidebar');
 const Editor = require('./components/editor');
 const StatusBar = require('./components/status-bar');
 const QuestionPanel = require('./components/question-panel');
+const TeamPanel = require('./components/team-panel');
 const { visibleLength, truncateToWidth, isCJK } = require('./ansi');
 
 class TUI {
@@ -20,6 +21,9 @@ class TUI {
     this.questionPanel = new QuestionPanel(this.layout);
     this.questionPanel.messageBox = this.messageBox;  // 注入消息区引用
     this.questionPanel._refreshDisplay = () => this._refreshMessages();  // 注入刷新回调
+    // Team Panel(M4) — 团队事件日志 modal,共享 sidebar 数据源
+    this.teamPanel = new TeamPanel(this.layout);
+    this.teamPanel.setSidebar(this.sidebar);
     this._isRunning = false;
     this._onSend = null;
     this._onExit = null;
@@ -72,7 +76,13 @@ class TUI {
     this.layout.clearScreen();
     const layoutBuf = this.layout.endBuf();
 
-    const out = layoutBuf + (this.messageBox.render() || '') + (this.sidebar.render() || '') + (this.editor.render() || '') + (this.statusBar.render() || '');
+    // M4:teamPanel active 时,跳过 messageBox 渲染,主消息区"冻结但保留"
+    // messageBox.renderedLines 不会清空,关闭 modal 后从断点继续
+    const messageOut = this.teamPanel?.active
+      ? (this.teamPanel.render() || '')
+      : (this.messageBox.render() || '');
+
+    const out = layoutBuf + messageOut + (this.sidebar.render() || '') + (this.editor.render() || '') + (this.statusBar.render() || '');
     if (out) {this._safeWrite(out, true);}
 
     this._restoreCursorToEditor();
@@ -81,7 +91,11 @@ class TUI {
   // 刷新消息区 + 侧边栏（流式输出时使用）
   _refreshMessages() {
     this.layout.startBuf();
-    let out = (this.messageBox.render() || '') + (this.sidebar.render() || '');
+    // M4:teamPanel active 时跳过 messageBox 渲染(保留 renderedLines 不动)
+    const messageOut = this.teamPanel?.active
+      ? (this.teamPanel.render() || '')
+      : (this.messageBox.render() || '');
+    let out = messageOut + (this.sidebar.render() || '');
 
     // 如果 editor 有未刷新的变化，也要重绘输入框
     if (this.editor._needsRefresh) {
@@ -97,7 +111,10 @@ class TUI {
   _refreshAll() {
     this.layout.hideCursor();
     this._cursorHidden = true;
-    const out = (this.messageBox.render() || '') + (this.sidebar.render() || '') + (this.editor.render() || '') + (this.statusBar.render() || '');
+    const messageOut = this.teamPanel?.active
+      ? (this.teamPanel.render() || '')
+      : (this.messageBox.render() || '');
+    const out = messageOut + (this.sidebar.render() || '') + (this.editor.render() || '') + (this.statusBar.render() || '');
     if (out) {this._safeWrite(out, true);}
     this._restoreCursorToEditor();
   }
@@ -143,8 +160,10 @@ class TUI {
     if (out) {this._safeWrite(out, true);}
   }
 
-  // 兼容旧接口，已合并到状态栏
-  _refreshSidebar() {}
+  // 旧版空 stub 导致 subagent_content 事件被静默吞掉,新版走 messageBox 完整重绘
+  _refreshSidebar() {
+    this._refreshMessages();
+  }
 
   /**
    * 刷新侧边栏相关的信息（Todo, Context, Cache）- 更新到状态栏
@@ -163,6 +182,40 @@ class TUI {
   setStatusInfo(msg, type) {
     this.statusBar.setInfoMessage(msg, type);
     this._refreshStatusBar();
+  }
+
+  /**
+   * 设置 Team 子 Agent 活动临显(M3)
+   * @param {string} name - agent 短名
+   * @param {string} status - 'thinking' / 'streaming'
+   */
+  setTeamActivity(name, status) {
+    this.statusBar.setTeamActivity(name, status);
+    this._refreshStatusBar();
+  }
+
+  /**
+   * 清除 Team 活动临显
+   */
+  clearTeamActivity() {
+    this.statusBar.clearTeamActivity();
+    this._refreshStatusBar();
+  }
+
+  /**
+   * 打开 Team Panel modal(M4)
+   * 关键:主消息区"暂停滚动,保留显示"——消息区 renderedLines 不动,
+   * 关闭 modal 后从断点继续,不会丢内容也不会被刷掉。
+   */
+  openTeamPanel() {
+    this.teamPanel.open();
+  }
+
+  /**
+   * 关闭 Team Panel modal
+   */
+  closeTeamPanel() {
+    this.teamPanel.close();
   }
 
   // ─── 事件注册 ───
@@ -504,6 +557,32 @@ class TUI {
     // ─── 问答面板优先处理 ───
     if (this.questionPanel.active) {
       return this.questionPanel.handleKey(buf);
+    }
+
+    // ─── Team Panel(M4) ───
+    // 优先级:questionPanel > teamPanel > editor
+    // 避免审批弹窗和详情面板同时打开打架
+    if (this.teamPanel.active) {
+      const result = this.teamPanel.handleKey(buf);
+      if (result?.action === 'team_panel_close') {
+        // modal 关闭,需要完整重绘恢复主消息区
+        this._refreshAll();
+      } else {
+        this._refreshMessages();
+      }
+      return result;
+    }
+
+    // ─── Ctrl+T 快捷键(M5) — 切换 Team Panel ───
+    // 0x14 = Ctrl+T,打开/关闭 teamPanel
+    if (buf[0] === 0x14 && buf.length === 1) {
+      if (this.teamPanel.active) {
+        this.closeTeamPanel();
+      } else {
+        this.openTeamPanel();
+      }
+      this._refreshAll();
+      return { action: 'team_panel_toggle' };
     }
 
     // ─── 处理期间也允许翻页 ───

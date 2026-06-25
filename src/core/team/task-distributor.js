@@ -5,6 +5,18 @@
 const { TaskTypes, TaskPriority } = require('./constants');
 
 /**
+ * Fallback 任务（无明确分解模式时）的角色视角前缀
+ * 每个 agent 拿到同一段原始任务,加上自己的角色视角提示,LLM 知道从哪个角度切入
+ * 关键:必须简洁,避免和 system prompt 的角色定义重复
+ */
+const FALLBACK_ROLE_ANGLES = {
+  architect: '【架构师视角】请从整体架构、技术选型、模块划分、数据流/接口设计的角度分析这个任务:',
+  executor: '【执行者视角】请从实现路径、代码组织、关键依赖、潜在技术难点的角度分析这个任务:',
+  reviewer: '【审查者视角】请从方案完整性、合规性、安全风险、边界情况、可维护性的角度审查这个任务:',
+  coordinator: '【协调者视角】请从跨模块一致性、依赖关系、整体可行性、可整合性的角度分析这个任务:',
+};
+
+/**
  * 任务依赖图
  */
 class TaskDependencyGraph {
@@ -20,6 +32,8 @@ class TaskDependencyGraph {
       type: task.type,
       estimatedComplexity: task.estimatedComplexity || 1,
       dependencies: new Set(task.dependencies || []),
+      // 透传 _isFallback,fallback 展开依赖此标记
+      _isFallback: task._isFallback === true,
     });
   }
 
@@ -146,8 +160,14 @@ class TaskDistributor {
    * 分解主任务为子任务
    */
   async _decomposeTask(taskDescription, context = {}) {
-    // 基于关键词的任务分解模式
+    // 研究/调研类直接 fallback,避免误命中 /开发/ pattern
     const decompositionPatterns = [
+      // 高优先级:研究/调研/分析类 → 不展开,直接 fallback 让 _assignTasksToAgents 按 agent 角色展开
+      // 必须放最前面,避免被后续"开发/实现"等 pattern 抢先匹配
+      {
+        pattern: /研究|调研|探索|分析|多角度|可行性|方案设计|调研报告|可行性研究/,
+        tasks: 'FALLBACK',
+      },
       {
         pattern: /需求分析|分析需求|了解需求/,
         tasks: [
@@ -203,6 +223,10 @@ class TaskDistributor {
     // 识别分解模式
     for (const { pattern, tasks: patternTasks } of decompositionPatterns) {
       if (pattern.test(taskDescription)) {
+        // 研究/调研类直接走 fallback,不再展开
+        if (patternTasks === 'FALLBACK') {
+          break;
+        }
         for (const task of patternTasks) {
           tasks.push({
             id: `${task.id}_${taskId++}`,
@@ -216,14 +240,15 @@ class TaskDistributor {
       }
     }
 
-    // 如果没有匹配任何模式，创建默认子任务
+    // 默认 _isFallback=true,按 agent 角色展开为 N 个角度化副本,避免空转+LLM 跑偏
     if (tasks.length === 0) {
       tasks.push({
         id: 'main_task',
-        type: TaskTypes.IMPLEMENT,
+        type: TaskTypes.EXPLORE,  // 改 EXPLORE:研究/调研类默认行为,EXPLORE 允许 architect 匹配
         description: taskDescription,
         estimatedComplexity: 1,
         dependencies: [],
+        _isFallback: true,  // 标记 _assignTasksToAgents 按 agent 数量展开
       });
     }
 
@@ -294,26 +319,44 @@ class TaskDistributor {
   _assignTasksToAgents(tasks, agents, parallelGroups) {
     const assignments = {};
 
+    // 关键:兼容 agent.agentId / agent.id 两种字段名(mock 数据有时用 id)
+    const getAgentId = (agent) => agent.agentId || agent.id;
+
     // 初始化每个Agent的任务列表
     for (const agent of agents) {
-      assignments[agent.agentId] = [];
+      assignments[getAgentId(agent)] = [];
     }
 
     // 按Agent角色分配
     for (const group of parallelGroups) {
       for (const task of group) {
+        // _isFallback 任务按 agent 数量展开为角色视角副本,避免空转+LLM 跑偏
+        if (task._isFallback) {
+          for (const agent of agents) {
+            const agentId = getAgentId(agent);
+            const angleHint = FALLBACK_ROLE_ANGLES[agent.role] || FALLBACK_ROLE_ANGLES.executor;
+            const angleTask = {
+              ...task,
+              id: `${task.id}_${agent.role}_${agentId.slice(0, 4)}`,
+              description: `${angleHint}\n\n${task.description}`,
+            };
+            assignments[agentId].push(angleTask);
+          }
+          continue;
+        }
+
         const suitableAgents = this._findSuitableAgents(task, agents);
 
         if (suitableAgents.length === 0) {
           // 没有合适角色，降级到executor
           const fallbackAgent = this._findLeastLoadedAgent(agents, assignments);
           if (fallbackAgent) {
-            assignments[fallbackAgent.agentId].push(task);
+            assignments[getAgentId(fallbackAgent)].push(task);
           }
         } else {
           // 选择负载最轻的Agent
           const selectedAgent = this._selectLeastLoaded(suitableAgents, assignments);
-          assignments[selectedAgent.agentId].push(task);
+          assignments[getAgentId(selectedAgent)].push(task);
         }
       }
     }
@@ -358,24 +401,29 @@ class TaskDistributor {
   }
 
   /**
-   * 计算优先级
+   * 计算每个 Agent 的执行优先级
+   * @param {Object} assignments - agentId -> tasks[] 分配表
+   * @returns {Object<agentId, number>} agentId -> TaskPriority 数字（0/1/2/3）
+   * @description 返回 TaskPriority 枚举的数字值，与 constants.js 保持类型一致，
+   *              避免与字符串混用导致比较/排序/默认值回退时的类型错误。
    */
   _calculatePriorities(assignments) {
     const priorities = {};
 
     for (const [agentId, tasks] of Object.entries(assignments)) {
-      // 基于任务复杂度计算优先级
+      // 基于任务复杂度计算总复杂度
       const totalComplexity = tasks.reduce(
         (sum, task) => sum + (task.estimatedComplexity || 1),
         0
       );
 
       // 复杂度越高，优先级越高（数字越小）
+      // 显式使用 TaskPriority 数字常量，避免被误读为字符串
       priorities[agentId] = totalComplexity > 5
-        ? TaskPriority.HIGH
+        ? TaskPriority.HIGH      // 1
         : totalComplexity > 2
-          ? TaskPriority.NORMAL
-          : TaskPriority.LOW;
+          ? TaskPriority.NORMAL  // 2
+          : TaskPriority.LOW;    // 3
     }
 
     return priorities;

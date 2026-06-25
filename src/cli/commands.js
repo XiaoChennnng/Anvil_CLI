@@ -69,6 +69,11 @@ const COMMANDS = {
     description: '查看 MCP 服务器状态',
     usage: '/mcp',
   },
+  team: {
+    name: '/team',
+    description: '团队协作模式 (status/dissolve/panel/help)',
+    usage: '/team [status | dissolve | panel | help]',
+  },
 };
 
 function isCommand(input) {
@@ -408,6 +413,81 @@ Anvil — AI-driven CLI Programming Assistant
         output += '\n';
       }
       return { handled: true, response: output.trim() };
+    }
+
+    case 'team': {
+      if (!chatEngine) {
+        return { handled: true, response: '[失败]ChatEngine 未初始化' };
+      }
+      const subCmd = (args[0] || 'status').toLowerCase();
+
+      // 子命令: dissolve — 解散当前团队
+      if (subCmd === 'dissolve') {
+        if (!chatEngine.teamManager) {
+          return { handled: true, response: '[列表] 当前无团队' };
+        }
+        if (typeof chatEngine._dissolveTeam !== 'function') {
+          return { handled: true, response: '[失败]ChatEngine 不支持解散团队' };
+        }
+        const result = await chatEngine._dissolveTeam();
+        if (result.success) {
+          return { handled: true, response: '[完成]团队已解散' };
+        }
+        return { handled: true, response: `[失败]解散团队失败: ${result.error || result.message || '未知错误'}` };
+      }
+
+      // 子命令: panel — 打开 Team Panel modal(M4)
+      // 返回 action 标记,由 cli/index.js 路由到 tui.openTeamPanel()
+      if (subCmd === 'panel') {
+        return { handled: true, action: 'open_team_panel' };
+      }
+
+      // 子命令: help — 显示帮助
+      if (subCmd === 'help') {
+        return {
+          handled: true,
+          response: '团队协作模式 (Team Mode)\n\n'
+            + '  /team status    显示当前团队状态（默认）\n'
+            + '  /team panel     打开团队事件详情面板(M4)\n'
+            + '  /team dissolve  解散当前团队\n'
+            + '  /team help      显示本帮助\n\n'
+            + '提示: Team Mode 由 AI 在判断任务复杂度时自动启动,'
+            + '可通过本命令查看状态或手动解散。\n'
+            + '快捷键 Ctrl+T 可直接切换团队事件面板。',
+        };
+      }
+
+      // 子命令: status（默认） — 显示当前团队状态
+      if (subCmd === 'status') {
+        if (!chatEngine.teamManager || typeof chatEngine.teamManager.getStatus !== 'function') {
+          return { handled: true, response: '[列表] 当前无团队' };
+        }
+        const status = chatEngine.teamManager.getStatus();
+        if (!status || status.agentCount === 0) {
+          return { handled: true, response: '[列表] 当前无团队' };
+        }
+        const createdAt = status.createdAt ? new Date(status.createdAt).toLocaleString() : '未知';
+        let output = `[状态] 团队状态\n\n`
+          + `  团队ID: ${status.teamId || '未知'}\n`
+          + `  状态: ${status.state || '未知'}\n`
+          + `  创建时间: ${createdAt}\n`
+          + `  Agent 数: ${status.agentCount}\n\n`;
+        if (status.agents && status.agents.length > 0) {
+          output += '  Agent 列表:\n';
+          for (const a of status.agents) {
+            const role = a.role || 'unknown';
+            const st = a.status || 'unknown';
+            output += `    • [${role}] ${a.agentId} - ${st}\n`;
+          }
+        }
+        return { handled: true, response: output.trim() };
+      }
+
+      // 未知子命令
+      return {
+        handled: true,
+        response: `[失败]未知子命令: ${subCmd}\n\n用法:\n  /team status\n  /team dissolve\n  /team help`,
+      };
     }
 
     case 'skills': {

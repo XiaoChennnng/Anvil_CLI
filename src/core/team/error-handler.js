@@ -15,6 +15,7 @@ class TeamErrorHandler {
 
     // 错误统计
     this.errorStats = new Map();  // taskId -> error count
+    this.maxErrorStatsSize = options.maxErrorStatsSize || 100;  // 错误统计 Map 上限
   }
 
   /**
@@ -60,13 +61,17 @@ class TeamErrorHandler {
   _handleAgentCrash(error, context, errorCount) {
     const { teamManager, originalTask } = context;
 
+    // 从 teamManager.agents 查找实际角色，避免硬编码 executor
+    const agentInfo = teamManager?.agents?.get(context.agentId);
+    const actualRole = agentInfo?.role || context.role || 'executor';
+
     if (errorCount < this.maxRetries) {
       // 重试：创建新的Agent
       return {
         strategy: FallbackStrategy.RETRY,
         action: async () => {
           const newAgent = await teamManager.respawnAgent(context.agentId, {
-            role: this._getAgentRole(context.agentId),
+            role: actualRole,
           });
           return { shouldRetry: true, newAgent };
         },
@@ -215,6 +220,12 @@ class TeamErrorHandler {
   _recordError(taskId) {
     const count = (this.errorStats.get(taskId) || 0) + 1;
     this.errorStats.set(taskId, count);
+    // 超过上限时清理最旧条目,避免长期运行内存无限增长
+    if (this.errorStats.size > this.maxErrorStatsSize) {
+      const oldestKey = this.errorStats.keys().next().value;
+      this.errorStats.delete(oldestKey);
+      this.logger?.warn(`errorStats 已达上限 ${this.maxErrorStatsSize},清理最旧条目 ${oldestKey}`);
+    }
   }
 
   _getRetryDelay(attemptIndex) {
@@ -222,6 +233,8 @@ class TeamErrorHandler {
   }
 
   _getAgentRole(agentId) {
+    // 子类可重写：从 teamManager.agents 查询实际角色
+    // 当前在 context 中由调用方传入 agentId + teamManager，查找在 handleError 中完成
     return 'executor';
   }
 

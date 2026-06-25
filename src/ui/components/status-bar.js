@@ -33,12 +33,30 @@ class StatusBar {
     this.infoMessage = null;
     this._infoMessageTime = 0;
 
+    // 关键:Team 子 Agent 活动临显(M3)
+    // 用户能看到"现在 X agent 在思考/输出",1 行临时显示
+    // 优先级:主 Agent thinking > teamActivity > infoMessage
+    // 3 秒无新事件自动清空(TTL 兜底,正常路径由事件精确驱动)
+    this.teamActivity = null; // { name, status, startedAt }
+    this._teamActivityTimer = null;
+    this.TEAM_ACTIVITY_TTL = 3000;
+
     // Plan Mode 标识
     this.planMode = false;
+
+    // Team Mode 标识
+    this.teamMode = false;
+    this.teamAgentCount = 0;
   }
 
   setPlanMode(enabled) {
     this.planMode = enabled;
+  }
+
+  // 设置 Team Mode 状态 + agent 数（供 widget 显示）
+  setTeamMode(enabled, agentCount = 0) {
+    this.teamMode = !!enabled;
+    this.teamAgentCount = agentCount;
   }
 
   setPendingContext(hasPending) {
@@ -98,6 +116,61 @@ class StatusBar {
     this._infoMessageTime = Date.now();
   }
 
+  /**
+   * 设置 Team 子 Agent 活动临显(M3)
+   * status: 'thinking' | 'streaming' | 'done' | 'failed'
+   * 3s TTL 兜底,正常路径由 agent_completed/team_mode_end 事件显式 clear
+   */
+  setTeamActivity(name, status = 'thinking') {
+    this.teamActivity = {
+      name: name || 'agent',
+      status,
+      startedAt: Date.now(),
+    };
+    // 清除旧 timer
+    if (this._teamActivityTimer) {
+      clearTimeout(this._teamActivityTimer);
+    }
+    // TTL 兜底
+    this._teamActivityTimer = setTimeout(() => {
+      this.teamActivity = null;
+    }, this.TEAM_ACTIVITY_TTL);
+  }
+
+  /**
+   * 清除 Team 活动临显
+   */
+  clearTeamActivity() {
+    this.teamActivity = null;
+    if (this._teamActivityTimer) {
+      clearTimeout(this._teamActivityTimer);
+      this._teamActivityTimer = null;
+    }
+  }
+
+  /**
+   * 渲染 teamActivity 中间填充区内容
+   * 格式: "▸ researcher [thinking 1.2s]"
+   * 返回 null 表示无活动
+   */
+  _renderTeamActivity(maxLen) {
+    if (!this.teamActivity) {return null;}
+    const elapsed = this._getTeamActivityElapsed();
+    const label = `▸ ${this.teamActivity.name} [${this.teamActivity.status} ${elapsed}]`;
+    if (this._visibleLength(label) > maxLen && maxLen > 3) {
+      return label.substring(0, maxLen - 3) + '...';
+    }
+    return label;
+  }
+
+  _getTeamActivityElapsed() {
+    if (!this.teamActivity?.startedAt) {return '';}
+    const elapsed = Date.now() - this.teamActivity.startedAt;
+    if (elapsed < 1000) {return `${elapsed}ms`;}
+    if (elapsed < 60000) {return `${(elapsed / 1000).toFixed(1)}s`;}
+    return `${Math.floor(elapsed / 60000)}m${Math.floor((elapsed % 60000) / 1000)}s`;
+  }
+
   // 渲染状态栏
   render(model) {
     if (model) {this.model = model;}
@@ -122,6 +195,17 @@ class StatusBar {
     let planModeWidget = '';
     if (this.planMode) {
       planModeWidget = chalk.bgHex(t.colors.primary).hex(t.colors.background).bold(' ⎔ Plan Mode ');
+    }
+
+    // ─── Team Mode Indicator ───
+    let teamModeWidget = '';
+    let teamModeWidth = 0;
+    if (this.teamMode) {
+      const label = this.teamAgentCount > 0
+        ? ` ⫼ Team (${this.teamAgentCount}) `
+        : ' ⫼ Team ';
+      teamModeWidget = chalk.bgHex(t.colors.secondary).hex(t.colors.background).bold(label);
+      teamModeWidth = this._visibleLength(teamModeWidget);
     }
 
     // ─── Cost Widget ───
@@ -171,33 +255,43 @@ class StatusBar {
     // ─── 计算中间 Info 消息区域宽度 ───
     const thinkingWidth = this._visibleLength(thinkingWidget);
     const planModeWidth = this._visibleLength(planModeWidget);
-    const usedWidth = this._visibleLength(helpWidget) + thinkingWidth + planModeWidth + tokenWidgetWidth + 1 + diagWidth + modelWidth;
+    const usedWidth = this._visibleLength(helpWidget) + thinkingWidth + planModeWidth + teamModeWidth + tokenWidgetWidth + 1 + diagWidth + modelWidth;
     const availableWidth = Math.max(0, _width - usedWidth);
 
     // ─── 组装状态栏 ───
     let statusBar = helpWidget;
     if (thinkingWidget) {statusBar += thinkingWidget;}
     statusBar += planModeWidget;
+    statusBar += teamModeWidget;
     statusBar += tokenWidget;
 
     // Info 消息区域（opencode 风格，填充剩余宽度）
     if (availableWidth > 3) {
-      // 检查是否有 info 消息（10s TTL）
-      const hasValidInfo = this.infoMessage && (Date.now() - this._infoMessageTime < (this.infoMessage.ttl || 10000));
-      if (hasValidInfo && this.infoMessage.msg) {
-        let infoBg = t.colors.info;
-        if (this.infoMessage.type === 'warn') {infoBg = t.colors.warning;}
-        if (this.infoMessage.type === 'error') {infoBg = t.colors.error;}
-        // 截断消息到可用宽度
-        let msg = this.infoMessage.msg;
-        const maxMsgLen = availableWidth - 4; // 留边距
-        if (this._visibleLength(msg) > maxMsgLen && maxMsgLen > 3) {
-          msg = msg.substring(0, maxMsgLen - 3) + '...';
-        }
-        statusBar += chalk.bgHex(infoBg).hex(t.colors.background)(` ${msg}${' '.repeat(Math.max(0, availableWidth - this._visibleLength(msg) - 2))} `);
+      // 优先级:主 Agent thinking > teamActivity > infoMessage
+      // teamActivity 是用户主动关心的事件(子 Agent 活动),优先级高于系统 info
+      const teamActivityText = this._renderTeamActivity(availableWidth - 4);
+      if (teamActivityText) {
+        // teamActivity 用 info 蓝底色 + 加粗,提示"子 Agent 正在干活"
+        const padLen = Math.max(0, availableWidth - this._visibleLength(teamActivityText) - 2);
+        statusBar += chalk.bgHex(t.colors.info).hex(t.colors.background).bold(` ${teamActivityText}${' '.repeat(padLen)} `);
       } else {
-        // 填充空白
-        statusBar += chalk.bgHex(t.colors.backgroundSecondary).hex(t.colors.text)(' '.repeat(availableWidth));
+        // 检查是否有 info 消息（10s TTL）
+        const hasValidInfo = this.infoMessage && (Date.now() - this._infoMessageTime < (this.infoMessage.ttl || 10000));
+        if (hasValidInfo && this.infoMessage.msg) {
+          let infoBg = t.colors.info;
+          if (this.infoMessage.type === 'warn') {infoBg = t.colors.warning;}
+          if (this.infoMessage.type === 'error') {infoBg = t.colors.error;}
+          // 截断消息到可用宽度
+          let msg = this.infoMessage.msg;
+          const maxMsgLen = availableWidth - 4; // 留边距
+          if (this._visibleLength(msg) > maxMsgLen && maxMsgLen > 3) {
+            msg = msg.substring(0, maxMsgLen - 3) + '...';
+          }
+          statusBar += chalk.bgHex(infoBg).hex(t.colors.background)(` ${msg}${' '.repeat(Math.max(0, availableWidth - this._visibleLength(msg) - 2))} `);
+        } else {
+          // 填充空白
+          statusBar += chalk.bgHex(t.colors.backgroundSecondary).hex(t.colors.text)(' '.repeat(availableWidth));
+        }
       }
     }
 

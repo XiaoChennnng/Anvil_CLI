@@ -49,7 +49,7 @@ class Editor {
     const borderLine = t.textMuted('─'.repeat(_width));
     output += `\x1b[${editorStartRow};1H\x1b[2K${borderLine}`;
 
-    // 输入提示符 ">"（使用清除到行尾确保旧内容被清除）
+    // 输入提示符 ">",用 EOL 清除确保旧内容被擦除
     const promptContent = chalk.hex(t.colors.primary).bold(' >') + (this.currentInput ? ' ' + this.currentInput : '');
     output += `\x1b[${editorStartRow + 1};1H\x1b[2K${promptContent}`;
 
@@ -61,7 +61,7 @@ class Editor {
   }
 
   get promptCol() {
-    // 前缀 = " >"(2字符) + 空格分隔符(1字符) = 3 字符，下一字符从第 4 列开始
+    // 前缀宽 3 字符,内容从第 4 列开始
     return 4;
   }
 

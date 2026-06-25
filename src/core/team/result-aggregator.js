@@ -25,17 +25,17 @@ class ResultAggregator {
 
     const startTime = Date.now();
 
-    // 1. 分类结果
+    // 1. 分类结果（_mergeResults 内部需要 category 结构）
     const categorizedResults = this._categorizeResults(results);
 
     // 2. 检测冲突
     const conflicts = this._detectConflicts(categorizedResults);
 
-    // 3. 解决冲突
-    const resolvedResults = this._resolveConflicts(conflicts);
+    // 3. 解决冲突（得到替换项列表）
+    const resolved = this._resolveConflicts(conflicts);
 
-    // 4. 合并结果
-    const mergedOutput = this._mergeResults(resolvedResults, this.defaultStrategy);
+    // 4. 合并结果（传入 categorizedResults + resolvedItems 以便内部替换冲突项）
+    const mergedOutput = this._mergeResults(categorizedResults, this.defaultStrategy, resolved.resolvedItems);
 
     // 5. 验证任务完成度
     const completionStatus = this._verifyCompletion(task, mergedOutput, fingerprint);
@@ -96,13 +96,11 @@ class ResultAggregator {
   _detectConflicts(categorizedResults) {
     const conflicts = [];
 
-    // 检测代码冲突
+    // 按签名判重,保留原对象以便冲突解决时回填 agentId/content
     if (categorizedResults.code.length > 1) {
-      const codeSignatures = this._extractCodeSignatures(
-        categorizedResults.code.map(r => r.content)
-      );
-
-      const duplicates = this._findDuplicates(codeSignatures);
+      const codeItems = categorizedResults.code.map(r => ({ ...r, category: 'code' }));
+      const codeSignatures = codeItems.map(r => this._extractCodeSignature(r.content));
+      const duplicates = this._findDuplicatesByKey(codeItems, codeSignatures);
       if (duplicates.length > 0) {
         conflicts.push({
           type: 'code_conflict',
@@ -113,13 +111,11 @@ class ResultAggregator {
       }
     }
 
-    // 检测设计冲突
+    // 检测设计冲突（同上）
     if (categorizedResults.design.length > 1) {
-      const designKeys = categorizedResults.design.map(r =>
-        this._extractDesignKey(r.content)
-      );
-
-      const duplicates = this._findDuplicates(designKeys);
+      const designItems = categorizedResults.design.map(r => ({ ...r, category: 'design' }));
+      const designKeys = designItems.map(r => this._extractDesignKey(r.content));
+      const duplicates = this._findDuplicatesByKey(designItems, designKeys);
       if (duplicates.length > 0) {
         conflicts.push({
           type: 'design_conflict',
@@ -175,36 +171,76 @@ class ResultAggregator {
 
   /**
    * 合并结果
+   * @param {Object} categorizedResults 分类后的结果（含 code/design/review/coordination/other）
+   * @param {string} strategy 合并策略
+   * @param {Array} [resolvedItems] 已解决的冲突项（用于替换原冲突项）
    */
-  _mergeResults(categorizedResults, strategy) {
+  _mergeResults(categorizedResults, strategy, resolvedItems) {
     let content = '';
     let artifacts = {};
 
-    // 处理无冲突情况：_resolveConflicts 返回 { resolved: true } 时直接返回空结果
-    if (categorizedResults.resolved === true && !categorizedResults.resolvedItems) {
-      return { content: '', artifacts };
-    }
+    // 合并 resolvedItems 回 categorizedResults,统一处理
+    const merged = this._applyResolvedItems(categorizedResults, resolvedItems);
 
     switch (strategy) {
       case AggregationStrategy.SEQUENTIAL:
-        content = this._mergeSequential(categorizedResults);
+        content = this._mergeSequential(merged);
         break;
 
       case AggregationStrategy.PARALLEL_OVERLAY:
-        content = this._mergeParallelOverlay(categorizedResults);
+        content = this._mergeParallelOverlay(merged);
         break;
 
       case AggregationStrategy.HIERARCHICAL:
-        const hierarchical = this._mergeHierarchical(categorizedResults);
+        const hierarchical = this._mergeHierarchical(merged);
         content = hierarchical.content;
         artifacts = hierarchical.artifacts;
         break;
 
+      // TODO: CONSENSUS 当前为死代码（未被 manager.js 调用），保留枚举以备后用
+      case AggregationStrategy.CONSENSUS:
+        content = this._mergeSequential(merged);
+        break;
+
       default:
-        content = this._mergeSequential(categorizedResults);
+        content = this._mergeSequential(merged);
     }
 
     return { content, artifacts };
+  }
+
+  /**
+   * 把 resolvedItems 合并回 categorizedResults 中对应 category
+   * resolvedItems 中每项需包含 agentId/content/category 字段
+   */
+  _applyResolvedItems(categorizedResults, resolvedItems) {
+    if (!resolvedItems || resolvedItems.length === 0) {
+      return categorizedResults;
+    }
+
+    // 浅拷贝分类桶，避免污染原数据
+    const merged = {
+      code: [...categorizedResults.code],
+      design: [...categorizedResults.design],
+      review: [...categorizedResults.review],
+      coordination: [...categorizedResults.coordination],
+      other: [...categorizedResults.other],
+    };
+
+    for (const item of resolvedItems) {
+      if (!item || !item.category) {continue;}
+      const bucket = merged[item.category];
+      if (!bucket) {continue;}
+      // 用解决的版本替换原冲突项（按 agentId 去重）
+      const idx = bucket.findIndex(b => b.agentId === item.agentId);
+      if (idx >= 0) {
+        bucket[idx] = { ...bucket[idx], ...item };
+      } else {
+        bucket.push(item);
+      }
+    }
+
+    return merged;
   }
 
   /**
@@ -342,11 +378,13 @@ class ResultAggregator {
   }
 
   _extractCodeSignatures(contents) {
-    return contents.map(c => {
-      // 提取函数/类名作为签名
-      const matches = c.match(/(?:function|class|const|def)\s+(\w+)/g);
-      return matches ? matches.join('|') : c.slice(0, 100);
-    });
+    return contents.map(c => this._extractCodeSignature(c));
+  }
+
+  _extractCodeSignature(content) {
+    // 提取函数/类名作为签名
+    const matches = content.match(/(?:function|class|const|def)\s+(\w+)/g);
+    return matches ? matches.join('|') : content.slice(0, 100);
   }
 
   _extractDesignKey(content) {
@@ -377,6 +415,28 @@ class ResultAggregator {
     for (const item of items) {
       if (!item) {continue;}
       const key = typeof item === 'string' ? item : JSON.stringify(item);
+      if (seen.has(key)) {
+        duplicates.push(item);
+      } else {
+        seen.set(key, true);
+      }
+    }
+
+    return duplicates;
+  }
+
+  /**
+   * 按给定的 keys 数组判重，返回对应位置的 items 中重复项（保留所有重复条目以便冲突解决）
+   */
+  _findDuplicatesByKey(items, keys) {
+    const seen = new Map();
+    const duplicates = [];
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const key = keys[i];
+      if (!item || key === undefined || key === null || key === '') {continue;}
+
       if (seen.has(key)) {
         duplicates.push(item);
       } else {

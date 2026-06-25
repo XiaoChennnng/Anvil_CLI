@@ -24,10 +24,23 @@ class Sidebar {
 
     this.todos = [];
 
+    // Team Mode 状态(由 chatEngine 事件驱动)
+    this.teamStatus = {
+      active: false,
+      teamId: null,
+      agentCount: 0,
+      currentState: null,
+    };
+    this.teamEvents = []; // 最近 N 条 team 事件(用于侧栏显示进度)
+
+    // 每活跃 agent 一张状态卡(name/role/status/startedAt/lastChunkAt/chunkPreview)
+    this.agentStates = new Map();
+
     this._contextInfoCache = null;
     this._contextBreakdownCache = null;
     this._messagesVersion = 0;
     this._todosVersion = 0;
+    this._teamEventsVersion = 0;
 
     this._progressAnimation = {
       active: false,
@@ -37,6 +50,11 @@ class Sidebar {
       duration: 0,
     };
     this._progressAnimationTimer = null;
+
+    // Agent 流式 chunk 累加器:key=agentId, value={thinking:'',content:''}
+    // 避免 subagent_thinking/content 逐 token 刷出几百条碎词事件
+    // 同 agent 同类流式事件只保留一条记录,data.chunk 持续追加
+    this._accumulator = new Map();
   }
 
   setChatEngine(chatEngine) {
@@ -77,6 +95,219 @@ class Sidebar {
     this.todos = todos || [];
   }
 
+  // 设置 Team Mode 整体状态(由 team_mode_start/end 事件触发)
+  setTeamStatus(status) {
+    this.teamStatus = { ...this.teamStatus, ...status };
+    this._teamEventsVersion++;
+  }
+
+  // 接收 team_* 事件,更新 sidebar 显示
+  handleTeamEvent(eventName, data) {
+    // 用 _accumulator 按 agentId 合并,避免逐 token 刷出碎词
+    const maxEvents = 500;
+
+    // tool_calls/tool_result 特殊处理:存成结构化数据供 team-panel 渲染
+    if ((eventName === 'tool_calls' || eventName === 'tool_result') && data?._subAgent) {
+      this.teamEvents.unshift({
+        event: eventName,
+        data: {
+          agentId: data.agentId,
+          toolCall: data.toolCall,
+          toolName: data.name,
+          args: data.args,
+          result: data.result,
+          _subAgent: true,
+        },
+        _subAgent: true,
+        time: Date.now(),
+      });
+    } else if ((eventName === 'thinking' || eventName === 'content') && data?.chunk && data?._subAgent) {
+      // Step 1: 累加到 accumulator
+      let acc = this._accumulator.get(data.agentId);
+      if (!acc) {
+        acc = { thinking: '', content: '' };
+        this._accumulator.set(data.agentId, acc);
+      }
+      if (eventName === 'thinking') {
+        acc.thinking += data.chunk;
+      } else {
+        acc.content += data.chunk;
+      }
+
+      // Step 2: 在 teamEvents 中查找同 agent 同类型事件,更新或新建
+      const fullText = eventName === 'thinking' ? acc.thinking : acc.content;
+      const existingIdx = this.teamEvents.findIndex(
+        e => e.event === eventName && e.data?.agentId === data.agentId && e._subAgent
+      );
+      if (existingIdx >= 0) {
+        // 更新已有事件的内容(直接替换 data 引用,保留原位置和时间戳)
+        this.teamEvents[existingIdx] = {
+          ...this.teamEvents[existingIdx],
+          data: { agentId: data.agentId, chunk: fullText },
+          _subAgent: true,
+        };
+      } else {
+        this.teamEvents.unshift({
+          event: eventName,
+          data: { agentId: data.agentId, chunk: fullText },
+          _subAgent: true,
+          time: Date.now(),
+        });
+      }
+    } else {
+      // 非流式事件:直接入队
+      this.teamEvents.unshift({ event: eventName, data, time: Date.now() });
+      // agent_completed/terminated 时清理累加器
+      if ((eventName === 'agent_completed' || eventName === 'agent_terminated') && data?.agentId) {
+        this._accumulator.delete(data.agentId);
+      }
+    }
+
+    if (this.teamEvents.length > maxEvents) {
+      this.teamEvents = this.teamEvents.slice(0, maxEvents);
+    }
+
+    // 关键:同步维护 agentStates Map(M2 会用它做 agent 卡片渲染)
+    // per-agent 150ms 节流:subagent_thinking 高频 chunk 不会每帧都触发 version++
+    this._updateAgentState(eventName, data);
+
+    // 根据事件类型更新聚合状态
+    switch (eventName) {
+      case 'team_created':
+        this.teamStatus = {
+          active: true,
+          teamId: data?.teamId || this.teamStatus.teamId,
+          agentCount: 0,
+          currentState: 'planning',
+        };
+        // 重置 agentStates(新团队)
+        this.agentStates.clear();
+        break;
+      case 'state_changed':
+        if (data?.to) {this.teamStatus.currentState = data.to;}
+        break;
+      case 'agent_created':
+      case 'agent_respawned':
+        this.teamStatus.agentCount = (this.teamStatus.agentCount || 0) + 1;
+        break;
+      case 'team_dissolved':
+        this.teamStatus.active = false;
+        // 保留 agentStates 几秒供 M4 modal 历史展示,实际 dispose 由调用方决定
+        break;
+      default:
+        break;
+    }
+    this._teamEventsVersion++;
+  }
+
+  /**
+   * 根据事件更新 agentStates Map
+   * 内部方法,被 handleTeamEvent 调用
+   * 路由表(对应 plan A.1):
+   *   agent_created / agent_respawned → 新建 idle 卡片
+   *   agent_started → thinking
+   *   subagent_thinking 帧 → thinking + chunkPreview(150ms 节流)
+   *   subagent_content 帧 → streaming + chunkPreview(150ms 节流)
+   *   agent_completed → done
+   *   agent_terminated → failed
+   *   team_degraded → 在 active agents 标 degraded 标志
+   */
+  _updateAgentState(eventName, data) {
+    // team_degraded 必须放在 agentId 检查之前,否则 case 被吞掉
+    if (eventName === 'team_degraded') {
+      for (const state of this.agentStates.values()) {
+        if (state.status === 'thinking' || state.status === 'streaming') {
+          state.degraded = true;
+        }
+      }
+      return;
+    }
+
+    const agentId = data?.agentId;
+    if (!agentId) {return;}
+
+    switch (eventName) {
+      case 'agent_created':
+      case 'agent_respawned': {
+        this.agentStates.set(agentId, {
+          name: agentId.slice(-4),
+          role: data?.role || 'executor',
+          status: 'idle',
+          startedAt: Date.now(),
+          lastChunkAt: 0,
+          chunkPreview: '',
+          degraded: false,
+        });
+        break;
+      }
+      case 'agent_started': {
+        const state = this.agentStates.get(agentId) || {
+          name: agentId.slice(-4),
+          lastChunkAt: 0,
+          chunkPreview: '',
+          degraded: false,
+        };
+        state.role = data?.role || state.role;
+        state.status = 'thinking';
+        state.startedAt = state.startedAt || Date.now();
+        this.agentStates.set(agentId, state);
+        break;
+      }
+      case 'thinking':
+      case 'content': {
+        const state = this.agentStates.get(agentId);
+        if (!state) {break;}
+        const chunk = data?.chunk || '';
+        const newStatus = eventName === 'thinking' ? 'thinking' : 'streaming';
+
+        // per-agent 150ms 节流:高频 chunk 仅更新 preview,不触发 version++
+        // 老逻辑:每个 chunk 都触发重绘,sidebar 帧率爆炸
+        const now = Date.now();
+        if (now - state.lastChunkAt < 150) {
+          state.chunkPreview = chunk.slice(-30);
+          return; // 仅更新数据,version 留给下次节流窗口到期
+        }
+        state.lastChunkAt = now;
+        state.chunkPreview = chunk.slice(-30);
+        state.status = newStatus;
+        break;
+      }
+      case 'agent_completed': {
+        const state = this.agentStates.get(agentId);
+        if (state) {state.status = data?.success === false ? 'failed' : 'done';}
+        break;
+      }
+      case 'agent_terminated': {
+        const state = this.agentStates.get(agentId);
+        if (state) {state.status = 'failed';}
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  /**
+   * 暴露给 team-panel modal 用:返回当前所有 agent 的事件日志
+   * 不限条数,team-panel 自己管理滚动
+   */
+  getFullEventLog() {
+    return this.teamEvents.map(e => ({
+      ...e,
+      agentName: e.data?.agentId ? e.data.agentId.slice(-4) : null,
+    }));
+  }
+
+  /**
+   * 暴露给 team-panel modal 用:返回当前所有 agent 状态快照
+   */
+  getAgentStatesSnapshot() {
+    return Array.from(this.agentStates.entries()).map(([id, s]) => ({
+      agentId: id,
+      ...s,
+    }));
+  }
+
   setSessionTitle(title) {
     this.sessionTitle = title || 'New Session';
   }
@@ -92,6 +323,24 @@ class Sidebar {
   /**
    * 判断是否为 CJK 双倍宽字符
    */
+  /**
+   * agent 状态图标
+   * idle → ·, thinking → ◐, streaming → ●, done → ✓, failed → ✗
+   * 关键:用 unicode 字符而不是 emoji(emoji 在某些终端会变彩色方块)
+   */
+  _agentStatusIcon(status) {
+    const t = this.theme;
+    switch (status) {
+      case 'thinking': return t.info('◐');
+      case 'streaming': return t.primary('●');
+      case 'done': return t.success('✓');
+      case 'failed': return t.error('✗');
+      case 'idle':
+      default:
+        return t.textMuted('·');
+    }
+  }
+
   _isCJK(char) {
     const code = char.charCodeAt(0);
     return (code >= 0x1100 && code <= 0x115F) || // Hangul Jamo
@@ -123,6 +372,14 @@ class Sidebar {
   render() {
     const { messageStartRow, contentHeight, sidebarWidth, messageWidth } = this.layout;
     const viewportHeight = contentHeight;
+
+    // 关键:计算 team 区最大 agent 行数(viewport - 16 保留给 context/cache/breakdown)
+    // 自适应,窄终端降到 2 行,宽终端可上探到 viewport - 16
+    // 16 = context 区 1 + progress 1 + token 1 + breakdown 4 + files 2 + cache 3 + 间隔 2 + headers 2
+    const teamAgentRows = this.teamStatus.active
+      ? Math.max(2, Math.min(this.agentStates.size || 0, Math.max(2, viewportHeight - 16)))
+      : 0;
+    this._maxAgentRows = teamAgentRows;
 
     // 生成所有行内容
     const lines = [];
@@ -195,6 +452,81 @@ class Sidebar {
       return '';
     }
     line++;
+
+    // ─── Team Mode 区(仅在团队活跃时显示) ───
+    if (this.teamStatus.active) {
+      if (lineIndex === line) {
+        return ` ${t.textMuted('Team Mode')}`;
+      }
+      line++;
+
+      if (lineIndex === line) {
+        const shortId = this.teamStatus.teamId
+          ? this.teamStatus.teamId.slice(-8)
+          : '-';
+        return ` ${t.textMuted('ID:')} ${t.token(shortId)}`;
+      }
+      line++;
+
+      if (lineIndex === line) {
+        return ` ${t.textMuted('Agents:')} ${t.token(String(this.teamStatus.agentCount || 0))}`;
+      }
+      line++;
+
+      if (lineIndex === line) {
+        return ` ${t.textMuted('State:')} ${t.token(this.teamStatus.currentState || 'idle')}`;
+      }
+      line++;
+
+      // 关键:agent 卡片区(替代原来 3 条简化事件名)
+      // 每个 agent 占 1 行,展示 role + status + chunkPreview
+      // 行数自适应:_maxAgentRows 在 render() 入口算出
+      const maxAgentRows = this._maxAgentRows || 0;
+      if (maxAgentRows > 0 && this.agentStates.size > 0) {
+        const agentList = Array.from(this.agentStates.values());
+        for (let i = 0; i < maxAgentRows; i++) {
+          if (lineIndex === line) {
+            if (i < agentList.length) {
+              const s = agentList[i];
+              const statusIcon = this._agentStatusIcon(s.status);
+              const nameRole = `${s.name} ${s.role}`;
+              const degradedMark = s.degraded ? t.warning(' ⚠') : '';
+              // 算剩余宽度给 preview:总宽 - 缩进 - icon - 空格 - nameRole - 空格 - 状态符号
+              const fixed = 2 + 1 + 1 + nameRole.length + 1 + 1 + degradedMark.length;
+              const previewMaxLen = Math.max(0, width - fixed);
+              const preview = this._truncateToWidth(s.chunkPreview || '...', previewMaxLen);
+              return ` ${statusIcon} ${t.text(nameRole)}${degradedMark} ${t.textMuted(preview)}`;
+            }
+            // 占位空行(实际 agent 数 < maxAgentRows 时填空白)
+            return '';
+          }
+          line++;
+        }
+        // "more" 提示行(只在 agent 数超过 maxAgentRows 时显示)
+        if (lineIndex === line) {
+          if (agentList.length > maxAgentRows) {
+            return ` ${t.textMuted('+ ' + (agentList.length - maxAgentRows) + ' more (Ctrl+T 展开)')}`;
+          }
+          return '';
+        }
+        line++;
+      } else {
+        // agentStates 还没数据,降级显示 3 条事件(向后兼容)
+        const recentEvents = this.teamEvents.slice(0, 3);
+        for (const ev of recentEvents) {
+          if (lineIndex === line) {
+            const label = ev.event.replace(/^(agent|team|subagent)_/, '');
+            return ` ${t.textMuted('› ' + label)}`;
+          }
+          line++;
+        }
+      }
+
+      if (lineIndex === line) {
+        return '';
+      }
+      line++;
+    }
 
     // ─── 上下文状况区 ───
     if (lineIndex === line) {

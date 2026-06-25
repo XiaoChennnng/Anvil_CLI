@@ -33,7 +33,7 @@
 - **网页抓取**：URL → 正文提取，三模式（article / text / html）
 - **Todo 管理**：任务跟踪、列表、清空、完成检测
 - **MCP 协议**：动态添加/移除外部工具
-- **团队协作**：多 Agent 并行，自动任务分解与结果汇总
+- **团队协作**：多 Agent 串行协作，自动任务分解与结果汇总
 - **技能系统**：自定义 slash command，启动时扫描 `.anvil/skills/`
 
 ### 用户体验
@@ -131,20 +131,21 @@ npx anvil -d ./project      # 临时使用（无需全局安装）
 | `/undo` / `/redo`                    | 撤销 / 重做      |
 | `/mcp`                               | 查看 MCP 状态    |
 | `/skills`                            | 查看已加载 Skills |
-| `/team`                              | 团队协作模式       |
+| `/team`                              | 团队协作模式（`/team status/dissolve/help`）|
 
 ### 快捷键
 
-| 按键                    | 作用      |
-| --------------------- | ------- |
-| `Enter`               | 发送      |
-| `Ctrl+J`              | 换行      |
-| `↑` / `↓`             | 浏览历史    |
-| `Ctrl+C`              | 中断回复    |
-| `Ctrl+D`              | 退出      |
-| `Ctrl+U`              | 清空输入    |
-| `Home` / `End`        | 行首 / 行尾 |
-| `PageUp` / `PageDown` | 翻页      |
+| 按键                    | 作用                              |
+| --------------------- | ------------------------------- |
+| `Enter`               | 发送                              |
+| `Ctrl+J`              | 换行                              |
+| `↑` / `↓`             | 浏览历史                            |
+| `Ctrl+C`              | 中断回复                            |
+| `Ctrl+D`              | 退出                              |
+| `Ctrl+U`              | 清空输入                            |
+| `Ctrl+T`              | 切换团队事件详情面板（Team Mode 运行时）         |
+| `Home` / `End`        | 行首 / 行尾                         |
+| `PageUp` / `PageDown` | 翻页（或在 Team Panel 内滚动事件）          |
 
 ## Computer Use
 
@@ -162,6 +163,99 @@ npx anvil -d ./project      # 临时使用（无需全局安装）
 - 所有动作需要 `requiresConfirm` 弹出确认
 - AI 必须先截图分析坐标再执行（避免盲操作）
 - 可随时 `Ctrl+C` 中断操作序列
+
+## Team Mode（团队协作）
+
+AI 主动评估任务复杂度，符合阈值时启动多 Agent 串行协作（按角色顺序逐个执行，避免文件冲突）。每个 Agent 独立上下文 + 工具调用，主 Agent 对执行过程透明。
+
+### 触发方式
+
+- **自动评估**：AI 根据 L5 Team Mode 规则判断任务复杂度，符合阈值时调用 `start_team_task` 工具启动。
+- **手动控制**：通过 `/team` 命令随时查看状态 / 强制解散。
+
+### `/team` 子命令
+
+| 子命令 | 作用 |
+|--------|------|
+| `/team` 或 `/team status` | 显示当前团队状态（teamId / state / agentCount / 各 agent 详情） |
+| `/team panel` | 打开团队事件详情面板（完整 thinking/content/tool_call 流） |
+| `/team dissolve` | 强制解散当前团队（跳过状态机校验，立即终止所有子 Agent） |
+| `/team help` | 显示帮助 |
+
+### 三档可观测性（M1-M5）
+
+团队运行过程中用户**绝对不丢失对子 Agent 进度的掌控**，按详细程度分三档：
+
+1. **侧边栏常驻（基础）** — 团队运行时侧边栏自动展示每个活跃 Agent 的状态卡片：`▸ 0001 executor [thinking] 正在分析模块依赖...`，含角色 + 状态（◐thinking ●streaming ✓done ✗failed）+ 最近 30 字预览。Agent 卡片行数自适应（窄终端 2 行保底，宽终端按 viewport - 16 扩展）。
+2. **状态栏临显（活动提示）** — 状态栏中间填充区显示 `▸ researcher [thinking 1.2s]`，1 行临时标识当前活跃 Agent。优先级：主 Agent thinking > 团队活动 > 系统 info 消息。3 秒 TTL 兜底。
+3. **modal 详情面板（按需展开）** — 输入 `/team panel` 或按 `Ctrl+T` 打开全屏事件日志，含完整 thinking/content/tool_call 时间线，支持 ↑↓ 滚动 / PageUp PageDown / `1-9` 切换 agent 过滤 / `0` 清除过滤 / `Esc` 关闭。**主消息区"暂停滚动，保留显示"**——打开 modal 时不渲染但 `renderedLines` 保留，关闭后从断点继续无内容丢失。
+
+### 团队角色
+
+| 角色 | 职责 |
+|------|------|
+| `architect` | 方案设计 + 架构决策 |
+| `executor` | 具体实现（可多个并行） |
+| `reviewer` | 质量检查 + 代码审查 |
+| `coordinator` | 整合协调 + 任务分发 |
+
+复杂度阈值决定 Agent 数量：
+
+- score < 25：不启动团队（主 Agent 直接处理）
+- 25 ≤ score < 50：1 个 executor
+- 50 ≤ score < 75：1 architect + 2 executor
+- score ≥ 75：4 角色齐全（architect + 2 executor + reviewer + coordinator）
+
+### UI 标识
+
+- **状态栏**：团队运行时显示 `⫼ Team (N)` widget（N 为 agent 数量）+ 中间填充区显示当前活跃 Agent（`▸ researcher [thinking 1.2s]`），与 `⎔ Plan Mode` 标识并列
+- **侧边栏**：Team Mode 状态区显示 ID 末 8 位 / Agents 数量 / State / 每个 agent 1 行状态卡片（角色 + 状态 + 最近 preview），agent 多于可视行数时显示 `+N more (Ctrl+T 展开)`
+- **状态消息**：启动/解散时打印 `[团队模式] 已启动 (N 个 Agent)`
+- **事件详情面板**：`/team panel` 或 `Ctrl+T` 打开全屏事件日志（含完整 thinking/content/tool_call 流，↑↓/PgUp/PgDn 滚动，1-9 过滤 agent，Esc 关闭，主消息区保留不丢内容）
+
+### 关键事件
+
+| 事件 | 触发时机 |
+|------|----------|
+| `team_mode_start` / `team_mode_end` | 团队模式生命周期 |
+| `agent_started` / `agent_completed` | 子 Agent 任务开始/完成 |
+| `state_changed` | 团队状态机转换（IDLE → PLANNING → EXECUTING → AGGREGATING → COMPLETE → DISSOLVED） |
+| `subagent_usage` | 子 Agent token 计费归属主会话 |
+
+### 中断与清理
+
+- **Ctrl+C**：主 Agent 中断会强制解散团队，所有子 Agent 立即终止（不再后台烧 token）
+- **空闲超时**：IDLE 状态下 5 分钟自动解散
+- **单 Agent 超时**：30 分钟硬超时
+- **错误恢复**：Agent 失败时 `errorHandler` 决策回退策略（重试 / 跳过 / 终止）
+
+### 配置（`.anvil/config.json`）
+
+```json
+{
+  "team": {
+    "enabled": true,
+    "complexityThreshold": { "low": 25, "medium": 50, "high": 75 },
+    "dissolveIdleTimeout": 300000,
+    "subagentTimeout": 1800000,
+    "defaultSubagentModel": "deepseek-chat",
+    "maxIterations": 50,
+    "maxRetries": 3,
+    "retryDelays": [1000, 3000, 10000],
+    "heartbeat": { "interval": 30000, "timeout": 90000 }
+  }
+}
+```
+
+### 状态机
+
+```
+IDLE → PLANNING → EXECUTING → AGGREGATING → COMPLETE → DISSOLVED
+  ↑                                              ↓
+  └──────────── force dissolve (interrupt) ──────┘
+```
+
+COMPLETE 是必经节点，所有正常路径都会经过（修复前流程跳过 COMPLETE 是已知 bug）。
 
 ## 架构
 

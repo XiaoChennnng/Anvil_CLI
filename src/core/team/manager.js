@@ -12,6 +12,7 @@ const TeamCommunication = require('./team-communication');
 const TaskStateManager = require('./task-state');
 const TeamErrorHandler = require('./error-handler');
 const { ResearchContext } = require('../research-context');
+const { L0_CORE_IDENTITY } = require('../../ai/prompts');
 const {
   TeamState,
   TaskPriority,
@@ -50,10 +51,18 @@ class TeamManager extends EventEmitter {
 
     // 子Agent管理
     this.agents = new Map();  // agentId -> AgentInfo
+
+    // 通信通道（先于 AgentSpawner 创建,供 spawner 心跳使用）
+    this.communication = new TeamCommunication({
+      teamId: this.teamId,
+      logger: options.logger,
+    });
+
     this.agentSpawner = new AgentSpawner({
       config: options.config,
       logger: options.logger,
       parentEventBus: this,
+      communication: this.communication,  // 注入 communication,使 _agentLoop 可发送心跳
     });
 
     // 任务管理
@@ -67,12 +76,6 @@ class TeamManager extends EventEmitter {
       logger: options.logger,
     });
     this.errorHandler = new TeamErrorHandler({
-      logger: options.logger,
-    });
-
-    // 通信通道
-    this.communication = new TeamCommunication({
-      teamId: this.teamId,
       logger: options.logger,
     });
 
@@ -237,16 +240,68 @@ class TeamManager extends EventEmitter {
     };
   }
 
-  async startTeamTask(task, context = {}) {
+  async startTeamTask(task, context = {}, options = {}) {
+    const force = options.force === true;
+
+    // force=true 时强制解散旧团队再开新团,避免状态机死锁
+    if (force && (this.state === TeamState.PLANNING
+        || this.state === TeamState.EXECUTING
+        || this.state === TeamState.AGGREGATING)) {
+      this.logger?.warn(
+        `force=true 但旧团队还在 ${this.state} 状态,强制解散后开新团`,
+      );
+      // dissolve({force:true}) 后 state=DISSOLVED,下面防御性重置回 IDLE
+      await this.dissolve({ force: true });
+    }
+
     if (this.state !== TeamState.IDLE && this.state !== TeamState.DISSOLVED) {
       throw new Error(`团队当前状态为 ${this.state}，无法启动新任务`);
     }
 
-    // 评估是否需要团队
-    const evaluation = await this.evaluateTaskComplexity(task, context);
+    // 残留 DISSOLVED 归位 IDLE,DISSOLVED→PLANNING 状态机不允许
+    if (this.state === TeamState.DISSOLVED) {
+      this.state = TeamState.IDLE;
+    }
 
-    if (!evaluation.needsTeam) {
-      return { needsTeam: false, reason: evaluation.reason };
+    // force=true:跳过复杂度评估直接启动,用于"用户明确开团但评估分低"场景
+    let evaluation;
+    if (force) {
+      // 角色配置由 suggestedRoles(AI 给) 决定,兜底 1 executor
+      const suggestedRoles = options.suggestedRoles;
+
+      if (Array.isArray(suggestedRoles) && suggestedRoles.length > 0) {
+        // AI 给的角色配置:直接采用
+        evaluation = {
+          complexityScore: 100,
+          needsTeam: true,
+          reason: '用户明确要求启动团队(force=true),AI 指定角色配置',
+          suggestedAgents: suggestedRoles.map(r => ({
+            role: r.role,
+            count: Math.max(1, r.count || 1),
+            description: `${r.role} - AI 指定的角色配置`,
+          })),
+          complexityFactors: { forceStart: true, aiSuggested: true },
+        };
+      } else {
+        // 兜底:1 executor(无法识别或 AI 未给 suggestedRoles 时)
+        // 这是"用户说开团 + AI 没说怎么开"的最小安全配置
+        evaluation = {
+          complexityScore: 100,
+          needsTeam: true,
+          reason: '用户明确要求启动团队(force=true),使用默认 1 executor 配置(建议 AI 调用时传 suggestedRoles 显式指定角色)',
+          suggestedAgents: [
+            { role: 'executor', count: 1, description: '执行者 - 默认配置' },
+          ],
+          complexityFactors: { forceStart: true, defaultConfig: true },
+        };
+      }
+    } else {
+      // 评估是否需要团队
+      evaluation = await this.evaluateTaskComplexity(task, context);
+
+      if (!evaluation.needsTeam) {
+        return { needsTeam: false, reason: evaluation.reason };
+      }
     }
 
     // 生成任务指纹
@@ -268,8 +323,34 @@ class TeamManager extends EventEmitter {
     this._transitionTo(TeamState.EXECUTING);
     const taskAssignments = this._distributeTasks(taskPlan);
 
-    // 并行执行
+    // 并行/串行执行
     const executionResults = await this._executeAllAgents(taskAssignments);
+
+    // agentsSummary 列出每 agent 明细,让主 Agent 知道团队是否真干活
+    // executionResults 兼容 Map / 数组(mock) / 普通对象
+    const agentsSummary = [];
+    const _entries = executionResults instanceof Map
+      ? Array.from(executionResults.entries())
+      : Array.isArray(executionResults)
+        ? executionResults.map(item => [item.agentId || item.id, item])
+        : Object.entries(executionResults || {});
+    for (const [agentId, result] of _entries) {
+      const agentInfo = this.agents.get(agentId);
+      const content = result.content || '';
+      const toolCalls = result.toolCalls || [];
+      agentsSummary.push({
+        agentId,
+        role: agentInfo?.role || result.role || 'unknown',
+        status: result.success ? 'completed' : 'failed',
+        success: result.success !== false,
+        executionTime: result.executionTime || 0,
+        contentLength: content.length,
+        toolCallCount: toolCalls.length,
+        thinkingLength: (result.thinking || '').length,
+        error: result.error || null,
+        fallback: !!result.fallback,
+      });
+    }
 
     // 聚合结果
     this._transitionTo(TeamState.AGGREGATING);
@@ -278,6 +359,53 @@ class TeamManager extends EventEmitter {
       results: executionResults,
       fingerprint: this._taskFingerprint,
     });
+    // 把 agentsSummary 附加到 aggregatedResult 上,让 chatEngine / AI 看到每个 agent 的明细
+    aggregatedResult.agentsSummary = agentsSummary;
+
+    // keyWords 命中率 < 60% 视为空跑,避免 AI 看到 completed 就以为研究完成
+    if (aggregatedResult.completionStatus && !aggregatedResult.completionStatus.taskComplete) {
+      this.logger?.warn('团队任务完成度不足(可能子 agent 全失败或没产出)', {
+        retentionRate: aggregatedResult.completionStatus.retentionRate,
+        keyWordsFound: aggregatedResult.completionStatus.keyWordsFound,
+        keyWordsTotal: aggregatedResult.completionStatus.keyWordsTotal,
+        contentLength: aggregatedResult.content?.length || 0,
+      });
+      this.emit('team_degraded', {
+        teamId: this.teamId,
+        completionStatus: aggregatedResult.completionStatus,
+        agentCount: createdAgents.length,
+        agentsSummary,
+      });
+      aggregatedResult.degraded = true;
+      aggregatedResult.degradedReason =
+        `任务完成度仅 ${(aggregatedResult.completionStatus.retentionRate * 100).toFixed(1)}% ` +
+        `(${aggregatedResult.completionStatus.keyWordsFound}/${aggregatedResult.completionStatus.keyWordsTotal} 关键内容),` +
+        `子 Agent 可能全部失败或没产出。`;
+    } else {
+      // 即便 keyWords 命中率高,也要检查是否所有 agent 都失败或产出为空
+      const successCount = agentsSummary.filter(a => a.success && !a.fallback).length;
+      const failedCount = agentsSummary.filter(a => !a.success).length;
+      const emptyCount = agentsSummary.filter(a => a.success && a.contentLength === 0).length;
+      const totalChars = agentsSummary.reduce((s, a) => s + a.contentLength, 0);
+
+      if (successCount === 0 || (successCount > 0 && emptyCount === successCount && totalChars < 200)) {
+        // 所有 agent 都失败 OR 全部成功但内容都为空(空跑)
+        aggregatedResult.degraded = true;
+        aggregatedResult.degradedReason = `所有 ${agentsSummary.length} 个 agent 全部失败或产出为空(${successCount} 成功,${failedCount} 失败,${emptyCount} 空内容,共 ${totalChars} 字符),团队实际未工作。`;
+        this.emit('team_degraded', {
+          teamId: this.teamId,
+          reason: 'all_failed_or_empty',
+          successCount,
+          failedCount,
+          emptyCount,
+          totalChars,
+          agentsSummary,
+        });
+      }
+    }
+
+    // 走到 COMPLETE 状态机节点（修复原流程跳过 COMPLETE 的 bug）
+    this._transitionTo(TeamState.COMPLETE);
 
     // 清理团队
     await this.dissolve();
@@ -349,29 +477,23 @@ class TeamManager extends EventEmitter {
   }
 
   /**
-   * 并行执行所有Agent任务
+   * 执行所有Agent任务(仅串行)
+   * parallel 模式已移除——多个 agent 同时读写同一批文件会冲突,
+   * 串行按 role 顺序逐个执行,前一个 agent 的结果可通过 result-aggregator 传给下一个。
+   * @param {Map} assignments - agentId -> assignment
    */
   async _executeAllAgents(assignments) {
     const results = new Map();
-    const executionPromises = [];
 
+    this.logger?.info(`串行执行 ${assignments.size} 个 Agent`);
     for (const [agentId, assignment] of assignments) {
-      const promise = this._executeAgent(agentId, assignment)
-        .then(result => ({ agentId, result }))
-        .catch(error => ({ agentId, error: error.message }));
-
-      executionPromises.push(promise);
-    }
-
-    // 并行等待所有Agent完成
-    const settled = await Promise.allSettled(executionPromises);
-
-    for (const outcome of settled) {
-      if (outcome.status === 'fulfilled') {
-        results.set(outcome.value.agentId, outcome.value.result);
-      } else {
-        this.logger?.error('Agent执行异常', outcome.reason);
+      let agentResult;
+      try {
+        agentResult = await this._executeAgent(agentId, assignment);
+      } catch (error) {
+        agentResult = { success: false, error: error.message };
       }
+      results.set(agentId, agentResult);
     }
 
     return results;
@@ -388,6 +510,18 @@ class TeamManager extends EventEmitter {
       throw new Error(`Agent ${agentId} 不存在`);
     }
 
+    // 接入 taskStateManager:追踪任务生命周期
+    try {
+      this.taskStateManager.createTask({
+        id: agentId,
+        description: `Agent ${agentId} (${agent.role}) 执行 ${tasks.length} 个子任务`,
+        priority,
+      });
+      this.taskStateManager.startTask(agentId);
+    } catch (err) {
+      this.logger?.debug('taskStateManager 追踪失败', err.message);
+    }
+
     // 更新状态
     agentInfo.status = 'executing';
     this.agents.set(agentId, agentInfo);
@@ -395,33 +529,149 @@ class TeamManager extends EventEmitter {
     this.emit('agent_started', {
       teamId: this.teamId,
       agentId,
+      role: agent.role,
       taskCount: tasks.length,
     });
 
-    // 生成Agent特定的提示词
-    const systemPrompt = this.agentSpawner.generatePromptForRole(
+    // 前缀 L0 硬性规则,改 L0 子 Agent 自动同步
+    const rolePrompt = this.agentSpawner.generatePromptForRole(
       agent.role,
       tasks,
       this.parentAgent?.contextManager?.getProjectOverviewText?.() || ''
     );
+    const systemPrompt = `${L0_CORE_IDENTITY}\n\n---\n\n## 你的子 Agent 角色\n\n${rolePrompt}`;
 
-    // 启动Agent执行
-    const result = await this.agentSpawner.run(agent, {
-      systemPrompt,
-      tasks,
-      timeout: 30 * 60 * 1000,  // 30分钟
-      priority,
-    });
+    let result;
+    try {
+      // 启动Agent执行
+      result = await this.agentSpawner.run(agent, {
+        systemPrompt,
+        tasks,
+        timeout: 30 * 60 * 1000,  // 30分钟
+        priority,
+      });
 
-    // 更新状态
-    agentInfo.status = result.error ? 'failed' : 'completed';
-    agentInfo.lastResult = result;
-    this.agents.set(agentId, agentInfo);
+      // result 失败与 run throw 统一走 errorHandler 路径
+      if (!result.success) {
+        throw new Error(result.error || 'Agent 执行失败 (无错误详情)');
+      }
+    } catch (error) {
+      // 接入 errorHandler:决策错误回退策略
+      const errorDecision = this.errorHandler.handleError(error, {
+        taskId: agentId,
+        type: 'agent_crash',
+        role: agent.role,
+        teamManager: this,
+        originalTask: tasks,
+      });
+      this.logger?.error(`Agent ${agentId} 执行失败`, {
+        error: error.message,
+        strategy: errorDecision?.strategy,
+      });
+
+      // 真正执行 errorDecision.action,旧代码只 log 不执行
+      let actionResult = null;
+      if (typeof errorDecision?.action === 'function') {
+        try {
+          actionResult = await errorDecision.action();
+        } catch (actionErr) {
+          this.logger?.warn(`errorHandler action 执行失败: ${actionErr.message}`);
+        }
+      }
+
+      // RETRY + respawn 成功:用新 agent 重试一次
+      if (actionResult?.newAgent) {
+        const newAgent = actionResult.newAgent;
+        // 替换 agents Map 引用
+        this.agents.delete(agentId);
+        this.agents.set(newAgent.agentId, {
+          ...newAgent,
+          role: newAgent.role,
+          createdAt: new Date().toISOString(),
+          status: 'executing',
+          respawnedFrom: agentId,
+        });
+
+        this.emit('agent_respawned', {
+          teamId: this.teamId,
+          oldAgentId: agentId,
+          newAgentId: newAgent.agentId,
+          role: newAgent.role,
+        });
+
+        try {
+          const retrySystemPrompt = this.agentSpawner.generatePromptForRole(
+            newAgent.role,
+            tasks,
+            this.parentAgent?.contextManager?.getProjectOverviewText?.() || ''
+          );
+          this.logger?.info(`Agent 重试 (${agentId} → ${newAgent.agentId})`);
+
+          const retryResult = await this.agentSpawner.run(newAgent, {
+            systemPrompt: retrySystemPrompt,
+            tasks,
+            timeout: 30 * 60 * 1000,
+            priority,
+          });
+
+          if (retryResult.success) {
+            // 重试成功,走正常完成路径
+            return this._markAgentCompleted(newAgent.agentId, retryResult, true);
+          }
+          // 重试也失败,记录后继续走失败清理
+          this.logger?.warn(`Agent ${newAgent.agentId} 重试仍失败: ${retryResult.error}`);
+        } catch (retryErr) {
+          this.logger?.warn(`Agent 重试抛错: ${retryErr.message}`);
+        }
+      } else if (actionResult?.shouldFallback) {
+        // FALLBACK_TO_MAIN:把任务交回主 agent 处理
+        this.logger?.warn(`Agent ${agentId} fallback 到主 Agent`);
+        this._markAgentCompleted(agentId, { success: false, error: 'fallback to main' }, false);
+        return { success: false, error: 'fallback to main', fallback: true };
+      }
+
+      // 最终失败清理
+      this._markAgentCompleted(agentId, {
+        success: false,
+        error: error.message,
+        strategy: errorDecision?.strategy,
+        executionTime: Date.now() - (agentInfo.createdAt ? new Date(agentInfo.createdAt).getTime() : Date.now()),
+      }, false);
+      return { success: false, error: error.message, strategy: errorDecision?.strategy };
+    }
+
+    // 成功路径
+    return this._markAgentCompleted(agentId, result, true);
+  }
+
+  /**
+   * 标记 Agent 完成（成功 / 失败通用）
+   * 集中处理 taskStateManager / status / emit,避免成功失败路径重复代码
+   */
+  _markAgentCompleted(agentId, result, success) {
+    const agentInfo = this.agents.get(agentId);
+    if (agentInfo) {
+      agentInfo.status = success ? 'completed' : 'failed';
+      agentInfo.lastResult = result;
+      this.agents.set(agentId, agentInfo);
+    }
+
+    // 通知 taskStateManager
+    try {
+      if (success) {
+        this.taskStateManager.completeTask(agentId, { success: true });
+      } else {
+        this.taskStateManager.failTask(agentId, result.error);
+      }
+    } catch (err) {
+      this.logger?.debug('taskStateManager 通知失败', err.message);
+    }
 
     this.emit('agent_completed', {
       teamId: this.teamId,
       agentId,
-      success: !result.error,
+      success,
+      error: result.error,
       executionTime: result.executionTime,
     });
 
@@ -430,9 +680,26 @@ class TeamManager extends EventEmitter {
 
   /**
    * 终止团队
+   * @param {Object} options
+   * @param {boolean} options.force - 强制解散（跳过状态机校验，用于 interrupt/异常路径）
    */
-  async dissolve() {
-    this._transitionTo(TeamState.DISSOLVED);
+  async dissolve(options = {}) {
+    const { force = false } = options;
+
+    if (force) {
+      // 强制解散：直接置状态为 DISSOLVED，跳过状态机校验
+      const oldState = this.state;
+      this.state = TeamState.DISSOLVED;
+      this.logger?.warn(`强制解散团队 (${oldState} -> DISSOLVED)`);
+      this.emit('state_changed', {
+        teamId: this.teamId,
+        from: oldState,
+        to: TeamState.DISSOLVED,
+        forced: true,
+      });
+    } else {
+      this._transitionTo(TeamState.DISSOLVED);
+    }
 
     // 终止所有Agent
     for (const [agentId] of this.agents) {
@@ -449,9 +716,16 @@ class TeamManager extends EventEmitter {
     // 清理定时器
     this._stopIdleTimer();
 
+    // 非 force 路径 cleanup 后归位 IDLE,避免 DISSOLVED→PLANNING 状态机死锁
+    // force 路径保留 DISSOLVED,chat.js 会重建 manager 实例
+    if (!force) {
+      this.state = TeamState.IDLE;
+    }
+
     this.emit('team_dissolved', {
       teamId: this.teamId,
       finalState: this.state,
+      forced: force,
     });
   }
 
@@ -546,9 +820,10 @@ class TeamManager extends EventEmitter {
 
   _createStateMachine() {
     const transitions = {
-      [TeamState.IDLE]: [TeamState.PLANNING],
-      [TeamState.PLANNING]: [TeamState.EXECUTING, TeamState.FAILED, TeamState.IDLE],
-      [TeamState.EXECUTING]: [TeamState.AGGREGATING, TeamState.FAILED],
+      // DISSOLVED 允许从任何状态强制转入(用于 interrupt/异常路径)
+      [TeamState.IDLE]: [TeamState.PLANNING, TeamState.DISSOLVED],
+      [TeamState.PLANNING]: [TeamState.EXECUTING, TeamState.FAILED, TeamState.IDLE, TeamState.DISSOLVED],
+      [TeamState.EXECUTING]: [TeamState.AGGREGATING, TeamState.FAILED, TeamState.DISSOLVED],
       [TeamState.AGGREGATING]: [TeamState.COMPLETE, TeamState.FAILED, TeamState.DISSOLVED],
       [TeamState.COMPLETE]: [TeamState.DISSOLVED],
       [TeamState.FAILED]: [TeamState.DISSOLVED],

@@ -19,6 +19,7 @@ class TeamCommunication extends EventEmitter {
 
     // 消息队列
     this.messageQueue = new Map();  // agentId -> Message[]
+    this.maxMessageQueueSize = options.maxMessageQueueSize || 100;  // 单个 Agent 队列上限
     this.pendingResponses = new Map();  // messageId -> Promise
 
     // 心跳配置
@@ -59,6 +60,10 @@ class TeamCommunication extends EventEmitter {
 
     // 如果需要响应，返回Promise
     if (message.expectResponse) {
+      // 附带 messageId 到 payload，方便 Agent 回传时定位 pendingResponses
+      if (envelope.payload && typeof envelope.payload === 'object') {
+        envelope.payload.messageId = messageId;
+      }
       return this._createResponsePromise(messageId);
     }
 
@@ -187,6 +192,21 @@ class TeamCommunication extends EventEmitter {
       result: payload.result,
       timestamp: payload.timestamp,
     });
+
+    // 通过 payload.messageId 找到对应的 pending 响应 Promise 并 resolve
+    const messageId = payload?.messageId;
+    if (messageId) {
+      const pending = this.pendingResponses.get(messageId);
+      if (pending) {
+        clearTimeout(pending.timeout);
+        this.pendingResponses.delete(messageId);
+        pending.resolve({
+          agentId,
+          result: payload.result,
+          timestamp: payload.timestamp,
+        });
+      }
+    }
   }
 
   _handleStatusReport(agentId, payload) {
@@ -208,7 +228,13 @@ class TeamCommunication extends EventEmitter {
     if (!this.messageQueue.has(agentId)) {
       this.messageQueue.set(agentId, []);
     }
-    this.messageQueue.get(agentId).push(envelope);
+    const queue = this.messageQueue.get(agentId);
+    // 超过上限时丢弃最旧的消息,避免长期运行团队内存无限增长
+    while (queue.length >= this.maxMessageQueueSize) {
+      const dropped = queue.shift();
+      this.logger?.warn(`Agent ${agentId} 消息队列已达上限 ${this.maxMessageQueueSize},丢弃最旧消息 ${dropped.id}`);
+    }
+    queue.push(envelope);
   }
 
   _createResponsePromise(messageId) {

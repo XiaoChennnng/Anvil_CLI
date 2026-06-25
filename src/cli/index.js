@@ -183,6 +183,91 @@ async function main() {
     tui._refreshStatusBar();
   });
 
+  // ─── Team Mode 事件订阅 ───
+  // 团队模式生命周期（核心 2 个）
+  chatEngine.on('team_mode_start', (data) => {
+    const agentCount = data?.suggestedAgents?.length || 0;
+    tui.statusBar.setTeamMode(true, agentCount);
+    tui._refreshStatusBar();
+    tui.renderStatus(`[团队模式] 已启动 (${agentCount} 个 Agent)`);
+  });
+
+  chatEngine.on('team_mode_end', (data) => {
+    tui.statusBar.setTeamMode(false, 0);
+    tui.clearTeamActivity(); // M3:团队结束时清掉活动临显
+    tui._refreshStatusBar();
+    tui.renderStatus(`[团队模式] 已结束 (原因: ${data?.reason || 'unknown'})`);
+  });
+
+  // Team 内部事件（透传到 sidebar 显示）
+  ['team_created', 'team_dissolved', 'agent_created', 'agent_started',
+   'agent_completed', 'agent_terminated', 'agent_respawned', 'state_changed'].forEach(eventName => {
+    chatEngine.on(eventName, (data) => {
+      if (tui.sidebar && tui.sidebar.handleTeamEvent) {
+        tui.sidebar.handleTeamEvent(eventName, data);
+        tui._refreshSidebar();
+      }
+    });
+  });
+
+  // 子 Agent 发标准 thinking/content + _subAgent:true,消费端按标记路由
+  chatEngine.on('thinking', (data) => {
+    if (!data?._subAgent) {return;}  // 主 Agent 的 thinking 不走这里
+    // 子 Agent 思考内容：写入 sidebar 进度区
+    if (tui.sidebar && tui.sidebar.handleTeamEvent) {
+      tui.sidebar.handleTeamEvent('thinking', data);
+      tui._refreshSidebar();
+    }
+    // 同状态不重置,避免高频 chunk 反复 reset TTL
+    if (data?.agentId && tui.statusBar.teamActivity?.status !== 'thinking') {
+      tui.setTeamActivity(data.agentId.slice(-4), 'thinking');
+    }
+  });
+
+  chatEngine.on('content', (data) => {
+    if (!data?._subAgent) {return;}  // 主 Agent 的 content 不走这里
+    // 子 Agent 输出内容：累加 token 统计 + sidebar 显示
+    if (tui.sidebar && tui.sidebar.handleTeamEvent) {
+      tui.sidebar.handleTeamEvent('content', data);
+      tui._refreshSidebar();
+    }
+    // M3:状态栏临显
+    if (data?.agentId && tui.statusBar.teamActivity?.status !== 'streaming') {
+      tui.setTeamActivity(data.agentId.slice(-4), 'streaming');
+    }
+  });
+
+  chatEngine.on('subagent_usage', (data) => {
+    // 子 Agent token 计费归属主会话
+    if (data?.usage && tui.sidebar) {
+      tui.sidebar.updateCacheStats(data.usage);
+      tui._refreshStatusBar();
+    }
+  });
+
+  // M3:agent 终止时清掉 teamActivity
+  chatEngine.on('agent_completed', (data) => {
+    if (tui.statusBar.teamActivity && data?.agentId?.slice(-4) === tui.statusBar.teamActivity.name) {
+      tui.clearTeamActivity();
+    }
+  });
+
+  chatEngine.on('agent_terminated', (data) => {
+    if (tui.statusBar.teamActivity && data?.agentId?.slice(-4) === tui.statusBar.teamActivity.name) {
+      tui.clearTeamActivity();
+    }
+  });
+
+  // 补全未消费事件:team_degraded(完成度<60%时 manager emit) / subagent_heartbeat(每 30s 心跳)
+  ['team_degraded', 'subagent_heartbeat'].forEach(eventName => {
+    chatEngine.on(eventName, (data) => {
+      if (tui.sidebar && tui.sidebar.handleTeamEvent) {
+        tui.sidebar.handleTeamEvent(eventName, data);
+        tui._refreshSidebar();
+      }
+    });
+  });
+
   chatEngine.on('thinking_start', () => {
     if (!thinkingStarted) {
       tui.renderThinkingStart();
@@ -220,9 +305,18 @@ async function main() {
     tui.renderContentChunk(chunk);
   });
 
-  chatEngine.on('tool_calls', (toolCalls) => {
+  chatEngine.on('tool_calls', (data) => {
+    // 子 Agent 的工具调用 → sidebar/team-panel
+    if (data?._subAgent) {
+      if (tui.sidebar && tui.sidebar.handleTeamEvent) {
+        tui.sidebar.handleTeamEvent('tool_calls', data);
+        tui._refreshSidebar();
+      }
+      return;
+    }
+    // 主 Agent 的工具调用 → 消息区
     if (!contentStarted) { tui.renderContentStart(); contentStarted = true; }
-    tui.renderToolCall(toolCalls);
+    tui.renderToolCall(data);
   });
 
   // 缓冲实时输出，等 tool_result 统一渲染
@@ -232,8 +326,16 @@ async function main() {
     _cmdBuf.push(...lines);
   });
 
-  chatEngine.on('tool_result', ({ name, result, toolCall }) => {
-    // 合并缓冲输出到 result
+  chatEngine.on('tool_result', ({ name, result, toolCall, _subAgent, agentId, args }) => {
+    // 子 Agent 的工具结果 → sidebar/team-panel
+    if (_subAgent) {
+      if (tui.sidebar && tui.sidebar.handleTeamEvent) {
+        tui.sidebar.handleTeamEvent('tool_result', { name, result, toolCall, agentId, args, _subAgent: true });
+        tui._refreshSidebar();
+      }
+      return;
+    }
+    // 主 Agent 的工具结果 → 消息区
     if (_cmdBuf.length > 0 && (name === 'execute_command' || name === 'bash')) {
       result = { ...result, stdout: _cmdBuf.join('\n') };
       _cmdBuf = [];
@@ -457,7 +559,11 @@ async function main() {
           if (input === '/plan') {
             // 确保计划模式切换后状态栏被刷新
             tui._refreshAll();
-          } else if (result.response) {
+          } else if (result.action === 'open_team_panel') {
+          // /team panel → 打开 Team Panel modal,不开新内容进消息区
+          tui.openTeamPanel();
+          tui._refreshAll();
+        } else if (result.response) {
           const t = tui.layout.theme;
           const border = chalk.hex(t.colors.primary)('┃');
           tui.messageBox.renderedLines.push(`${border} ${result.response}`);

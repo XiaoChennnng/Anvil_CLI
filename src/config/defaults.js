@@ -126,6 +126,48 @@ const DEFAULTS = {
     tokenLabel: { zh: '本轮', en: 'this turn' },
     totalLabel: { zh: '总计', en: 'total' },
   },
+
+  // Team Mode 多 Agent 协作配置
+  team: {
+    // 是否启用团队模式（用户可关闭）
+    enabled: true,
+
+    // 任务复杂度评估阈值(分数 >= 对应阈值触发对应规模团队)
+    complexityThreshold: {
+      low: 25,     // < 25 不需要团队
+      medium: 50,  // 25-49 简单团队(1 executor)
+      high: 75,    // 50-74 中等团队(1 architect + 2 executor)
+      // >= 75 复杂团队(4 角色齐全)
+    },
+
+    // 空闲超时: IDLE 状态下 N 毫秒后自动解散(节省资源)
+    dissolveIdleTimeout: 5 * 60 * 1000,   // 5 分钟
+
+    // 单个子 Agent 的执行超时
+    subagentTimeout: 30 * 60 * 1000,      // 30 分钟
+
+    // 子 Agent 默认模型(回退到主模型时使用)
+    defaultSubagentModel: 'deepseek-chat',
+
+    // 子 Agent 自主循环最大迭代次数(防止死循环)
+    maxIterations: 50,
+
+    // 错误重试配置
+    maxRetries: 3,
+    retryDelays: [1000, 3000, 10000], // 指数退避
+
+    // 通信心跳配置
+    heartbeat: {
+      interval: 30 * 1000,  // 30s 发送一次心跳
+      timeout: 90 * 1000,   // 90s 无心跳视为掉线
+    },
+
+    // 任务聚合策略(默认 hierarchical)
+    defaultAggregationStrategy: 'hierarchical',
+
+    // 冲突解决策略(默认 quality_wins)
+    defaultConflictResolution: 'quality_wins',
+  },
 };
 
 module.exports = DEFAULTS;

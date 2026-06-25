@@ -29,7 +29,6 @@ function parseUnifiedDiff(diffText) {
   }
 
   for (const line of lines) {
-    // 跳过文件头
     if (line.startsWith('--- a/') || line.startsWith('+++ b/')) {
       continue;
     }
@@ -432,7 +431,7 @@ function generateDiff(oldContent, newContent, fileName) {
   const suffixContext = Math.min(commonSuffix, 3);
   const result = [];
 
-  // 注意：当 commonPrefix < prefixContext 时，前缀会被截断到文件开头
+  // commonPrefix < prefixContext 时前缀截断到文件头
   const hunkOldStart = Math.max(1, commonPrefix - prefixContext + 1);
   const hunkOldCount = oldLines.length - commonSuffix - Math.max(0, commonPrefix - prefixContext);
   const hunkNewStart = Math.max(1, commonPrefix - prefixContext + 1);
