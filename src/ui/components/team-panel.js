@@ -251,7 +251,7 @@ class TeamPanel {
       // thinking 与主 Agent 一致:跳空行、thinkingFallback 灰色、无前缀
       if (output?.thinking) {
         let tLines = output.thinking.split('\n').filter(l => l.trim());
-        let totalThinkingChars = tLines.reduce((sum, l) => sum + l.length, 0);
+        const totalThinkingChars = tLines.reduce((sum, l) => sum + l.length, 0);
         if (totalThinkingChars > MAX_TOTAL_THINKING_CHARS) {
           let accChars = 0;
           let cutIdx = tLines.length;

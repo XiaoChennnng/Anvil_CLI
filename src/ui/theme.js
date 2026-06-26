@@ -220,4 +220,4 @@ function getTheme(preference = 'auto') {
   return isDarkBackground() ? DARK_THEME : LIGHT_THEME;
 }
 
-module.exports = { getTheme, DARK_THEME, LIGHT_THEME, DARK_COLORS, LIGHT_COLORS };
+module.exports = { getTheme };

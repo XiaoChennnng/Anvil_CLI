@@ -55,9 +55,6 @@ class TeamCommunication extends EventEmitter {
     // 加入队列
     this._enqueueMessage(agentId, envelope);
 
-    // 发送事件（供Agent订阅）
-    this.emit('message_to_agent', envelope);
-
     // 如果需要响应，返回Promise
     if (message.expectResponse) {
       // 附带 messageId 到 payload，方便 Agent 回传时定位 pendingResponses
@@ -74,17 +71,7 @@ class TeamCommunication extends EventEmitter {
    * 广播消息到所有Agent
    */
   broadcast(message, agentIds = null) {
-    const envelope = {
-      id: this._generateMessageId(),
-      type: message.type,
-      from: 'master',
-      to: '*',  // 广播标识
-      payload: message.payload,
-      timestamp: new Date().toISOString(),
-    };
-
-    this.emit('broadcast', envelope);
-
+    // 广播消息:目前未消费,保留函数签名便于后续接入
     return { broadcasted: true, agentCount: agentIds?.length || 0 };
   }
 
@@ -93,18 +80,6 @@ class TeamCommunication extends EventEmitter {
    */
   async receiveFromAgent(agentId, message) {
     this.messageStats.received++;
-
-    const envelope = {
-      id: this._generateMessageId(),
-      type: message.type,
-      from: agentId,
-      to: 'master',
-      payload: message.payload,
-      timestamp: new Date().toISOString(),
-    };
-
-    // 派发消息事件
-    this.emit('message_from_agent', envelope);
 
     // 处理消息类型
     switch (message.type) {
@@ -126,21 +101,10 @@ class TeamCommunication extends EventEmitter {
 
   // Agent间点对点通信（通过主Agent转发）
   async agentToAgent(fromAgentId, toAgentId, message) {
-    const envelope = {
-      id: this._generateMessageId(),
-      type: MessageTypes.TASK_UPDATE,
-      from: fromAgentId,
-      to: toAgentId,
-      payload: message.payload,
-      timestamp: new Date().toISOString(),
-    };
-
     // 验证通信权限
     if (!this._validateAgentCommunication(fromAgentId, toAgentId)) {
       throw new Error(`Agent ${fromAgentId} 无权向 ${toAgentId} 发送消息`);
     }
-
-    this.emit('agent_message', envelope);
 
     return { relayed: true };
   }
@@ -187,12 +151,6 @@ class TeamCommunication extends EventEmitter {
   }
 
   _handleResultSubmit(agentId, payload) {
-    this.emit('result_submitted', {
-      agentId,
-      result: payload.result,
-      timestamp: payload.timestamp,
-    });
-
     // 通过 payload.messageId 找到对应的 pending 响应 Promise 并 resolve
     const messageId = payload?.messageId;
     if (messageId) {
@@ -210,12 +168,7 @@ class TeamCommunication extends EventEmitter {
   }
 
   _handleStatusReport(agentId, payload) {
-    this.emit('status_report', {
-      agentId,
-      status: payload.status,
-      progress: payload.progress,
-      message: payload.message,
-    });
+    // 状态报告目前仅记录,不 emit 事件(无人消费)
   }
 
   _handleHeartbeat(agentId) {

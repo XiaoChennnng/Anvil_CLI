@@ -165,4 +165,4 @@ function saveMCPConfig(projectDir, mcpServers) {
   }
 }
 
-module.exports = { loadConfig, getGlobalConfigDir, getGlobalConfigPath, getProjectConfigPath, saveMCPConfig };
+module.exports = { loadConfig, getGlobalConfigDir, saveMCPConfig };

@@ -62,10 +62,6 @@ function registerCustomModel(config) {
   return modelConfig;
 }
 
-function getCustomProvider(providerId) {
-  return CUSTOM_PROVIDERS.get(providerId) || null;
-}
-
 function getCustomModel(modelId) {
   return CUSTOM_MODELS.get(modelId) || null;
 }
@@ -105,17 +101,6 @@ function removeCustomProvider(providerId) {
     CUSTOM_MODELS.delete(modelId);
   }
   CUSTOM_PROVIDERS.delete(providerId);
-}
-
-function removeCustomModel(modelId) {
-  const model = CUSTOM_MODELS.get(modelId);
-  if (model) {
-    const provider = CUSTOM_PROVIDERS.get(model.provider);
-    if (provider && provider.models[modelId]) {
-      delete provider.models[modelId];
-    }
-    CUSTOM_MODELS.delete(modelId);
-  }
 }
 
 const PROVIDERS = {
@@ -581,14 +566,11 @@ module.exports = {
   getClientConfig,
   registerCustomProvider,
   registerCustomModel,
-  getCustomProvider,
   getCustomModel,
   listCustomProviders,
   listCustomModels,
   removeCustomProvider,
-  removeCustomModel,
   isVisionModel,
-  formatImageForOpenAI,
   formatImageForAnthropic,
   convertImagesInMessages,
 };

@@ -413,18 +413,16 @@ class ChatEngine extends EventEmitter {
           iterationCount,
           elapsed: Math.round(elapsed / 60000) + 'min',
         });
-        this.emit('timeout_hard', { iterationCount, elapsed });
         break;
       }
 
       // 软性超时警告：运行超过 3.5 小时发出警告
       if (elapsed >= SOFT_TIMEOUT && elapsed - lastSoftWarning >= 10 * 60 * 1000) {
         const remaining = HARD_TIMEOUT - elapsed;
-        this.emit('timeout_soft', {
+        this.logger?.warn('Agent 软性超时警告', {
           iterationCount,
-          elapsed,
-          remaining,
-          message: `已运行 ${Math.round(elapsed / 60000)} 分钟`,
+          elapsed: Math.round(elapsed / 60000) + 'min',
+          remaining: Math.round(remaining / 60000) + 'min',
         });
         lastSoftWarning = elapsed;
       }
@@ -721,7 +719,6 @@ class ChatEngine extends EventEmitter {
           let result;
           let toolTimeoutId;
           try {
-            if (!this._suppressUI) {this.emit('tool_execute', { name, args });}
             result = await Promise.race([
               this.toolRegistry.execute(name, args, {
                 projectDir: this.config.projectDir,
@@ -993,16 +990,7 @@ class ChatEngine extends EventEmitter {
       await this._rebuildFullContext();
     }
 
-    // 只发 context-rebuilt,状态文案由工具渲染通道统一输出
     const finalStats = { ...applyResult.stats, fallback };
-    this.emit('context-rebuilt', {
-      tokensBefore: finalStats.beforeTokens,
-      tokensAfter: finalStats.afterTokens,
-      budget: target,
-      rebuilt: shouldRebuild,
-      fallback,
-    });
-
     return { messages: this.messages, stats: finalStats };
   }
 

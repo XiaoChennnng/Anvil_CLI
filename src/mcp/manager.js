@@ -134,13 +134,6 @@ class MCPManager extends EventEmitter {
           );
         }
 
-        this.emit('server_retry', {
-          name,
-          attempt: retryCount + 1,
-          maxRetries: MAX_RETRIES,
-          delay,
-          error: err.message,
-        });
         this.emit('server_status_change', this.getStatus());
 
         await new Promise((resolve) => setTimeout(resolve, delay));
@@ -285,8 +278,6 @@ class MCPManager extends EventEmitter {
 
     await Promise.allSettled(promises);
     this._servers.clear();
-
-    this.emit('stopped');
 
     if (this._logger) {
       this._logger.info('[mcp] 所有 MCP 服务器已关闭');

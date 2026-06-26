@@ -83,12 +83,6 @@ function _setHandlers(toolRegistry, mcpManager, handlers) {
   inner.set(mcpManager, handlers);
 }
 
-function _deleteHandlers(toolRegistry, mcpManager) {
-  const inner = _wireHandlers.get(toolRegistry);
-  if (!inner) {return false;}
-  return inner.delete(mcpManager);
-}
-
 function wireMCPEvents(toolRegistry, mcpManager, logger) {
   // 幂等保护：同一对 (registry, manager) 只绑定一次
   if (_getHandlers(toolRegistry, mcpManager)) {return;}
@@ -119,24 +113,9 @@ function wireMCPEvents(toolRegistry, mcpManager, logger) {
 }
 
 /** 解除事件绑定（测试用）— 只移除我们自己注册的 handler */
-function unwireMCPEvents(toolRegistry, mcpManager) {
-  const handlers = _getHandlers(toolRegistry, mcpManager);
-  if (!handlers) {return false;}
-  _deleteHandlers(toolRegistry, mcpManager);
-
-  if (handlers.connected) {mcpManager.off('server_connected', handlers.connected);}
-  if (handlers.disconnected) {mcpManager.off('server_disconnected', handlers.disconnected);}
-  if (handlers.error) {mcpManager.off('server_error', handlers.error);}
-  return true;
-}
-
-/** 测试钩子：清空所有 wire 状态（WeakMap 无 clear 方法，仅作占位） */
-function _resetWiredState() {}
+// 注: unwireMCPEvents 和 _resetWiredState 原本用于测试,但 WeakMap 难以干净清理,
+// 实际测试场景直接重建 toolRegistry/mcpManager 即可,这两个函数无人调用,已删除。
 
 module.exports = {
-  registerMCPServerTools,
-  unregisterMCPServerTools,
   wireMCPEvents,
-  unwireMCPEvents,
-  _resetWiredState,
 };

@@ -308,7 +308,7 @@ MCP 层    src/mcp/                 MCP 服务器管理
 
 UI 层     src/ui/                  TUI 自绘
   tui.js                                 组件容器 + 光标控制 + 32KB 反压限流
-  render-queue.js / screen-buffer.js     50ms 节流队列 + 差量更新
+  render-queue.js                        20ms 节流队列
   ansi.js / theme.js / markdown.js       CJK 宽度截断 / 主题 / Markdown 渲染
   diff.js / tokens.js                    Diff 展示 / Token 统计
   tool-renderer.js                       工具调用渲染

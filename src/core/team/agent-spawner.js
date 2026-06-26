@@ -525,20 +525,19 @@ class AgentSpawner extends EventEmitter {
           planModeRestricted: false,  // 子 Agent 永远不在 plan mode
           chatEngine: parent,         // 关键：enter_plan_mode / memory_append 等工具依赖
           onOutput: (data, isError) => {
-            this.parentEventBus?.emit('subagent_output', { agentId: agent.agentId, data, isError });
+            // 输出流经 onOutput 透传给 chatEngine,通过 tool_result 事件统一渲染
           },
           todoManager: parent.todoManager,
           onTodoChange: (todos) => {
-            this.parentEventBus?.emit('subagent_todo_change', { agentId: agent.agentId, todos });
+            // 子 Agent todo 变化通过 chatEngine.todoManager 统一管理,无需额外事件
           },
           onQuestion: (params) => {
             if (parent._suppressUI) {return { answers: [] };}
             const questionQueue = parent.teamQuestionQueue;
             if (!questionQueue) {
-              // 兜底:无 queue 时退回旧逻辑
+              // 兜底:无 queue 时退回旧逻辑(仅设置 resolve,不 emit 事件)
               return new Promise((resolve) => {
                 parent._pendingQuestionResolve = resolve;
-                this.parentEventBus?.emit('subagent_question', { agentId: agent.agentId, params });
               });
             }
             return questionQueue.enqueue(

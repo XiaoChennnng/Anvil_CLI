@@ -257,10 +257,9 @@ async function main() {
     }
   });
 
-  // 补全未消费事件:team_degraded / subagent_heartbeat / subagent_question(走 questionPanel)
-  ['team_degraded', 'subagent_heartbeat', 'subagent_question'].forEach(eventName => {
+  // 补全未消费事件:team_degraded 和 subagent_heartbeat 转发到 sidebar
+  ['team_degraded', 'subagent_heartbeat'].forEach(eventName => {
     chatEngine.on(eventName, (data) => {
-      if (eventName === 'subagent_question') {return;}
       if (tui.sidebar && tui.sidebar.handleTeamEvent) {
         tui.sidebar.handleTeamEvent(eventName, data);
         tui._queueSidebar();
