@@ -506,11 +506,7 @@ class AgentSpawner extends EventEmitter {
     }
   }
 
-  /**
-   * 执行工具（代理到主 Agent 的 toolRegistry）
-   * 关键修复：透传完整 context（chatEngine / onOutput / todoManager / onQuestion / fileTimestamps）
-   * + 120s 超时（与主 Agent chat.js:718-749 一致）
-   */
+  /** 执行工具:代理到主 Agent toolRegistry,透传完整 context(chatEngine/onOutput/onQuestion 等)。 */
   async _executeTool(agent, toolName, args) {
     const parent = agent.parentAgent;
     if (!parent?.toolRegistry) {
@@ -536,12 +532,20 @@ class AgentSpawner extends EventEmitter {
             this.parentEventBus?.emit('subagent_todo_change', { agentId: agent.agentId, todos });
           },
           onQuestion: (params) => {
-            // 子 Agent 收到 question 时转给主 Agent 决策
             if (parent._suppressUI) {return { answers: [] };}
-            return new Promise((resolve) => {
-              parent._pendingQuestionResolve = resolve;
-              this.parentEventBus?.emit('subagent_question', { agentId: agent.agentId, params });
-            });
+            const questionQueue = parent.teamQuestionQueue;
+            if (!questionQueue) {
+              // 兜底:无 queue 时退回旧逻辑
+              return new Promise((resolve) => {
+                parent._pendingQuestionResolve = resolve;
+                this.parentEventBus?.emit('subagent_question', { agentId: agent.agentId, params });
+              });
+            }
+            return questionQueue.enqueue(
+              agent.agentId,
+              { agentName: agent.agentId.slice(-4), role: agent.role },
+              params,
+            );
           },
         }),
         new Promise((_, reject) => {

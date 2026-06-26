@@ -25,8 +25,9 @@ class QuestionPanel {
 
   // 显示问答面板
   show(params) {
-    this._startLine = undefined;  // 重置以便 _renderToMessageBox 正确定位起始行
+    this._startLine = undefined;
     this.questions = params.questions;
+    this._agentContext = params._agentContext || null;  // 子 Agent 提问时显示 [Agent #N] 前缀
     this.currentQ = 0;
     this.cursorPos = 0;
     this.answered = new Set();
@@ -223,6 +224,14 @@ class QuestionPanel {
       mb.renderedLines.splice(this._startLine);
     } else {
       this._startLine = mb.renderedLines.length;
+    }
+
+    // 子 Agent 提问时显示上下文标签:[Agent #0001 · executor] 向你提问
+    if (this._agentContext && this._agentContext.agentId && this._agentContext.agentId !== '__main__') {
+      const label = `[Agent #${(this._agentContext.agentName || this._agentContext.agentId).toString().slice(-4)} · ${this._agentContext.role || 'agent'}]`;
+      const ctxLine = ` ${chalk.bgHex(t.colors.warning).hex(t.colors.background).bold(` ${label} 向你提问 `)}`;
+      mb.renderedLines.push(ctxLine);
+      mb.renderedLines.push('');
     }
 
     // 渲染所有问题的标签页头
@@ -457,6 +466,7 @@ class QuestionPanel {
     this._customInputMode = false;
     this._customInputBuffer = '';
     this._startLine = undefined;
+    this._agentContext = null;  // 重置 agent context
   }
 }
 

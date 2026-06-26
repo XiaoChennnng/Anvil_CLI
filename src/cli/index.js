@@ -199,41 +199,38 @@ async function main() {
     tui.renderStatus(`[团队模式] 已结束 (原因: ${data?.reason || 'unknown'})`);
   });
 
-  // Team 内部事件（透传到 sidebar 显示）
+  // Team 内部事件(透传到 sidebar 显示,走 20ms 节流避免逐 chunk 重绘)
   ['team_created', 'team_dissolved', 'agent_created', 'agent_started',
    'agent_completed', 'agent_terminated', 'agent_respawned', 'state_changed'].forEach(eventName => {
     chatEngine.on(eventName, (data) => {
       if (tui.sidebar && tui.sidebar.handleTeamEvent) {
         tui.sidebar.handleTeamEvent(eventName, data);
-        tui._refreshSidebar();
+        tui._queueSidebar();
       }
     });
   });
 
   // 子 Agent 发标准 thinking/content + _subAgent:true,消费端按标记路由
   chatEngine.on('thinking', (data) => {
-    if (!data?._subAgent) {return;}  // 主 Agent 的 thinking 不走这里
-    // 子 Agent 思考内容：写入 sidebar 进度区
+    if (!data?._subAgent) {return;}
     if (tui.sidebar && tui.sidebar.handleTeamEvent) {
       tui.sidebar.handleTeamEvent('thinking', data);
-      tui._refreshSidebar();
+      tui._queueSidebar();
     }
-    // 同状态不重置,避免高频 chunk 反复 reset TTL
     if (data?.agentId && tui.statusBar.teamActivity?.status !== 'thinking') {
       tui.setTeamActivity(data.agentId.slice(-4), 'thinking');
     }
   });
 
   chatEngine.on('content', (data) => {
-    if (!data?._subAgent) {return;}  // 主 Agent 的 content 不走这里
-    // 子 Agent 输出内容：累加 token 统计 + sidebar 显示
+    if (!data?._subAgent) {return;}
     if (tui.sidebar && tui.sidebar.handleTeamEvent) {
       tui.sidebar.handleTeamEvent('content', data);
-      tui._refreshSidebar();
+      tui._queueSidebar();
     }
-    // M3:状态栏临显
     if (data?.agentId && tui.statusBar.teamActivity?.status !== 'streaming') {
       tui.setTeamActivity(data.agentId.slice(-4), 'streaming');
+      tui._queueStatusBar();
     }
   });
 
@@ -241,7 +238,7 @@ async function main() {
     // 子 Agent token 计费归属主会话
     if (data?.usage && tui.sidebar) {
       tui.sidebar.updateCacheStats(data.usage);
-      tui._refreshStatusBar();
+      tui._queueStatusBar();
     }
   });
 
@@ -249,21 +246,24 @@ async function main() {
   chatEngine.on('agent_completed', (data) => {
     if (tui.statusBar.teamActivity && data?.agentId?.slice(-4) === tui.statusBar.teamActivity.name) {
       tui.clearTeamActivity();
+      tui._queueStatusBar();
     }
   });
 
   chatEngine.on('agent_terminated', (data) => {
     if (tui.statusBar.teamActivity && data?.agentId?.slice(-4) === tui.statusBar.teamActivity.name) {
       tui.clearTeamActivity();
+      tui._queueStatusBar();
     }
   });
 
-  // 补全未消费事件:team_degraded(完成度<60%时 manager emit) / subagent_heartbeat(每 30s 心跳)
-  ['team_degraded', 'subagent_heartbeat'].forEach(eventName => {
+  // 补全未消费事件:team_degraded / subagent_heartbeat / subagent_question(走 questionPanel)
+  ['team_degraded', 'subagent_heartbeat', 'subagent_question'].forEach(eventName => {
     chatEngine.on(eventName, (data) => {
+      if (eventName === 'subagent_question') {return;}
       if (tui.sidebar && tui.sidebar.handleTeamEvent) {
         tui.sidebar.handleTeamEvent(eventName, data);
-        tui._refreshSidebar();
+        tui._queueSidebar();
       }
     });
   });
@@ -306,11 +306,11 @@ async function main() {
   });
 
   chatEngine.on('tool_calls', (data) => {
-    // 子 Agent 的工具调用 → sidebar/team-panel
+    // 子 Agent 的工具调用 → sidebar/team-panel(走节流)
     if (data?._subAgent) {
       if (tui.sidebar && tui.sidebar.handleTeamEvent) {
         tui.sidebar.handleTeamEvent('tool_calls', data);
-        tui._refreshSidebar();
+        tui._queueSidebar();
       }
       return;
     }
@@ -327,11 +327,11 @@ async function main() {
   });
 
   chatEngine.on('tool_result', ({ name, result, toolCall, _subAgent, agentId, args }) => {
-    // 子 Agent 的工具结果 → sidebar/team-panel
+    // 子 Agent 的工具结果 → sidebar/team-panel(走节流)
     if (_subAgent) {
       if (tui.sidebar && tui.sidebar.handleTeamEvent) {
         tui.sidebar.handleTeamEvent('tool_result', { name, result, toolCall, agentId, args, _subAgent: true });
-        tui._refreshSidebar();
+        tui._queueSidebar();
       }
       return;
     }
@@ -396,12 +396,27 @@ async function main() {
     }
   });
 
-  chatEngine.on('question', async (params) => {
+  // Question 路由:主 Agent + 子 Agent 提问统一通过 teamQuestionQueue 串行调度
+  chatEngine.teamQuestionQueue.on('show', async (entry) => {
     tui.statusBar.setThinking(false);
     tui._refreshStatusBar();
 
+    // 主 Agent 提问时不显示提示,子 Agent 提问时显示 "Agent #xxx 向主 Agent 提问"
+    const t = tui.layout.theme;
+    const isMain = entry.agentId === '__main__';
+    if (!isMain && tui.messageBox) {
+      const roleTag = entry.meta?.role || 'agent';
+      const agentLabel = `[Agent #${entry.agentId.slice(-4)} · ${roleTag}]`;
+      tui.messageBox.renderedLines.push('');
+      tui.messageBox.renderedLines.push(
+        `${chalk.hex(t.colors.warning)('●')} ${chalk.hex(t.colors.warning)(agentLabel)} 向主 Agent 提问`
+      );
+      tui._refreshMessages();
+    }
+
     tui.renderContentStart();
-    const answerPromise = tui.questionPanel.show(params);
+    const showParams = { ...entry.params, _agentContext: { agentId: entry.agentId, ...(entry.meta || {}) } };
+    const answerPromise = tui.questionPanel.show(showParams);
     tui._refreshMessages();
     const answers = await answerPromise;
     tui._refreshMessages();
@@ -409,11 +424,14 @@ async function main() {
     tui.resumeThinking();
 
     if (answers === null) {
-      chatEngine.resolveQuestion({ cancelled: true });
+      chatEngine.teamQuestionQueue.resolve({ cancelled: true });
     } else {
-      chatEngine.resolveQuestion(answers);
+      chatEngine.teamQuestionQueue.resolve(answers);
     }
   });
+
+  // 占位:question 已走 queue,这里仅防止 unhandled
+  chatEngine.on('question', () => {});
 
   chatEngine.on('interrupted', () => {
     tui.renderInterrupted();

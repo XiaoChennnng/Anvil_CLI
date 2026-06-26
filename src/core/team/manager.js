@@ -580,23 +580,16 @@ class TeamManager extends EventEmitter {
       }
 
       // RETRY + respawn 成功:用新 agent 重试一次
+      // agent_respawned 事件统一由 respawnAgent() 内部 emit,这里不重复发,否则 sidebar 计数 +2
       if (actionResult?.newAgent) {
         const newAgent = actionResult.newAgent;
-        // 替换 agents Map 引用
-        this.agents.delete(agentId);
+        // 替换 agents Map 引用(respawnAgent 内部已 delete+set,这里再覆盖 status 为 executing)
         this.agents.set(newAgent.agentId, {
           ...newAgent,
           role: newAgent.role,
           createdAt: new Date().toISOString(),
           status: 'executing',
           respawnedFrom: agentId,
-        });
-
-        this.emit('agent_respawned', {
-          teamId: this.teamId,
-          oldAgentId: agentId,
-          newAgentId: newAgent.agentId,
-          role: newAgent.role,
         });
 
         try {

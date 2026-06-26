@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const path = require('path');
 const { EventEmitter } = require('events');
 const SessionCache = require('../ai/cache');
+const TeamQuestionQueue = require('./team/question-queue');
 const { getSystemPrompt, getLayerContent, getAgentCheckPrompt, getAgentContinuePrompt, PromptLayer, L3Granularity } = require('../ai/prompts');
 
 // AI 自主循环上限
@@ -80,6 +81,8 @@ class ChatEngine extends EventEmitter {
     this._planApproved = false;
     this._pendingPlan = null;
     this._pendingQuestionResolve = null;
+    // 统一管理主 Agent + 子 Agent 提问,避免单值 resolve 被覆盖
+    this.teamQuestionQueue = new TeamQuestionQueue();
     this.teamManager = null;
     this.teamMode = false;
 
@@ -733,12 +736,13 @@ class ChatEngine extends EventEmitter {
                 todoManager: this.todoManager,
                 onTodoChange: (todos) => this.emit('todo_change', todos),
                 onQuestion: (params) => {
-                  // AskUserQuestion：暂停执行等待用户回答
                   if (this._suppressUI) {return { answers: [] };}
-                  return new Promise((resolve) => {
-                    this._pendingQuestionResolve = resolve;
-                    this.emit('question', params);
-                  });
+                  this.emit('question', params);
+                  return this.teamQuestionQueue.enqueue(
+                    TeamQuestionQueue.MAIN_AGENT_ID,
+                    { agentName: '主 Agent', role: 'main' },
+                    params,
+                  );
                 },
               }),
               new Promise((_, reject) => {
@@ -1430,6 +1434,14 @@ class ChatEngine extends EventEmitter {
   }
 
   resolveQuestion(answers) {
+    // 优先解析 queue(主+子 Agent 共享),queue 无 current 时兜底旧单值 resolve
+    if (this.teamQuestionQueue && this.teamQuestionQueue.current) {
+      const resolved = this.teamQuestionQueue.resolve(answers);
+      if (resolved) {
+        this._pendingQuestionResolve = null;
+        return;
+      }
+    }
     if (this._pendingQuestionResolve) {
       this._pendingQuestionResolve(answers);
       this._pendingQuestionResolve = null;

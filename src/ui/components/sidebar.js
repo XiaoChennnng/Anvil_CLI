@@ -103,10 +103,9 @@ class Sidebar {
 
   // 接收 team_* 事件,更新 sidebar 显示
   handleTeamEvent(eventName, data) {
-    // 用 _accumulator 按 agentId 合并,避免逐 token 刷出碎词
     const maxEvents = 500;
 
-    // tool_calls/tool_result 特殊处理:存成结构化数据供 team-panel 渲染
+    // tool_calls/tool_result 存成结构化数据供 team-panel 渲染
     if ((eventName === 'tool_calls' || eventName === 'tool_result') && data?._subAgent) {
       this.teamEvents.unshift({
         event: eventName,
@@ -157,10 +156,8 @@ class Sidebar {
     } else {
       // 非流式事件:直接入队
       this.teamEvents.unshift({ event: eventName, data, time: Date.now() });
-      // agent_completed/terminated 时清理累加器
-      if ((eventName === 'agent_completed' || eventName === 'agent_terminated') && data?.agentId) {
-        this._accumulator.delete(data.agentId);
-      }
+      // agent_completed 不清 _accumulator(team-panel 需要完整历史),统一在 team_dissolved 清理
+      if (eventName === 'team_dissolved') {this._accumulator.clear();}
     }
 
     if (this.teamEvents.length > maxEvents) {
@@ -187,8 +184,10 @@ class Sidebar {
         if (data?.to) {this.teamStatus.currentState = data.to;}
         break;
       case 'agent_created':
-      case 'agent_respawned':
         this.teamStatus.agentCount = (this.teamStatus.agentCount || 0) + 1;
+        break;
+      case 'agent_respawned':
+        // respawn 替换槽位,不计 agentCount(否则任务失败重试会显示 3 变 4)
         break;
       case 'team_dissolved':
         this.teamStatus.active = false;
@@ -204,7 +203,8 @@ class Sidebar {
    * 根据事件更新 agentStates Map
    * 内部方法,被 handleTeamEvent 调用
    * 路由表(对应 plan A.1):
-   *   agent_created / agent_respawned → 新建 idle 卡片
+   *   agent_created → 新建 idle 卡片
+   *   agent_respawned → 替换槽位:继承旧 state(在 agentId 检查前单独处理)
    *   agent_started → thinking
    *   subagent_thinking 帧 → thinking + chunkPreview(150ms 节流)
    *   subagent_content 帧 → streaming + chunkPreview(150ms 节流)
@@ -223,12 +223,33 @@ class Sidebar {
       return;
     }
 
+    // agent_respawned 必须在 agentId 检查之前:payload 只有 oldAgentId/newAgentId,没有顶层 agentId
+    // respawn 替换槽位:删除旧 state,新建 state 并继承 role/startedAt,避免新卡片丢失上下文
+    if (eventName === 'agent_respawned') {
+      const oldId = data?.oldAgentId;
+      const newId = data?.newAgentId;
+      if (!newId) { return; }
+      const oldState = oldId ? this.agentStates.get(oldId) : null;
+      this.agentStates.set(newId, {
+        name: newId.slice(-4),
+        role: data?.role || oldState?.role || 'executor',
+        status: 'idle',
+        startedAt: oldState?.startedAt || Date.now(),
+        lastChunkAt: 0,
+        chunkPreview: '',
+        degraded: false,
+      });
+      if (oldId && oldId !== newId) {
+        this.agentStates.delete(oldId);
+      }
+      return;
+    }
+
     const agentId = data?.agentId;
     if (!agentId) {return;}
 
     switch (eventName) {
-      case 'agent_created':
-      case 'agent_respawned': {
+      case 'agent_created': {
         this.agentStates.set(agentId, {
           name: agentId.slice(-4),
           role: data?.role || 'executor',
@@ -296,6 +317,18 @@ class Sidebar {
       ...e,
       agentName: e.data?.agentId ? e.data.agentId.slice(-4) : null,
     }));
+  }
+
+  /** 给 team-panel 用:返回每个 agent 累加的 thinking + content 完整文本,由 team-panel 自己负责折叠。 */
+  getAgentAccumulatedOutput() {
+    const result = {};
+    for (const [agentId, acc] of this._accumulator.entries()) {
+      result[agentId] = {
+        thinking: acc.thinking || '',
+        content: acc.content || '',
+      };
+    }
+    return result;
   }
 
   /**

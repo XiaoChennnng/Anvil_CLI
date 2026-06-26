@@ -24,6 +24,11 @@ class TUI {
     // Team Panel(M4) — 团队事件日志 modal,共享 sidebar 数据源
     this.teamPanel = new TeamPanel(this.layout);
     this.teamPanel.setSidebar(this.sidebar);
+    // K3 新增:共享主消息区 renderer,保证团队输出格式与主 Agent 一致
+    // (markdown 渲染、thinking 颜色、宽度处理)
+    if (this.messageBox && this.messageBox.renderer) {
+      this.teamPanel.setMessageBoxRenderer(this.messageBox.renderer);
+    }
     this._isRunning = false;
     this._onSend = null;
     this._onExit = null;
@@ -163,6 +168,30 @@ class TUI {
   // 旧版空 stub 导致 subagent_content 事件被静默吞掉,新版走 messageBox 完整重绘
   _refreshSidebar() {
     this._refreshMessages();
+  }
+
+  /** 子 Agent 高频事件 20ms 节流渲染,避免逐 chunk 完整重绘导致闪烁。 */
+  _queueSidebar() {
+    if (!this.sidebar) {return;}
+    if (this._lastSidebarVersion === this.sidebar._teamEventsVersion) {return;}
+    if (!this._renderQueue) {
+      const RenderQueue = require('./render-queue');
+      this._renderQueue = new RenderQueue(20);
+    }
+    this._renderQueue.requestRender(() => {
+      if (!this.sidebar || this._lastSidebarVersion === this.sidebar._teamEventsVersion) {return;}
+      this._lastSidebarVersion = this.sidebar._teamEventsVersion;
+      this._refreshMessages();
+    });
+  }
+
+  /** teamActivity 高频触发走 20ms 节流,防止破坏光标位置闪烁。 */
+  _queueStatusBar() {
+    if (!this._renderQueue) {
+      const RenderQueue = require('./render-queue');
+      this._renderQueue = new RenderQueue(20);
+    }
+    this._renderQueue.requestRender(() => this._refreshStatusBar());
   }
 
   /**
@@ -502,10 +531,10 @@ class TUI {
       this._backupRenderCount = 0;
     }
 
-    // 非关键渲染做输出上限保护
+    // 非关键渲染做输出上限保护(ANSI-safe:在完整转义序列边界切,避免残影 flicker)
     let writeStr = output;
     if (!critical && output.length > this.MAX_RENDER_OUTPUT) {
-      writeStr = output.slice(0, this.MAX_RENDER_OUTPUT);
+      writeStr = this._truncateAnsiSafe(output, this.MAX_RENDER_OUTPUT);
     }
 
     this._lastWriteResult = process.stdout.write(writeStr);
@@ -546,6 +575,19 @@ class TUI {
 
   _truncateAnsi(str, maxLen) {
     return truncateToWidth(str, maxLen, chalk.dim('...'));
+  }
+
+  /** 在完整 ANSI 转义序列边界切,防止撕开颜色代码导致残影。 */
+  _truncateAnsiSafe(str, maxLen) {
+    if (str.length <= maxLen) {return str;}
+    let cutAt = maxLen;
+    for (let i = maxLen - 1; i > maxLen - 64 && i > 0; i--) {
+      const ch = str[i];
+      if (ch >= '0' && ch <= '9' || ch === ';') {continue;}
+      if (ch === '\x1b') {cutAt = i; break;}
+      if (/[a-zA-Z]/.test(ch)) {cutAt = i + 1; break;}
+    }
+    return str.slice(0, cutAt) + '\x1b[0m\x1b[K';
   }
 
   clearMessages() {
