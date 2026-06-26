@@ -25,7 +25,6 @@ class MCPManager extends EventEmitter {
       this._logger.info(`[mcp] 启动 ${names.length} 个 MCP 服务器`);
     }
 
-    // 并发出所有服务器的连接请求
     const promises = names.map((name) =>
       this.connectServer(name, servers[name], 0)
     );
@@ -34,25 +33,21 @@ class MCPManager extends EventEmitter {
 
   async addServer(name, serverConfig) {
     if (this._servers.has(name)) {
-      // 已连接则报错
       const existing = this._servers.get(name);
       if (existing.status === 'connected' || existing.status === 'connecting') {
         throw new Error(`MCP 服务器 "${name}" 已存在且状态为 ${existing.status}`);
       }
-      // 移除旧的重新添加
       await this.disconnectServer(name);
     }
     return this.connectServer(name, serverConfig, 0);
   }
 
-  // 移除并断开 MCP 服务器
   async removeServer(name) {
     await this.disconnectServer(name);
   }
 
-  // 连接 MCP 服务器（指数退避重试）
+  // 指数退避重试
   async connectServer(name, serverConfig, retryCount) {
-    // 创建或更新服务器状态记录
     const entry = {
       client: null,
       transport: null,
@@ -71,30 +66,25 @@ class MCPManager extends EventEmitter {
         this._logger.info(`[mcp] 连接服务器 "${name}" (${serverConfig.transport})`);
       }
 
-      // 创建传输层
       const transport = createTransport(name, serverConfig, this._logger);
       entry.transport = transport;
 
-      // 创建 MCP Client
       const client = new Client(
         { name: 'anvil', version: '0.1.0' },
         { capabilities: {} }
       );
       entry.client = client;
 
-        transport.onclose = () => {
+      transport.onclose = () => {
         this._onTransportClose(name);
       };
 
-      // 处理传输错误事件
       transport.onerror = (err) => {
         this._onTransportError(name, err);
       };
 
-      // 连接到服务器
       await client.connect(transport);
 
-      // 发现工具
       let toolList = [];
       try {
         const toolResult = await client.listTools();
@@ -105,7 +95,6 @@ class MCPManager extends EventEmitter {
         }
       }
 
-      // 更新状态
       entry.status = 'connected';
       entry.tools = toolList;
       entry.error = null;
@@ -140,7 +129,6 @@ class MCPManager extends EventEmitter {
         return this.connectServer(name, serverConfig, retryCount + 1);
       }
 
-      // 重试耗尽
       entry.status = 'error';
 
       if (this._logger) {
@@ -154,14 +142,12 @@ class MCPManager extends EventEmitter {
     }
   }
 
-  // 断开 MCP 服务器
   async disconnectServer(name) {
     const entry = this._servers.get(name);
     if (!entry) {return;}
 
     entry._closingDeliberately = true;
 
-    // 清除重连定时器
     if (entry._reconnectTimer) {
       clearTimeout(entry._reconnectTimer);
       entry._reconnectTimer = null;
@@ -186,18 +172,16 @@ class MCPManager extends EventEmitter {
     }
   }
 
-  // 断线重连
   async reconnectServer(name) {
     const entry = this._servers.get(name);
     if (!entry) {return;}
 
-    // 清除旧重连定时器
     if (entry._reconnectTimer) {
       clearTimeout(entry._reconnectTimer);
       entry._reconnectTimer = null;
     }
 
-    // 关闭旧 transport 和 client（防止泄漏）
+    // 关闭旧连接防止泄漏
     try {
       if (entry.client) {await entry.client.close();}
       if (entry.transport) {entry.transport.close();}
@@ -214,11 +198,10 @@ class MCPManager extends EventEmitter {
     entry.transport = null;
     this.emit('server_status_change', this.getStatus());
 
-    // 重新连接（重置重试计数）
+    // 重置重试计数
     await this.connectServer(name, entry.config, 0);
   }
 
-  // 执行 MCP 工具
   async executeTool(serverName, toolName, params) {
     const entry = this._servers.get(serverName);
     if (!entry || entry.status !== 'connected') {
@@ -242,7 +225,6 @@ class MCPManager extends EventEmitter {
     }
   }
 
-  // 关闭所有服务器
   async stop() {
     if (this._servers.size === 0) {return;}
 
@@ -250,7 +232,6 @@ class MCPManager extends EventEmitter {
       this._logger.info(`[mcp] 关闭 ${this._servers.size} 个 MCP 服务器`);
     }
 
-    // 清除重连定时器并标记主动关闭
     for (const [, entry] of this._servers) {
       entry._closingDeliberately = true;
       if (entry._reconnectTimer) {
@@ -270,7 +251,6 @@ class MCPManager extends EventEmitter {
           })
         );
       }
-      // 关闭 transport
       if (entry.transport) {
         try {entry.transport.close();} catch {}
       }
@@ -284,7 +264,6 @@ class MCPManager extends EventEmitter {
     }
   }
 
-  // 获取服务器状态摘要
   getStatus() {
     const result = [];
     for (const [name, entry] of this._servers) {
@@ -301,7 +280,6 @@ class MCPManager extends EventEmitter {
     return result;
   }
 
-  // 获取服务器配置
   getConfig() {
     const config = {};
     for (const [name, entry] of this._servers) {
@@ -310,14 +288,10 @@ class MCPManager extends EventEmitter {
     return config;
   }
 
-  /**
-   * 处理传输意外关闭
-   */
   _onTransportClose(name) {
     const entry = this._servers.get(name);
     if (!entry) {return;}
 
-    // 主动关闭不重连
     if (entry._closingDeliberately) {return;}
 
     if (this._logger) {
@@ -326,7 +300,6 @@ class MCPManager extends EventEmitter {
 
     entry.status = 'disconnected';
 
-    // 2 秒后重连
     entry._reconnectTimer = setTimeout(() => {
       if (!this._servers.has(name)) {return;}
       this.reconnectServer(name).catch((err) => {
@@ -337,9 +310,6 @@ class MCPManager extends EventEmitter {
     }, 2000);
   }
 
-  /**
-   * 处理传输错误事件
-   */
   _onTransportError(name, err) {
     const entry = this._servers.get(name);
     if (!entry) {return;}
@@ -353,13 +323,11 @@ class MCPManager extends EventEmitter {
     this.emit('server_error', { name, error: err.message });
   }
 
-  // 格式化 MCP 工具执行结果
   _formatToolResult(result) {
     if (!result || !result.content) {
       return { content: [], isError: result?.isError || false };
     }
 
-    // 提取 text 内容拼接为字符串
     const textParts = [];
     let nonTextCount = 0;
 
@@ -373,7 +341,7 @@ class MCPManager extends EventEmitter {
 
     const rawContent = textParts.join('\n');
 
-    // 检测并格式化搜索结果 JSON
+    // 尝试识别搜索结果 JSON 并转多行可读格式
     const formattedContent = this._formatSearchResults(rawContent);
 
     const formatted = {
@@ -388,7 +356,6 @@ class MCPManager extends EventEmitter {
     return formatted;
   }
 
-  // 格式化搜索结果 JSON
   _formatSearchResults(text) {
     try {
       const trimmed = text.trim();
@@ -398,7 +365,7 @@ class MCPManager extends EventEmitter {
 
       const data = JSON.parse(trimmed);
 
-      // 识别搜索结果结构
+      // 兼容 organic/results/items/顶层数组四种搜索结果结构
       let items = null;
       if (data.organic && Array.isArray(data.organic)) {
         items = data.organic;
@@ -414,7 +381,6 @@ class MCPManager extends EventEmitter {
         return text;
       }
 
-      // 多行可读格式
       const lines = [];
       lines.push(`[SEARCH_RESULTS:${items.length}]`);
 
@@ -425,7 +391,6 @@ class MCPManager extends EventEmitter {
         const date = item.date || '';
         const link = item.link || '';
 
-        // 提取域名
         let domain = '';
         if (link) {
           try {
@@ -433,10 +398,8 @@ class MCPManager extends EventEmitter {
           } catch {}
         }
 
-        // 清理摘要中的多余空白
         const cleanSnippet = snippet.replace(/\s+/g, ' ').trim();
 
-        // 组装单个结果
         lines.push(`  标题: ${title}`);
         if (cleanSnippet) {lines.push(`  摘要: ${cleanSnippet}`);}
         if (date) {lines.push(`  日期: ${date}`);}

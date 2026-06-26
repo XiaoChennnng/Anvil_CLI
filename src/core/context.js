@@ -7,21 +7,18 @@ const crypto = require('crypto');
 
 // 上下文管理系统，默认 1M 窗口，5 层架构，5 级压缩阈值
 
-// 忽略的目录
 const IGNORED_DIRS = new Set([
   'node_modules', '.git', '.anvil', 'dist', 'build',
   '.next', '.nuxt', 'cache', '__pycache__', '.venv',
   'venv', 'env', '.svn', 'coverage',
 ]);
 
-// 窗口大小配置
 const WINDOW_SIZES = {
   STANDARD: 1_000_000,  // 1M — 默认
   EXTENDED: 1_200_000, // 1.2M — 复杂项目分析
   MAXIMUM:  1_500_000, // 1.5M — 极限场景
 };
 
-// 压缩级别（保留用于警告提示，不执行实际压缩）
 const COMPRESSION_LEVELS = {
   NONE:       { level: 0, threshold: 0.00, label: '正常' },
   SOFT_WARN:  { level: 1, threshold: 0.70, label: '[警告] 上下文偏高' },
@@ -74,7 +71,6 @@ function _setCachedTokenCount(text, count) {
   }
 }
 
-// Token 预算分配（占窗口 %）
 const BUDGET = {
   IMMUTABLE:      0.02,   // Tier 0: System Prompt + Tool Defs
   CACHE_FRIENDLY: 0.08,   // Tier 1: Project Overview
@@ -84,11 +80,9 @@ const BUDGET = {
   RESERVE:        0.05,   // 安全余量
 };
 
-// 文件上下文 LRU 配置
 const FILE_CONTEXT_MAX_ENTRIES = 30;
 const FILE_CONTEXT_MAX_TOKENS = 15000; // ~50KB at 0.3 tokens/char, 统一用 token 单位
 
-// 工具调用重要性权重（按工具类型差异化评分）
 const TOOL_IMPORTANCE = {
   write_file:        { score: 1.0,  category: 'mutation' },
   delete_file:       { score: 0.95, category: 'mutation' },
@@ -100,7 +94,6 @@ const TOOL_IMPORTANCE = {
   _default:          { score: 0.6,  category: 'other' },
 };
 
-// 内容类型 token 比率（用于 content-aware estimation）
 const CONTENT_TOKEN_RATIOS = {
   code_block:  0.40,    // ~2.5 chars/token — 代码紧凑
   markdown:    0.35,    // ~2.85 chars/token — Markdown 混合
@@ -109,7 +102,6 @@ const CONTENT_TOKEN_RATIOS = {
   cjk:         1.5,     // ~0.67 char/token — 中文等
 };
 
-// 压缩遗憾检测模式（用户消息中的关键词）
 const REGRET_PATTERNS = [
   /(?:^|[^a-zA-Z])(?:刚才|之前|刚刚).*(?:写|说|改|删)(?:的|了)/,
   /\b(?:undo|restore)\b|恢复|还原|撤销|回退/,
@@ -120,7 +112,6 @@ const REGRET_PATTERNS = [
   /回到(?:\b|之前|回退到)/,
 ];
 
-// 消息权重 (用于重要性评分)
 const MSG_WEIGHTS = {
   user:          1.0,   // 用户消息最重要
   assistant_tool: 0.9,  // 带工具调用的 assistant
@@ -128,7 +119,6 @@ const MSG_WEIGHTS = {
   tool:          0.3,   // 工具结果
 };
 
-// 对话相位（影响压缩阈值和保留轮数）
 const CONVERSATION_PHASES = {
   EXPLORE:   { thresholdShift: +0.05, keepRounds: 8,  description: '探索代码库' },
   IMPLEMENT: { thresholdShift: 0,     keepRounds: 6,  description: '开发实现' },
@@ -136,12 +126,10 @@ const CONVERSATION_PHASES = {
   REVIEW:    { thresholdShift: 0,     keepRounds: 5,  description: '代码审查' },
 };
 
-// 内容感知 Token 估算（代码块/JSON/中文/英文用不同比率）
 function estimateTokenCount(text) {
   if (!text) {return 0;}
   if (typeof text !== 'string') {return 0;}
 
-  // 缓存查询
   const cached = _getCachedTokenCount(text);
   if (cached !== undefined) {return cached;}
 
@@ -155,7 +143,6 @@ function estimateTokenCount(text) {
   return result;
 }
 
-// 分割文本为不同类型内容块
 function _segmentContentType(text) {
   const segments = [];
 
@@ -174,7 +161,6 @@ function _segmentContentType(text) {
     segments.push({ text: text.slice(lastEnd), ratio: CONTENT_TOKEN_RATIOS.markdown });
   }
 
-  // 无代码块 → 全段检测
   if (segments.length === 0) {
     segments.push(..._detectSingleContentType(text));
   }
@@ -182,12 +168,10 @@ function _segmentContentType(text) {
   return segments;
 }
 
-// 检测单一段落的内容类型
 function _detectSingleContentType(text) {
   const lines = text.split('\n').filter((l) => l.trim().length > 0);
   if (lines.length === 0) {return [{ text, ratio: CONTENT_TOKEN_RATIOS.plain_text }];}
 
-  // JSON 检测: 大多数行以 JSON 结构开始
   const jsonLike = lines.every((l) => {
     const t = l.trim();
     return t.startsWith('{') || t.startsWith('[') || t.startsWith('"') ||
@@ -197,7 +181,6 @@ function _detectSingleContentType(text) {
     return [{ text, ratio: CONTENT_TOKEN_RATIOS.json }];
   }
 
-  // 内联代码检测
   const inlineCodeRatio = _estimateInlineCodeRatio(text);
   if (inlineCodeRatio > 0.3) {
     return [{ text, ratio: CONTENT_TOKEN_RATIOS.code_block }];
@@ -206,7 +189,6 @@ function _detectSingleContentType(text) {
   return [{ text, ratio: CONTENT_TOKEN_RATIOS.plain_text }];
 }
 
-// 估算文本中内联代码比例
 function _estimateInlineCodeRatio(text) {
   if (text.length < 20) {return 0;}
   const codeLike = text.match(/[{}[\]();=<>+*/&|!~^%#@]/g);
@@ -214,7 +196,6 @@ function _estimateInlineCodeRatio(text) {
   return codeLike.length / text.length;
 }
 
-// 按比率统计字符 tokens（处理 CJK / 空白 / 其他）
 function _countCharsByRatio(text, baseRatio) {
   let count = 0;
   for (const char of text) {
@@ -232,15 +213,12 @@ function _countCharsByRatio(text, baseRatio) {
   return count;
 }
 
-// 估算消息列表的 token 总数
-// 消息 token 缓存
 const _msgTokenCache = new Map();
 const MSG_TOKEN_CACHE_MAX = 20;
 
 function estimateMessageTokens(messages) {
   if (!messages || !Array.isArray(messages)) {return 0;}
 
-  // 用消息列表的指纹做缓存键
   const cacheKey = _messagesFingerprint(messages);
   if (cacheKey) {
     const cached = _msgTokenCache.get(cacheKey);
@@ -256,7 +234,6 @@ function estimateMessageTokens(messages) {
   }
 
   if (cacheKey) {
-    // LRU
     if (_msgTokenCache.has(cacheKey)) {
       _msgTokenCache.delete(cacheKey);
     }
@@ -270,10 +247,8 @@ function estimateMessageTokens(messages) {
   return total;
 }
 
-// 生成消息列表的快速指纹（用于 token 缓存键）
 function _messagesFingerprint(messages) {
   if (!messages || messages.length === 0) {return null;}
-  // 取长度、最后 3 条消息的内容长度、角色
   const len = messages.length;
   const last3 = messages.slice(-3).map(m => {
     const c = (m.content || '').length;
@@ -289,38 +264,31 @@ class ContextManager {
     this.config = config || {};
     this.projectDir = config.projectDir || process.cwd();
 
-    // 从配置读取上下文参数（支持 defaults.js 中的 context 块）
     this._contextCfg = this.config.context || {};
     this.windowSize = this._contextCfg.windowSize || config.windowSize || WINDOW_SIZES.STANDARD;
     this.maxTokens = this.windowSize;
     this._compressThresholds = this._contextCfg.compressThresholds || null;
     this._keepRoundsCfg = this._contextCfg.keepRounds || null;
 
-    // 项目概览缓存
     this.projectOverview = null;
 
-    // 文件上下文 (LRU Map)
     this._fileContexts = new Map();
     this._fileContextTotalTokens = 0;
 
-    // 压缩统计
     this.compressionStats = {
       totalCompressions: 0,
       totalTokensSaved: 0,
       lastCompression: null,
     };
 
-    // 实际运行时 token 追踪（按 tier，由 _computeTierTokens 填充）
     this._tierTokens = {};
 
-    // 对话相位追踪
     this._phaseTracker = {
       phase: 'EXPLORE',
       toolSequence: [],
       messageCountSincePhaseCheck: 0,
     };
 
-    // Token 估算校准
     this._calibration = {
       samples: [],
       correctionFactor: 1.0,
@@ -328,23 +296,19 @@ class ContextManager {
       lastCalibrated: null,
     };
 
-    // 预测性文件预取 — import/require 关联图
     this._prefetchHints = {
       relatedFiles: new Map(),  // filePath → Set(relatedPaths)
     };
 
-    // 压缩遗憾检测
     this._regretTracker = {
       count: 0,
       patterns: [],
       lastReported: null,
     };
 
-    // 功能开关（可通过 config 禁用）
     this._enablePhaseDetection = config.adaptiveCompression !== false;
     this._enableCalibration = config.autoCalibrate !== false;
 
-    // Memory 配置（.anvil/Memory.md 用户长期记忆）
     const memoryCfg = this.config.memory || {};
     this._memoryCfg = {
       fileName: memoryCfg.fileName || 'Memory.md',
@@ -366,7 +330,6 @@ class ContextManager {
     try {
       const stat = fs.statSync(this._memoryFilePath);
       const now = Date.now();
-      // 缓存命中条件：内容未变 且 TTL 未过期
       if (
         this._memoryCache.content !== null
         && this._memoryCache.mtime === stat.mtimeMs
@@ -376,7 +339,6 @@ class ContextManager {
       }
       const content = fs.readFileSync(this._memoryFilePath, 'utf8');
       const tokens = estimateTokenCount(content);
-      // 超 maxTokens 时截断（按行截，不切到行中）
       let final = content;
       if (tokens > this._memoryCfg.maxTokens) {
         const lines = content.split('\n');
@@ -396,9 +358,7 @@ class ContextManager {
       };
       return final;
     } catch (err) {
-      // 文件不存在时返回空（首次启动很正常）
       if (err.code === 'ENOENT') {return '';}
-      // 其他错误降级：不阻塞对话
       return '';
     }
   }
@@ -444,11 +404,9 @@ class ContextManager {
     };
   }
 
-  // 构建项目概览（自适应深度）
   async buildProjectOverview(depth = 3) {
     const maxBudget = Math.floor(this.windowSize * BUDGET.CACHE_FRIENDLY);
 
-    // 先尝试 depth=3，超预算则降为 depth=2
     let tree = this._buildDirectoryTree(this.projectDir, 3);
     let treeTokens = estimateTokenCount(tree);
     if (treeTokens > maxBudget * 0.6) {
@@ -456,11 +414,9 @@ class ContextManager {
       treeTokens = estimateTokenCount(tree);
     }
 
-    // 关键文件摘要（根据预算控制数量）
     const keyFiles = this._findKeyFiles();
     let totalTokens = treeTokens;
 
-    // 智能选择关键文件阅读行数
     const fileBudget = maxBudget * 0.3;
     const avgTokensPerLine = 50; // 估算每行约 50 tokens
     const maxLinesPerFile = Math.max(10, Math.floor(fileBudget / (keyFiles.length * avgTokensPerLine)));
@@ -483,11 +439,9 @@ class ContextManager {
       if (totalTokens > maxBudget) {break;}
     }
 
-    // 依赖信息（极简）
     const deps = this._readDependencies();
     const depTokens = estimateTokenCount(deps);
     if (totalTokens + depTokens > maxBudget) {
-      // 截断依赖列表
       const truncated = deps.split(', ').slice(0, 20).join(', ');
       this.projectOverview = {
         tree,
@@ -533,7 +487,6 @@ class ContextManager {
         }
       }
     } catch {
-      // 权限不足等忽略
     }
     return result;
   }
@@ -578,7 +531,6 @@ class ContextManager {
     return text;
   }
 
-  // 按需加载文件到上下文（LRU 淘汰 + 预算控制）
   async loadFileOnDemand(filePath, options = {}) {
     const resolvedPath = path.resolve(this.projectDir, filePath);
     const relative = path.relative(this.projectDir, resolvedPath);
@@ -594,7 +546,6 @@ class ContextManager {
     }
 
     try {
-      // 二进制检测 + 读取内容（用 fsp 异步，不阻塞 event loop）
       let fileHandle;
       try {
         fileHandle = await fsp.open(resolvedPath, 'r');
@@ -612,17 +563,14 @@ class ContextManager {
         return result;
       }
 
-      // 读取全部内容
       const raw = await fsp.readFile(resolvedPath, 'utf8');
       const lines = raw.split(/\r?\n/);
       let content;
 
-      // 智能行数决策
       if (options.limit) {
         const selected = lines.slice(options.offset || 0, (options.offset || 0) + options.limit);
         content = selected.join('\n');
       } else if (lines.length > 500) {
-        // 大文件：只取头部 200 行 + 尾部 30 行
         const head = lines.slice(0, 200);
         const tail = lines.slice(-30);
         content = head.join('\n') + `\n\n... (${lines.length - 230} lines omitted) ...\n\n` + tail.join('\n');
@@ -633,7 +581,6 @@ class ContextManager {
       const result = `### ${relative}\n\`\`\`\n${content}\n\`\`\``;
       this._addFileContext(cacheKey, result);
 
-      // 扫描 import/require 构建关联图（仅扫描关键文件）
       if (relative.endsWith('.js') || relative.endsWith('.ts') ||
           relative.endsWith('.jsx') || relative.endsWith('.tsx') ||
           relative.endsWith('.py') || relative.endsWith('.go') ||
@@ -647,11 +594,9 @@ class ContextManager {
     }
   }
 
-  // 添加文件上下文到 LRU 缓存
   _addFileContext(key, content) {
     const newTokens = estimateTokenCount(content);
 
-    // 超出容量，淘汰最少使用的
     while (
       this._fileContexts.size >= FILE_CONTEXT_MAX_ENTRIES ||
       this._fileContextTotalTokens + newTokens > FILE_CONTEXT_MAX_TOKENS
@@ -669,7 +614,6 @@ class ContextManager {
     this._fileContextTotalTokens += newTokens;
   }
 
-  // LRU 淘汰
   _evictLRU() {
     let oldest = null;
     let oldestKey = null;
@@ -687,11 +631,8 @@ class ContextManager {
     }
   }
 
-  // 压缩引擎 — 多级渐进式压缩
 
-  // 检查当前需要的压缩级别
   getCompressionLevel(messages, currentTokens) {
-    // 更新相位后获取相位偏移
     const phaseCfg = this._updatePhase(messages);
     const phaseShift = phaseCfg.thresholdShift || 0;
     const ratio = currentTokens / this.windowSize;
@@ -719,13 +660,11 @@ class ContextManager {
     };
   }
 
-  // 手动触发上下文压缩（支持聚焦保留）
   compactContext(messages, options = {}) {
     const { level = 'auto' } = options;
     const totalTokens = estimateMessageTokens(messages);
     const autoLevel = this.getCompressionLevel(messages, totalTokens);
 
-    // 确定压缩级别
     let compressLevel;
     if (level === 'auto') {
       compressLevel = autoLevel.level;
@@ -762,11 +701,9 @@ class ContextManager {
 
     let result;
     if (options.keep && options.keep.length > 0) {
-      // 聚焦保留模式
       const preserve = new Set(Array.isArray(options.keep) ? options.keep : [options.keep]);
       result = this._selectiveCompress(messages, compressLevel, preserve, options.keepRounds);
     } else {
-      // 普通压缩模式
       result = this._compressByLevel(messages, compressLevel);
     }
 
@@ -789,7 +726,6 @@ class ContextManager {
     };
   }
 
-  // 按级别选择压缩策略
   _compressByLevel(messages, level) {
     const name = Object.entries(COMPRESSION_LEVELS).find(([,c]) => c.level === level)?.[0] || 'MED_COMP';
     switch (name) {
@@ -801,18 +737,15 @@ class ContextManager {
     }
   }
 
-  // 选择性压缩 — 保留指定方面
   _selectiveCompress(messages, level, preserve, keepRounds) {
     const { systemMsgs, nonSystem } = this._splitMessages(messages);
     const phaseCfg = this._updatePhase(messages);
     const defaultKeepRounds = keepRounds || phaseCfg.keepRounds || 6;
 
-    // 如果保留了 all，退回到普通压缩
     if (preserve.has('all')) {
       return this._compressByLevel(messages, level);
     }
 
-    // 保留最近 N 轮
     let keptRounds = [];
     let olderRounds = [];
 
@@ -823,7 +756,6 @@ class ContextManager {
       olderRounds = rounds.slice(0, rounds.length - keepCount);
     } else if (preserve.has('decisions') || preserve.has('tools')) {
       // 如果没保留 recent，但仍然要保留 decisions/tools → 按重要性保留
-      // 目标：只保留最关键的消息（文件写入、重要决策），激进压缩
       const scored = nonSystem.map((msg, i) => ({
         msg,
         score: this._scoreMessage(msg, i, nonSystem.length),
@@ -831,7 +763,6 @@ class ContextManager {
       }));
       scored.sort((a, b) => b.score - a.score);
 
-      // 保留高分数消息：只用 25% 窗口（比 recent 的 60% 更激进）
       const targetTokens = Math.floor(this.windowSize * 0.25);
       let current = 0;
       const keptMsgs = [];
@@ -844,20 +775,17 @@ class ContextManager {
           olderMsgs.push(item.msg);
         }
       }
-      // 恢复顺序
       keptMsgs.sort((a, b) => nonSystem.indexOf(a) - nonSystem.indexOf(b));
       const olderNonSystem = nonSystem.filter(m => !keptMsgs.includes(m));
       keptRounds = this._groupIntoRounds(keptMsgs);
       olderRounds = this._groupIntoRounds(olderNonSystem);
     } else {
-      // 没保留 recent → 全部分组，按重要性裁
       const rounds = this._groupIntoRounds(nonSystem);
       const keepCount = Math.min(defaultKeepRounds, rounds.length);
       keptRounds = rounds.slice(-keepCount);
       olderRounds = rounds.slice(0, rounds.length - keepCount);
     }
 
-    // 对 older 轮次生成摘要
     const archivedRounds = [];
 
     for (const round of olderRounds) {
@@ -888,18 +816,14 @@ class ContextManager {
       archivedRounds.push(round);
     }
 
-    // 重新排序 keptRounds 保持原始对话顺序
     if (keptRounds.length > 0) {
       const allKeptMsgs = keptRounds.flat();
       allKeptMsgs.sort((a, b) => nonSystem.indexOf(a) - nonSystem.indexOf(b));
       keptRounds = this._groupIntoRounds(allKeptMsgs);
     }
 
-    // 需要保留 files — 不清空文件缓存
     if (preserve.has('files')) {
-      // 不动 this._fileContexts
     } else if (level >= COMPRESSION_LEVELS.LIGHT_COMP.level) {
-      // 轻度清理一半低频文件
       const entries = [...this._fileContexts.entries()]
         .sort((a, b) => (b[1].accessCount || 0) - (a[1].accessCount || 0));
       const keepCount = Math.floor(entries.length / 2);
@@ -909,16 +833,12 @@ class ContextManager {
     }
 
     if (preserve.has('project')) {
-      // 跳过 project overview 的处理（由其他 tier 负责）
     }
 
-    // 对存档轮次生成摘要
-    // 先提取并保留 AI 语义摘要消息
     const semanticSummaryMsgs = messages.filter((m) => m._semanticSummary);
     const messagesOut = [...systemMsgs, ...semanticSummaryMsgs];
 
     if (archivedRounds.length > 0) {
-      // 按级别生成摘要
       const summaries = archivedRounds.map((round, i) => {
         if (level >= COMPRESSION_LEVELS.HEAVY_COMP.level) {
           return this._summarizeRoundL2(round, i + 1);
@@ -940,7 +860,6 @@ class ContextManager {
       });
     }
 
-    // 添加保留的完整轮次
     for (const round of keptRounds) {
       messagesOut.push(...round);
     }
@@ -1262,7 +1181,6 @@ class ContextManager {
     return rounds * 2;
   }
 
-  // 摘要生成辅助方法
 
   _groupIntoRounds(messages) {
     const rounds = [];
@@ -1283,7 +1201,6 @@ class ContextManager {
     return rounds;
   }
 
-  // L1 详细摘要
   _summarizeRoundL1(round, roundNum) {
     const userMsg = round.find((m) => m.role === 'user');
     const assistantMsgs = round.filter((m) => m.role === 'assistant');
@@ -1306,7 +1223,6 @@ class ContextManager {
     return summary;
   }
 
-  // L2 概要摘要
   _summarizeRoundL2(round, roundNum) {
     const userMsg = round.find((m) => m.role === 'user');
     const assistantMsgs = round.filter((m) => m.role === 'assistant');
@@ -1317,7 +1233,6 @@ class ContextManager {
     return `[${roundNum}] ${(userMsg?.content || '').slice(0, 100)} → ${lastAnswer}`;
   }
 
-  // L3 关键决策提取
   _extractKeyDecisions(round) {
     const decisions = [];
     for (const msg of round) {
@@ -1338,7 +1253,6 @@ class ContextManager {
     return decisions;
   }
 
-  // 消息重要性评分
 
   _scoreMessage(msg, index, totalCount) {
     let score = MSG_WEIGHTS[msg.role] || 0.2;
@@ -1372,7 +1286,6 @@ class ContextManager {
     return score;
   }
 
-  // 按重要性排序裁剪
   _trimByImportance(messages, targetTokens) {
     const len = messages.length;
 
@@ -1454,7 +1367,6 @@ class ContextManager {
     return keptMsgs;
   }
 
-  // 每层预算追踪与强制执行
 
   _computeTierTokens(messages) {
     const budget = this.getWindowConfig().budget;
@@ -1494,7 +1406,6 @@ class ContextManager {
     return messages;
   }
 
-  // 内容感知去重
 
   _deduplicateMessages(messages) {
     const seen = new Map();
@@ -1598,10 +1509,10 @@ class ContextManager {
     }
 
     // Tier 2+4: 历史消息 + 压缩摘要 (去重前先检查预算)
-    // _enforceBudget 会在 tier2/tier4 超预算时自动压缩（之前没调用点，死代码！）
+    // _enforceBudget 在 tier2/tier4 超预算时自动压缩
     const budgetChecked = this._enforceBudget(historyMessages);
     const deduped = this._deduplicateMessages(budgetChecked);
-    // 保留非 system 消息 + 带 _archiveTier 的归档摘要（别把压缩摘要过滤掉了，SB bug）
+    // 保留非 system 消息 + 带 _archiveTier 的归档摘要(防止过滤掉压缩摘要)
     const historyNonSystem = deduped.filter((m) => m.role !== 'system' || m._archiveTier !== undefined);
 
     // 最后一道防线：删除孤立的 tool 消息（OpenAI 要求 tool 必须跟在前面的 tool_calls 之后）
@@ -1668,9 +1579,7 @@ class ContextManager {
     return fixed;
   }
 
-  // Phase 3: 压缩遗憾检测
 
-  // 压缩遗憾检测
   detectRegret(userMessage) {
     if (!userMessage) {return false;}
     const matched = REGRET_PATTERNS.some((p) => p.test(userMessage));
@@ -1717,9 +1626,7 @@ class ContextManager {
     this._calibration.lastCalibrated = new Date().toISOString();
   }
 
-  // 预测性文件预取
 
-  // 扫描文件内容中的 import/require 依赖
   _scanImports(content, filePath) {
     if (!content) {return [];}
     const imports = new Set();
@@ -1780,7 +1687,6 @@ class ContextManager {
     return relatedPaths;
   }
 
-  // 预取关联文件到缓存
   async prefetchRelatedFiles(filePath, maxFiles = 5) {
     const relative = path.relative(this.projectDir, path.resolve(this.projectDir, filePath));
     const related = this._prefetchHints.relatedFiles.get(relative);
@@ -1887,26 +1793,4 @@ class ContextManager {
   }
 }
 
-module.exports = {
-  ContextManager,
-  estimateTokenCount,
-  estimateMessageTokens,
-  WINDOW_SIZES,
-  COMPRESSION_LEVELS,
-  TOOL_IMPORTANCE,
-  CONVERSATION_PHASES,
-  applySemanticSummary: (messages, summaryText, options) => {
-    // 工厂方法：不需要构造 ContextManager 也能调，方便测试
-    const cm = new ContextManager({});
-    return cm.applySemanticSummary(messages, summaryText, options);
-  },
-  validateSemanticBudget: (budgetTokens) => {
-    const v = typeof budgetTokens === 'number' && !Number.isNaN(budgetTokens)
-      ? budgetTokens
-      : 30_000;
-    return Math.max(10_000, Math.min(50_000, v));
-  },
-  // 内部方法（用于测试）
-  _countCharsByRatio,
-  _messageFingerprint: (msg) => crypto.createHash('md5').update(`${msg.role}|${(msg.content || '').slice(0, 200)}|${(msg.tool_calls || []).map((t) => t.function?.name).join(',')}`).digest('hex'),
-};
+module.exports = ContextManager;

@@ -59,7 +59,7 @@ class TUI {
 
     this._fullRender();
     // 注册 resize 处理
-    this.layout.on('resize', () => {
+    this.layout.onResize(() => {
       this._fullRender();
     });
   }

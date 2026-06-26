@@ -14,28 +14,21 @@ class AnvilAIClient extends EventEmitter {
     this._providerConfig = null;
   }
 
-  /**
-   * 初始化提供商配置
-   * @private
-   */
   _initProviderConfig() {
     if (this._providerConfig) {
       return this._providerConfig;
     }
 
-    // 确定使用哪个提供商
     let providerId = this.config.provider;
 
-    // 如果没有指定提供商，尝试从模型自动识别
+    // 没有指定提供商时尝试从模型自动识别
     const modelId = this.config.defaultModel;
     if (!providerId && modelId) {
       providerId = detectProvider(modelId);
     }
 
-    // 默认使用 deepseek
     providerId = providerId || 'deepseek';
 
-    // 获取提供商配置
     try {
       this._providerConfig = getClientConfig(providerId, this.config);
     } catch (err) {
@@ -46,27 +39,17 @@ class AnvilAIClient extends EventEmitter {
     return this._providerConfig;
   }
 
-  /**
-   * 检查当前是否是 Anthropic 格式
-   * @private
-   */
   _isAnthropicFormat() {
     const config = this._initProviderConfig();
-    // 内置 anthropic 提供商或自定义 anthropic 格式
     if (config.provider === 'anthropic') {
       return true;
     }
-    // 自定义提供商使用 anthropic 格式
     if (config.format === 'anthropic') {
       return true;
     }
     return false;
   }
 
-  /**
-   * 获取 OpenAI 客户端实例
-   * @private
-   */
   _getOpenAIClient() {
     if (this._openai) {
       return this._openai;
@@ -91,10 +74,6 @@ class AnvilAIClient extends EventEmitter {
     return this._openai;
   }
 
-  /**
-   * 获取 Anthropic 客户端实例
-   * @private
-   */
   _getAnthropicClient() {
     if (this._anthropic) {
       return this._anthropic;
@@ -122,14 +101,6 @@ class AnvilAIClient extends EventEmitter {
   }
 
   /**
-   * 获取当前提供商配置
-   * @returns {Object} 提供商配置
-   */
-  getProviderConfig() {
-    return this._initProviderConfig();
-  }
-
-  /**
    * 获取当前提供商 ID
    * @returns {string} 提供商 ID
    */
@@ -141,7 +112,6 @@ class AnvilAIClient extends EventEmitter {
   async chat(messages, options = {}) {
     const providerConfig = this._initProviderConfig();
 
-    // 处理图片消息（如果是多模态模型）
     const model = options.model || this.config.defaultModel || providerConfig.defaultModel;
     const supportsVision = isVisionModel(providerConfig.provider, model);
 
@@ -151,24 +121,18 @@ class AnvilAIClient extends EventEmitter {
       processedMessages = convertImagesInMessages(messages, format);
     }
 
-    // Anthropic Messages API 格式
     if (this._isAnthropicFormat()) {
       return this._chatAnthropic(processedMessages, options, providerConfig);
     }
 
-    // OpenAI Chat Completions 格式 (DeepSeek, Kimi, OpenAI, 自定义)
     return this._chatOpenAI(processedMessages, options, providerConfig);
   }
 
-  /**
-   * OpenAI 兼容格式的聊天请求
-   * @private
-   */
   async _chatOpenAI(messages, options, providerConfig) {
     const model = options.model || this.config.defaultModel || providerConfig.defaultModel;
     const retryCount = this.config.retryCount || 2;
 
-    // 思考模式：只有提供商支持且用户未禁用时才启用
+    // 思考模式:提供商支持且用户未禁用时才启用
     const thinkingMode = providerConfig.thinkingMode
       ? (options.thinkingMode !== undefined ? options.thinkingMode : true)
       : false;
@@ -184,7 +148,6 @@ class AnvilAIClient extends EventEmitter {
       requestOptions.tools = options.tools;
     }
 
-    // 根据提供商格式配置思考模式
     if (thinkingMode && providerConfig.requestFormat?.thinkingType === 'reasoning_effort') {
       requestOptions.reasoning_effort = 'max';
       requestOptions.extra_body = {
@@ -228,23 +191,16 @@ class AnvilAIClient extends EventEmitter {
     throw lastError || new Error('API 请求失败');
   }
 
-  /**
-   * Anthropic Messages API 的聊天请求
-   * @private
-   */
   async _chatAnthropic(messages, options, providerConfig) {
     const model = options.model || this.config.defaultModel || providerConfig.defaultModel;
     const retryCount = this.config.retryCount || 2;
 
-    // 思考模式：Claude 3.7 Sonnet 支持扩展思考
     const thinkingMode = providerConfig.thinkingMode
       ? (options.thinkingMode !== undefined ? options.thinkingMode : false)
       : false;
 
-    // 转换 OpenAI 格式消息为 Anthropic 格式
     const anthropicMessages = this._convertToAnthropicMessages(messages);
 
-    // 提取系统消息
     const systemMessage = messages.find(m => m.role === 'system');
     const system = systemMessage ? systemMessage.content : undefined;
 
@@ -260,17 +216,15 @@ class AnvilAIClient extends EventEmitter {
     }
 
     if (options.tools && options.tools.length > 0) {
-      // Anthropic 工具格式需要转换
       requestOptions.tools = this._convertToAnthropicTools(options.tools);
     }
 
-    // Claude 3.7 Sonnet 支持扩展思考模式
     if (thinkingMode && model.includes('claude-3-7')) {
       requestOptions.thinking = {
         type: 'enabled',
         budget_tokens: 16000,
       };
-      // 思考模式下 max_tokens 需要大于 budget_tokens
+      // 思考模式下 max_tokens 必须 > budget_tokens
       requestOptions.max_tokens = 32000;
     }
 
@@ -282,7 +236,7 @@ class AnvilAIClient extends EventEmitter {
       } catch (err) {
         lastError = err;
 
-        // Anthropic 错误处理
+        // Anthropic 错误码处理(其余分支同 OpenAI)
         if (err.status === 401) {
           throw new Error(`API 认证失败: ${err.message}`);
         }
@@ -311,10 +265,6 @@ class AnvilAIClient extends EventEmitter {
     throw lastError || new Error('API 请求失败');
   }
 
-  /**
-   * 将 OpenAI 格式消息转换为 Anthropic 格式
-   * @private
-   */
   _convertToAnthropicMessages(messages) {
     const anthropicMessages = [];
 
@@ -324,16 +274,13 @@ class AnvilAIClient extends EventEmitter {
         continue;
       }
 
-      // 处理 tool_calls (assistant 消息中包含工具调用)
       if (msg.role === 'assistant' && msg.tool_calls) {
         const content = [];
 
-        // 添加文本内容
         if (msg.content) {
           content.push({ type: 'text', text: msg.content });
         }
 
-        // 添加工具调用
         for (const tc of msg.tool_calls) {
           content.push({
             type: 'tool_use',
@@ -352,7 +299,6 @@ class AnvilAIClient extends EventEmitter {
         continue;
       }
 
-      // 处理 tool 角色消息 (工具结果)
       if (msg.role === 'tool') {
         anthropicMessages.push({
           role: 'user',
@@ -365,7 +311,6 @@ class AnvilAIClient extends EventEmitter {
         continue;
       }
 
-      // 普通消息
       anthropicMessages.push({
         role: msg.role,
         content: msg.content,
@@ -375,10 +320,6 @@ class AnvilAIClient extends EventEmitter {
     return anthropicMessages;
   }
 
-  /**
-   * 将 OpenAI 格式工具转换为 Anthropic 格式
-   * @private
-   */
   _convertToAnthropicTools(tools) {
     return tools.map(tool => ({
       name: tool.function.name,
@@ -391,7 +332,6 @@ class AnvilAIClient extends EventEmitter {
     const client = this._getOpenAIClient();
     this._abortController = new AbortController();
 
-    // 支持外部取消信号
     const combinedSignal = signal;
     if (combinedSignal) {
       combinedSignal.addEventListener('abort', () => {

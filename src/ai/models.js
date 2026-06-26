@@ -1,13 +1,9 @@
 'use strict';
 
-const { PROVIDERS, getProvider, isValidProvider, getCustomModel, CUSTOM_MODELS } = require('./providers');
+const { PROVIDERS, getProvider, isValidProvider, getCustomModel } = require('./providers');
 
-/**
- * 所有可用模型（向后兼容）n * 从 providers.js 聚合所有提供商的模型
- */
+// 聚合所有内置提供商的模型(模块内部使用,不对外暴露)
 const MODELS = {};
-
-// 聚合所有内置提供商的模型
 for (const provider of Object.values(PROVIDERS)) {
   for (const [modelId, model] of Object.entries(provider.models)) {
     MODELS[modelId] = {
@@ -50,38 +46,10 @@ function getModelProvider(modelId) {
   return model?.provider || null;
 }
 
-/**
- * 获取所有模型列表（可选按提供商过滤）
- * @param {string} [providerId] - 可选的提供商 ID 过滤
- * @returns {Array} 模型列表
- */
-function getAllModels(providerId) {
-  const result = [];
-
-  // 添加内置模型
-  for (const model of Object.values(MODELS)) {
-    if (!providerId || model.provider === providerId) {
-      result.push(model);
-    }
-  }
-
-  // 添加自定义模型
-  for (const model of CUSTOM_MODELS.values()) {
-    if (!providerId || model.provider === providerId) {
-      result.push(model);
-    }
-  }
-
-  return result;
-}
-
 module.exports = {
-  MODELS,
   getModel,
   isValidModel,
   getModelProvider,
-  getAllModels,
-  // 从 providers 导出以便统一访问
   getProvider,
   isValidProvider,
 };

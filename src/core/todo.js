@@ -114,19 +114,12 @@ class TodoManager {
     this._save();
   }
 
-  /**
-   * 清空所有 todos
-   */
   clearAll(onClear) {
     this.todos = [];
     this._save();
     if (typeof onClear === 'function') {onClear();}
   }
 
-  /**
-   * 获取所有 todos
-   * @param {Object} filter - 过滤条件
-   */
   getAll(filter = {}) {
     // 避免无条件完整拷贝：filter 已返回新数组，无需 [...this.todos]
     let result = this.todos;
@@ -158,10 +151,6 @@ class TodoManager {
     return this.getAll({ completed: false });
   }
 
-  getCompleted() {
-    return this.getAll({ completed: true });
-  }
-
   getStats() {
     const total = this.todos.length;
     const completed = this.todos.filter(t => t.completed).length;
@@ -169,63 +158,6 @@ class TodoManager {
     const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
 
     return { total, completed, pending, percent };
-  }
-
-  // 从 AI 响应中提取 todos（支持 checkbox/TODO/数字列表格式）
-  extractFromContent(content) {
-    if (!content) {return [];}
-
-    const extracted = [];
-    const lines = content.split('\n');
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-
-      // checkbox 格式
-      const checkboxMatch = trimmed.match(/^[-*]\s*\[([ xX])\]\s*(.+)/);
-      if (checkboxMatch) {
-        const isCompleted = checkboxMatch[1] !== ' ';
-        const text = checkboxMatch[2].trim();
-
-        // 检查是否已存在
-        const existing = this.todos.find(t =>
-          t.text.toLowerCase() === text.toLowerCase()
-        );
-
-        if (!existing) {
-          const todo = this.add(text, { source: 'ai' });
-          if (isCompleted && todo) {
-            this.complete(todo.id);
-          }
-          extracted.push(todo);
-        } else if (isCompleted && !existing.completed) {
-          this.complete(existing.id);
-        }
-        continue;
-      }
-
-      // "TODO:" 格式
-      const todoMatch = trimmed.match(/^TODO[:\s]+(.+)/i);
-      if (todoMatch) {
-        const text = todoMatch[1].trim();
-        if (!this.todos.find(t => t.text.toLowerCase() === text.toLowerCase())) {
-          extracted.push(this.add(text, { source: 'ai' }));
-        }
-        continue;
-      }
-
-      // 数字列表格式（仅当明显是任务时）
-      const numberMatch = trimmed.match(/^\d+\.\s+(.+)/);
-      if (numberMatch && this._looksLikeTask(numberMatch[1])) {
-        const text = numberMatch[1].trim();
-        if (!this.todos.find(t => t.text.toLowerCase() === text.toLowerCase())) {
-          extracted.push(this.add(text, { source: 'ai' }));
-        }
-        continue;
-      }
-    }
-
-    return extracted.filter(Boolean);
   }
 
   _looksLikeTask(text) {

@@ -56,9 +56,6 @@ class ToolRegistry {
     return Array.from(this._tools.keys());
   }
 
-  // Skill 管理
-
-  // 从 .anvil/skills/ 加载 Skills
   loadSkills(projectDir) {
     const skillsDir = path.join(projectDir, '.anvil', 'skills');
     const loaded = loadSkillsFromDir(skillsDir);
@@ -70,22 +67,6 @@ class ToolRegistry {
     return this._skills.size;
   }
 
-  // 获取 Skill
-  getSkill(name) {
-    return this._skills.get(name);
-  }
-
-  // 检查输入是否匹配 Skill
-  matchSkill(input) {
-    for (const [, skill] of this._skills) {
-      if (skill.matches(input)) {
-        return skill;
-      }
-    }
-    return null;
-  }
-
-  // 列出所有已加载的 Skills
   listSkills() {
     const result = [];
     for (const [, skill] of this._skills) {

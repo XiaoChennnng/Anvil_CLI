@@ -21,13 +21,12 @@ class SessionCache {
 
     const entry = this._cache.get(key);
 
-    // TTL 过期检查
     if (Date.now() - entry.ts > this._ttl) {
       this._cache.delete(key);
       return null;
     }
 
-    // LRU 更新
+    // LRU:删除已存在的 key,重新插入到末尾成为最新访问
     this._cache.delete(key);
     this._cache.set(key, entry);
     return entry.value;
@@ -36,7 +35,6 @@ class SessionCache {
   set(question, context, result) {
     const key = this._makeKey(question, context);
 
-    // LRU：删除已存在的 key，重新插入到末尾成为最新访问
     if (this._cache.has(key)) {
       this._cache.delete(key);
     }
@@ -49,25 +47,8 @@ class SessionCache {
     this._cache.set(key, { value: result, ts: Date.now() });
   }
 
-  /** 获取缓存统计信息 */
-  getStats() {
-    return {
-      size: this._cache.size,
-      maxSize: this._maxSize,
-      ttl: this._ttl,
-    };
-  }
-
-  has(question, context) {
-    return this._cache.has(this._makeKey(question, context));
-  }
-
   clear() {
     this._cache.clear();
-  }
-
-  get size() {
-    return this._cache.size;
   }
 }
 

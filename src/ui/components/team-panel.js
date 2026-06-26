@@ -43,7 +43,6 @@ class TeamPanel {
     this.sidebar = sidebar;
   }
 
-  /** 注入主消息区渲染器,确保团队面板输出与主 Agent 一致。 */
   setMessageBoxRenderer(renderer) {
     this.messageBoxRenderer = renderer;
   }
@@ -64,7 +63,6 @@ class TeamPanel {
     this._mdRenderer = null;
   }
 
-  /** 优先用注入的共享 renderer,未注入时兜底独立创建。 */
   _getMarkdownRenderer(width) {
     if (this.messageBoxRenderer && this.messageBoxRenderer.markdown) {
       this.messageBoxRenderer.markdown.width = width;
@@ -176,7 +174,6 @@ class TeamPanel {
     return bytes;
   }
 
-  /** 估算多行字节(含换行符)。 */
   _estimateLinesBytes(str) {
     if (!str) {return 0;}
     return this._estimateLineBytes(str) + str.split('\n').length;
@@ -322,7 +319,7 @@ class TeamPanel {
       for (const line of agentLines) {
         allLines.push(line);
       }
-      allLines.push(''); // Agent 间空行
+      allLines.push('');
     }
 
     if (allLines.length === 0) {
@@ -355,7 +352,6 @@ class TeamPanel {
           paired.push(item);
           pendingCalls.delete(callId);
         } else {
-          // 孤立 result
           paired.push({ tc: ev.data.toolCall, result: ev.data });
         }
       }
@@ -438,7 +434,6 @@ class TeamPanel {
     return lines;
   }
 
-  /** 事件列表视图:每条事件 1 行紧凑显示。 */
   _renderEventView(events, width) {
     const filtered = this._filterEvents(events);
     if (filtered.length === 0) {return [chalk.dim('  <无事件>')];}
@@ -514,9 +509,6 @@ class TeamPanel {
     return target ? [target] : [];
   }
 
-  /**
-   * 格式化单条事件为 1 行(事件视图用)
-   */
   _formatEvent(event, width) {
     const t = this.theme;
     const date = new Date(event.time || Date.now());
@@ -565,9 +557,6 @@ class TeamPanel {
     return truncateToWidth(line, width, chalk.dim('...'));
   }
 
-  /**
-   * 格式化角色标签
-   */
   _formatRoleTag(role) {
     const t = this.theme;
     const roleColors = {
@@ -580,9 +569,6 @@ class TeamPanel {
     return chalk.hex(color).dim(`[${role}]`);
   }
 
-  /**
-   * Agent 状态图标
-   */
   _agentStatusIcon(status) {
     const t = this.theme;
     switch (status) {
@@ -596,9 +582,6 @@ class TeamPanel {
     }
   }
 
-  /**
-   * 按 agentFilter 过滤事件
-   */
   _filterEvents(events) {
     if (this.agentFilter === null) {return events;}
     const agents = this.sidebar?.getAgentStatesSnapshot?.() || [];
@@ -694,9 +677,6 @@ class TeamPanel {
     return null;
   }
 
-  /**
-   * 设置 agent 过滤
-   */
   _setAgentFilter(idx) {
     const agents = this.sidebar?.getAgentStatesSnapshot?.() || [];
     if (idx >= 1 && idx <= agents.length) {
@@ -706,9 +686,6 @@ class TeamPanel {
     return { action: 'team_panel_filter_agent', index: idx };
   }
 
-  /**
-   * 计算最大滚动偏移
-   */
   _maxScroll() {
     const events = this.sidebar?.getFullEventLog?.() || [];
     const agents = this.sidebar?.getAgentStatesSnapshot?.() || [];

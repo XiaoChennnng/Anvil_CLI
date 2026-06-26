@@ -3,7 +3,6 @@
 const CUSTOM_MODELS = new Map();
 const CUSTOM_PROVIDERS = new Map();
 
-// 注册自定义提供商配置
 function registerCustomProvider(config) {
   if (!config.id || !config.baseURL) {
     throw new Error('自定义提供商必须包含 id 和 baseURL');
@@ -30,7 +29,6 @@ function registerCustomProvider(config) {
   return providerConfig;
 }
 
-// 注册自定义模型
 function registerCustomModel(config) {
   if (!config.id || !config.provider) {
     throw new Error('自定义模型必须包含 id 和 provider');
@@ -89,7 +87,6 @@ function listCustomModels() {
   }));
 }
 
-// 移除自定义提供商（同时清理其下所有模型）
 function removeCustomProvider(providerId) {
   const modelsToRemove = [];
   for (const [modelId, model] of CUSTOM_MODELS.entries()) {
@@ -289,7 +286,7 @@ function isValidProvider(providerId) {
 }
 
 function getModel(providerId, modelId) {
-  // 自定义模型优先（按 modelId 全局查找，再校验 provider 归属）
+  // 自定义模型优先:按 modelId 全局查找,再校验 provider 归属
   const customModel = CUSTOM_MODELS.get(modelId);
   if (customModel && customModel.provider === providerId) {
     return customModel;
@@ -317,7 +314,7 @@ function getModelContextWindow(providerId, modelId) {
     return model.contextWindow;
   }
 
-  // 无预设模型的提供商返回 null，由调用方决定兜底策略
+  // 无预设模型的提供商返回 null,由调用方决定兜底策略
   return null;
 }
 
@@ -363,7 +360,7 @@ function getModelList(providerId, includeCustom = true) {
     isCustom: m.isCustom || false,
   }));
 
-  // 追加属于此提供商的自定义模型（去重：以 m.id 为 key）
+  // 追加属于此提供商的自定义模型(去重)
   if (includeCustom) {
     const seen = new Set(models.map((m) => m.id));
     for (const cm of CUSTOM_MODELS.values()) {
@@ -386,7 +383,6 @@ function getModelList(providerId, includeCustom = true) {
   return models;
 }
 
-// 根据模型 ID 前缀推断所属提供商
 function detectProvider(modelId) {
   if (modelId.startsWith('gpt-') || modelId.startsWith('o1') || modelId.startsWith('o3')) {
     return 'openai';
@@ -407,7 +403,7 @@ function getProviderApiKey(providerId) {
   const provider = getProvider(providerId);
   if (!provider) {return undefined;}
 
-  // 自定义提供商直接读取存储值；内置提供商从环境变量取
+  // 自定义提供商直接读取存储值;内置提供商从环境变量取
   if (provider.isCustom) {
     return provider.apiKey;
   }
@@ -416,7 +412,6 @@ function getProviderApiKey(providerId) {
   return process.env[envName];
 }
 
-// 合并内置提供商配置 + 用户 config（apiKey/timeout/proxy），返回 client.js 需要的最终配置
 function getClientConfig(providerId, config = {}) {
   const provider = getProvider(providerId);
   if (!provider) {
@@ -442,7 +437,6 @@ function isVisionModel(providerId, modelId) {
   return model.vision === true;
 }
 
-// base64/url/file → OpenAI image_url 格式
 function formatImageForOpenAI(image) {
   if (!image || !image.type || !image.data) {
     throw new Error('图片必须包含 type 和 data');
@@ -470,7 +464,6 @@ function formatImageForOpenAI(image) {
   throw new Error(`不支持的图片类型: ${image.type}`);
 }
 
-// base64/url/file → Anthropic image source 格式
 function formatImageForAnthropic(image) {
   if (!image || !image.type || !image.data) {
     throw new Error('图片必须包含 type 和 data');
@@ -501,7 +494,6 @@ function formatImageForAnthropic(image) {
   throw new Error(`不支持的图片类型: ${image.type}`);
 }
 
-// 把消息数组里的 msg.images 字段按目标格式转换（不修改其他字段）
 function convertImagesInMessages(messages, format) {
   if (!Array.isArray(messages)) {return messages;}
 
@@ -521,7 +513,7 @@ function convertImagesInMessages(messages, format) {
       }
     }).filter(Boolean);
 
-    // OpenAI/Kimi 格式：content 是数组，包含 text + image_url
+    // OpenAI/Kimi:content 是数组,包含 text + image_url
     if (format === 'openai' || format === 'kimi') {
       const content = [];
       if (msg.content) {
@@ -534,7 +526,7 @@ function convertImagesInMessages(messages, format) {
       };
     }
 
-    // Anthropic 格式：content 是数组，包含 text + image
+    // Anthropic:content 是数组,包含 text + image
     if (format === 'anthropic') {
       const content = [];
       if (msg.content) {
@@ -553,7 +545,6 @@ function convertImagesInMessages(messages, format) {
 
 module.exports = {
   PROVIDERS,
-  CUSTOM_MODELS,
   getProvider,
   isValidProvider,
   getModel,
@@ -562,7 +553,6 @@ module.exports = {
   getProviderList,
   getModelList,
   detectProvider,
-  getProviderApiKey,
   getClientConfig,
   registerCustomProvider,
   registerCustomModel,

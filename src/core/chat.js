@@ -7,10 +7,8 @@ const SessionCache = require('../ai/cache');
 const TeamQuestionQueue = require('./team/question-queue');
 const { getSystemPrompt, getLayerContent, getAgentCheckPrompt, getAgentContinuePrompt, PromptLayer, L3Granularity } = require('../ai/prompts');
 
-// AI 自主循环上限
 const DEFAULT_MAX_ITERATIONS = 100;
 
-// 解析 task_complete 结果，处理各种格式
 function parseTaskCompleteResult(content) {
   if (!content) { return { complete: null, reason: 'no_result', summary: '' }; }
   try {
@@ -23,7 +21,7 @@ function parseTaskCompleteResult(content) {
   } catch {
     let summary = '';
     if (/任务完成|已完成|all\s+done|completed/i.test(content)) {
-      // 文本模式下没有结构化 summary，截取可能的"完成说明"部分（去除前缀关键词）
+      // 文本模式:截取"完成说明"部分,去除前缀关键词
       summary = content.replace(/^\s*(任务完成|已完成|all\s+done|completed)[：:。\s]*/i, '').trim();
       return { complete: true, reason: 'text_affirmative', summary };
     }
@@ -34,7 +32,6 @@ function parseTaskCompleteResult(content) {
   }
 }
 
-// 生成任务指纹，用于压缩后检测任务是否丢失
 function generateTaskFingerprint(task) {
   if (!task) { return { keyWords: [], full: '' }; }
   const words = task.split(/[\s,.，、。]+/).filter(w => w.length > 1);
@@ -43,7 +40,6 @@ function generateTaskFingerprint(task) {
   return { keyWords: keyWords.slice(0, 5), full: task.slice(0, 80), length: task.length };
 }
 
-// 检测任务是否在压缩后丢失
 function isTaskLost(messages, fingerprint) {
   if (!fingerprint.keyWords.length) { return false; }
   const allText = messages.map(m => m.content || '').join('');
@@ -133,8 +129,7 @@ class ChatEngine extends EventEmitter {
     }
   }
 
-  // 过滤孤立的 tool 消息（OpenAI 要求 tool 必须跟在带 tool_calls 的 assistant 之后）
-  // 规则：tool 消息必须能匹配到前面某条 assistant 声明的 tool_calls.id
+  // OpenAI 要求 tool 必须跟在带 tool_calls 的 assistant 之后,过滤孤立 tool 避免 400
   _validateToolPairs(messages) {
     const validToolIds = new Set();
     for (const m of messages) {
@@ -152,12 +147,12 @@ class ChatEngine extends EventEmitter {
     });
   }
 
-  // 中断后清理：删除没有配对 tool 的 assistant(tool_calls) 和孤立 tool
+  // 中断后清理:删除没有配对 tool 的 assistant(tool_calls) 和孤立 tool
   _cleanupInterruptedToolCalls() {
     const before = this.messages.length;
     this.messages = this._validateToolPairs(this.messages);
 
-    // 额外处理：assistant 声明了 tool_calls 但所有 tool 都被丢弃的情况
+    // 额外处理:assistant 声明了 tool_calls 但所有 tool 都被丢弃的情况
     const existingToolIds = new Set();
     for (const m of this.messages) {
       if (m.role === 'tool' && m.tool_call_id) {existingToolIds.add(m.tool_call_id);}
@@ -219,7 +214,7 @@ class ChatEngine extends EventEmitter {
         return cached;
       }
 
-      // 多级渐进式压缩
+      // 渐进式压缩:超阈值时压缩,中低阈值只提示
       if (this.contextManager) {
         const currentTokens = this.contextManager.estimateMessagesTokenCount(this.messages);
         const compLevel = this.contextManager.getCompressionLevel(this.messages, currentTokens);
@@ -242,19 +237,15 @@ class ChatEngine extends EventEmitter {
             }
           }
         } else if (compLevel.level >= 1) {
-          // 仅提示，不压缩
           this.emit('status', `[提示]${compLevel.label} (${Math.round(compLevel.ratio * 100)}%)`);
         }
       }
 
-      // 保存当前任务描述
       this._currentTask = input;
-      this._awaitingPlanApproval = false; // 确保无残留的待批准状态
+      this._awaitingPlanApproval = false;
 
-      // 自主 Agent 模式：持续执行直到 AI 认为任务完成
       const result = await this._agentLoop(input);
 
-      // Plan Mode：检测到计划，不进入正常收尾，等待用户批准
       if (result.plan) {
         this.emit('plan_ready', result.plan);
         if (this.logger) {this.logger.info('产出了计划，等待用户批准');}
@@ -264,7 +255,7 @@ class ChatEngine extends EventEmitter {
 
       this.isProcessing = false;
 
-      // 添加最终助手消息到历史（避免重复：_agentLoop 已推入则跳过）
+      // 避免重复:如果 _agentLoop 已推入同一条 assistant 消息则跳过
       const lastMsg = this.messages[this.messages.length - 1];
       const isDuplicate = lastMsg && lastMsg.role === 'assistant'
         && lastMsg.content === (result.content || '')
@@ -278,14 +269,14 @@ class ChatEngine extends EventEmitter {
         });
       }
 
-      // 主动后台压缩（非阻塞）
+      // 主动后台压缩(非阻塞,失败不影响主流程)
       if (this.contextManager && typeof this.contextManager.proactiveCompress === 'function') {
         try {
           this.messages = this.contextManager.proactiveCompress(this.messages);
-        } catch { /* 压缩失败不影响主流程 */ }
+        } catch {}
       }
 
-      // Memory 定期总结检查点：每 N 轮注入一次 reminder 让 AI 主动提取偏好
+      // 每 N 轮注入一次 reminder,让 AI 主动提取偏好
       this._roundSinceMemoryCheck++;
       this._totalRoundsProcessed++;
       if (this._roundSinceMemoryCheck >= this._memoryCheckInterval) {
@@ -293,7 +284,7 @@ class ChatEngine extends EventEmitter {
         this._roundSinceMemoryCheck = 0;
       }
 
-      // 更新缓存（带上任务指纹提高复用率）
+      // 任务指纹提高缓存复用率
       const taskFingerprint = generateTaskFingerprint(input);
       this.cache.set(input, { model: this.model, contextHash, taskFingerprint: taskFingerprint.full }, {
         thinking: result.thinking,
@@ -301,7 +292,6 @@ class ChatEngine extends EventEmitter {
         toolCalls: result.toolCalls,
       });
 
-      // 触发完成事件
       this.emit('complete', {
         thinking: result.thinking,
         content: result.content,
@@ -322,7 +312,6 @@ class ChatEngine extends EventEmitter {
     }
   }
 
-  // 自主 Agent 循环，AI 自行决定何时执行/请求批准/完成
   async _agentLoop(originalTask) {
     const maxIterations = DEFAULT_MAX_ITERATIONS;
     const startTime = Date.now();
@@ -335,13 +324,12 @@ class ChatEngine extends EventEmitter {
     let lastUsage = null;
     const taskFingerprint = generateTaskFingerprint(originalTask);
 
-    // 第一次执行
     let result = await this._sendAndProcess();
     fullContent += result.content || '';
     fullThinking += result.thinking || '';
     lastUsage = result.usage;
 
-    // Plan Mode：AI 调用 request_plan_approval → 暂停等用户确认
+    // Plan Mode:AI 调用 request_plan_approval → 暂停等用户确认
     if (this._planMode && this._awaitingPlanApproval) {
       this.logger?.info('Plan Mode: AI 调用了 request_plan_approval，暂停等待确认');
       return {
@@ -372,13 +360,11 @@ class ChatEngine extends EventEmitter {
           content: '[系统提示] 你在 Plan Mode 下，必须先输出结构化计划方案并调用 request_plan_approval 工具请求批准，然后才能执行其他操作。请立即回到规划阶段。',
         });
 
-        // 重新请求
         result = await this._sendAndProcess();
         fullContent += result.content || '';
         fullThinking += result.thinking || '';
         lastUsage = result.usage || lastUsage;
 
-        // 重新检查是否已调用 request_plan_approval
         if (this._planMode && this._awaitingPlanApproval) {
           this.logger?.info('Plan Mode: AI 在重新引导后调用了 request_plan_approval');
           return {
@@ -392,7 +378,7 @@ class ChatEngine extends EventEmitter {
       }
     }
 
-    // 非 Plan Mode：没有工具调用时直接返回（闲聊、问答、纯文字回复都不弹窗）
+    // 没有工具调用直接返回(闲聊/问答/纯文字回复都不弹窗)
     if (!result.hadToolCalls) {
       return {
         thinking: fullThinking,
@@ -402,12 +388,11 @@ class ChatEngine extends EventEmitter {
       };
     }
 
-    // 自主循环：有工具调用时，检查任务是否需要继续
     while (iterationCount < maxIterations && !this._aborted) {
       iterationCount++;
       const elapsed = Date.now() - startTime;
 
-      // 硬性超时：运行超过 4 小时强制停止
+      // 硬性超时:运行超过 4 小时强制停止
       if (elapsed >= HARD_TIMEOUT) {
         this.logger?.warn('Agent 达到硬性超时，强制停止', {
           iterationCount,
@@ -416,7 +401,7 @@ class ChatEngine extends EventEmitter {
         break;
       }
 
-      // 软性超时警告：运行超过 3.5 小时发出警告
+      // 软性超时警告:运行超过 3.5 小时发出警告,10 分钟只发一次
       if (elapsed >= SOFT_TIMEOUT && elapsed - lastSoftWarning >= 10 * 60 * 1000) {
         const remaining = HARD_TIMEOUT - elapsed;
         this.logger?.warn('Agent 软性超时警告', {
@@ -427,14 +412,13 @@ class ChatEngine extends EventEmitter {
         lastSoftWarning = elapsed;
       }
 
-      // 上下文使用率检查——每 3 轮检查一次 + 消息数量大幅增长时额外检查
+      // 上下文使用率检查:第 1、4、7... 轮触发,作为低成本周期性监控
       if (this.contextManager && (iterationCount % 3 === 1)) {
         try {
           const compLevel = this.contextManager.getCompressionLevel(this.messages);
           if (compLevel.needsCompression || compLevel.ratio > 0.85) {
             const compressResult = await this.compactContext({ level: 'auto', keep: ['recent', 'decisions'] });
             if (compressResult.stats?.compressed) {
-              // 使用智能任务指纹检测任务是否丢失
               if (isTaskLost(compressResult.messages, taskFingerprint)) {
                 compressResult.messages.push({
                   role: 'system',
@@ -455,7 +439,6 @@ class ChatEngine extends EventEmitter {
         }
       }
 
-      // 将当前结果加入历史
       const lastMsg = this.messages[this.messages.length - 1];
       const isDuplicate = lastMsg && lastMsg.role === 'assistant'
         && lastMsg.content === (result.content || '')
@@ -468,10 +451,8 @@ class ChatEngine extends EventEmitter {
         });
       }
 
-      // 检查是否有待注入的用户上下文
       const injectedContext = await this._checkPendingContext();
 
-      // 使用强化后的检查提示词
       let checkMsg = getAgentCheckPrompt(originalTask);
       if (injectedContext) {
         checkMsg += `\n\n[用户补充说明]\n${injectedContext}`;
@@ -482,7 +463,7 @@ class ChatEngine extends EventEmitter {
         content: checkMsg,
       });
 
-      // 发送检查请求（内部消息）
+      // 内部消息,不渲染到 UI
       this._suppressUI = true;
       const checkResult = await this._sendAndProcess();
       this._suppressUI = false;
@@ -490,14 +471,13 @@ class ChatEngine extends EventEmitter {
       fullThinking += checkResult.thinking || '';
       lastUsage = checkResult.usage || lastUsage;
 
-      // 将检查结果加入历史
       this.messages.push({
         role: 'assistant',
         content: checkResult.content || '',
         reasoning_content: checkResult.thinking || '',
       });
 
-      // 完成检测：只有 task_complete 返回 complete=true 才停止
+      // 完成检测:只有 task_complete 返回 complete=true 才停止
       const calledTaskComplete = checkResult.toolCalls?.some(
         tc => tc.function?.name === 'task_complete'
       );
@@ -512,17 +492,13 @@ class ChatEngine extends EventEmitter {
           if (userFacingSummary) {
             this.emit('content', userFacingSummary);
           }
-          // 使用检查结果作为最终返回值，但把 content 替换成 summary，
-          // 避免 'complete' 事件 payload 里残留 AI 内部汇报
+          // 把 content 替换成 summary,避免 'complete' 事件 payload 里残留 AI 内部汇报
           result = { ...checkResult, content: userFacingSummary };
           break;
         }
-        // 有未完成或不确定，继续执行
       }
 
-      // AI 在干活就不该停，maxIterations 只是最终保护
-
-      // 任务未完成，继续执行
+      // AI 在干活就不该停,maxIterations 只是最终保护
       this.messages.push({
         role: 'user',
         content: getAgentContinuePrompt(),
@@ -533,14 +509,12 @@ class ChatEngine extends EventEmitter {
       fullThinking += result.thinking || '';
       lastUsage = result.usage || lastUsage;
 
-      // "继续"后无工具调用：AI 干活不停，连续多次卡住才停
+      // "继续"后无工具调用:连续多次卡住才停(给 AI 多次机会)
       if (!result.hadToolCalls) {
-        // 检查当前回复中是否包含 task_complete 调用
         if (result.toolCalls?.some(tc => tc.function?.name === 'task_complete')) {
           break;
         }
 
-        // 注入强制选择提示
         this.messages.push({
           role: 'user',
           content: '如果任务已完成，请调用 task_complete 工具。如果还有工作要做，请继续执行。' +
@@ -553,14 +527,14 @@ class ChatEngine extends EventEmitter {
           break;
         }
 
-        // 连续两轮无工具调用，可能是卡住了
+        // 两轮无工具调用 + 无实质内容 = 卡住,退出避免 token 浪费
         const hasSubstantialContent = (recheckResult.content || '').length > 200;
         if (!hasSubstantialContent) {
           this.logger?.warn('AI 可能卡住', { iterationCount });
           break;
         }
 
-        // 有实质内容但无工具调用，可能是输出阶段，继续
+        // 有实质内容但无工具调用,可能是输出阶段,继续
         result = recheckResult;
         fullContent += recheckResult.content || '';
         fullThinking += recheckResult.thinking || '';
@@ -577,7 +551,6 @@ class ChatEngine extends EventEmitter {
     };
   }
 
-  // 发送消息并处理响应（含工具调用循环 + 自动继续）
   async _sendAndProcess() {
     let loopCount = 0;
     const maxLoops = 10; // 防止无限工具调用循环
@@ -623,17 +596,13 @@ class ChatEngine extends EventEmitter {
         return msg;
       });
 
-      // 获取已注册的工具定义
       const tools = this.toolRegistry ? this.toolRegistry.getOpenAITools() : [];
 
-      // 检查是否被中断
       if (this._aborted) {
         throw new Error('请求已被中断');
       }
 
       if (!this._suppressUI) {this.emit('thinking_start');}
-
-      // 发送请求到 AI
       const response = await this.aiClient.chat(apiMessages, {
         model: this.model,
         thinkingMode: this.config.thinkingMode !== false,
@@ -714,7 +683,7 @@ class ChatEngine extends EventEmitter {
             args = {};
           }
 
-          // 执行工具（含 120s 超时保护，start_team_task 可能运行数分钟用 30 分钟超时）
+          // start_team_task 单独用 30 分钟超时,其余工具 120s
           const TOOL_TIMEOUT = name === 'start_team_task' ? 30 * 60 * 1000 : 120 * 1000;
           let result;
           let toolTimeoutId;
@@ -748,7 +717,7 @@ class ChatEngine extends EventEmitter {
             ]);
             clearTimeout(toolTimeoutId);
             if (!this._suppressUI) {this.emit('tool_result', { name, result, toolCall });}
-            // 通知上下文管理器（相位检测 + 文件预取）
+            // 通知上下文管理器(相位检测 + 文件预取)
             if (this.contextManager && typeof this.contextManager.recordToolCall === 'function') {
               this.contextManager.recordToolCall(name, args);
               // 写/读文件操作后尝试预取关联文件
@@ -764,7 +733,7 @@ class ChatEngine extends EventEmitter {
             result = { error: `工具执行失败: ${err.message}` };
           }
 
-          // 将工具调用结果截断后加入消息历史
+          // 工具结果超长时截断字段值,避免消息历史爆炸
           let resultStr;
           const MAX_RESULT_LEN = 4000;
           if (result && typeof result === 'object') {
@@ -795,18 +764,17 @@ class ChatEngine extends EventEmitter {
             this.logger.info(`工具调用: ${name}`, { args, result });
           }
 
-          // 关键检查：request_plan_approval 触发后，标记后续工具为 skipped
+          // request_plan_approval 触发后标记后续工具为 skipped,避免规划前执行
           if (this._awaitingPlanApproval) {
             awaitingPlanBreak = true;
           }
         }
 
-        // 如果 AI 调了 request_plan_approval，立即停止不再继续（等用户批准）
+        // AI 调了 request_plan_approval 立即停止,等用户批准
         if (this._awaitingPlanApproval) {
           break;
         }
 
-        // 继续循环，AI 将基于工具结果生成最终回复
         continue;
       }
 

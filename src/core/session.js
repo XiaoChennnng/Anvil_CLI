@@ -103,41 +103,6 @@ class SessionManager {
     }
     return false;
   }
-
-  addMessage(message) {
-    if (!this.currentSession) {
-      this.createSession();
-    }
-
-    this.currentSession.messages.push({
-      role: message.role,
-      content: message.content || '',
-      thinking: message.thinking || null,
-      toolCalls: message.toolCalls || null,
-      timestamp: new Date().toISOString(),
-    });
-  }
-
-  updateTokenUsage(usage) {
-    if (!this.currentSession || !usage) {return;}
-
-    this.currentSession.tokenUsage.input += usage.prompt_tokens || 0;
-    this.currentSession.tokenUsage.output += usage.completion_tokens || 0;
-    this.currentSession.tokenUsage.total += usage.total_tokens || 0;
-  }
-
-  addOperation(operation) {
-    if (!this.currentSession) {return;}
-    this.currentSession.operationHistory.push({
-      ...operation,
-      timestamp: new Date().toISOString(),
-    });
-  }
-
-  getLastSessionId() {
-    const sessions = this.listSessions();
-    return sessions.length > 0 ? sessions[0].id : null;
-  }
 }
 
 module.exports = SessionManager;
