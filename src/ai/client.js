@@ -82,15 +82,22 @@ class AnvilAIClient extends EventEmitter {
     const providerConfig = this._initProviderConfig();
     const Anthropic = require('@anthropic-ai/sdk');
 
+    // Anthropic SDK 内部会追加 /v1/messages，如果 baseURL 以 /v1 结尾则去掉
+    // 避免用户习惯性输入 OpenAI 格式的 /v1 导致双 /v1
+    let baseURL = providerConfig.baseURL;
+    if (baseURL && baseURL.replace(/\/+$/, '').endsWith('/v1')) {
+      baseURL = baseURL.replace(/\/+$/, '').slice(0, -3);
+    }
+
     const options = {
+      baseURL,
       apiKey: providerConfig.apiKey,
       timeout: providerConfig.timeout || 60000,
       maxRetries: providerConfig.retryCount || 2,
     };
 
-    // Anthropic SDK 不支持直接设置代理，需要通过环境变量或自定义 fetch
+    // 自定义 fetch 支持代理（Anthropic SDK 使用 undici）
     if (this.config.proxy?.https) {
-      // Anthropic SDK 使用 undici，需要通过 dispatcher 设置代理
       const { HttpsProxyAgent } = require('https-proxy-agent');
       const proxyAgent = new HttpsProxyAgent(this.config.proxy.https);
       options.httpAgent = proxyAgent;
@@ -100,10 +107,6 @@ class AnvilAIClient extends EventEmitter {
     return this._anthropic;
   }
 
-  /**
-   * 获取当前提供商 ID
-   * @returns {string} 提供商 ID
-   */
   getCurrentProvider() {
     const config = this._initProviderConfig();
     return config.provider;
@@ -132,7 +135,7 @@ class AnvilAIClient extends EventEmitter {
     const model = options.model || this.config.defaultModel || providerConfig.defaultModel;
     const retryCount = this.config.retryCount || 2;
 
-    // 思考模式:提供商支持且用户未禁用时才启用
+    // 思考模式：提供商支持且用户未禁用时才启用
     const thinkingMode = providerConfig.thinkingMode
       ? (options.thinkingMode !== undefined ? options.thinkingMode : true)
       : false;
@@ -155,6 +158,17 @@ class AnvilAIClient extends EventEmitter {
       };
     }
 
+    // reasoning_split：让思考内容走 reasoning_content 字段而非嵌入 <think> 标签，方便 TUI 区分渲染
+    // 支持方式：1) provider.requestFormat.reasoningSplit 显式 2) 模型名自动匹配 MiniMax
+    const enableReasoningSplit = providerConfig.requestFormat?.reasoningSplit
+      || /^MiniMax-M/i.test(model);
+    if (thinkingMode && enableReasoningSplit) {
+      requestOptions.extra_body = {
+        ...requestOptions.extra_body,
+        reasoning_split: true,
+      };
+    }
+
     let lastError = null;
 
     for (let attempt = 0; attempt <= retryCount; attempt++) {
@@ -163,8 +177,18 @@ class AnvilAIClient extends EventEmitter {
       } catch (err) {
         lastError = err;
 
+        if (err.name === 'AbortError') {
+          if (options.signal?.aborted) {
+            throw new Error('请求已被中断');
+          }
+          throw new Error(`AI 响应超时：超过 120 秒未收到数据`);
+        }
+
         if (err.status === 401 || err.status === 403) {
-          throw new Error(`API 认证失败: ${err.message}`);
+          const formatHint = (err.message && err.message.includes('x-api-key'))
+            ? '\n  [Anvil] 服务器要求 x-api-key 认证（Anthropic 协议），但你配的是 OpenAI 格式。请将该 provider 的 format 设为 "anthropic"。'
+            : '';
+          throw new Error(`API 认证失败: ${err.message}${formatHint}`);
         }
         if (err.status === 400) {
           throw new Error(`请求参数错误: ${err.message}`);
@@ -236,7 +260,14 @@ class AnvilAIClient extends EventEmitter {
       } catch (err) {
         lastError = err;
 
-        // Anthropic 错误码处理(其余分支同 OpenAI)
+        if (err.name === 'AbortError') {
+          if (options.signal?.aborted) {
+            throw new Error('请求已被中断');
+          }
+          throw new Error(`AI 响应超时：超过 120 秒未收到数据`);
+        }
+
+        // Anthropic 错误码处理（其余分支同 OpenAI）
         if (err.status === 401) {
           throw new Error(`API 认证失败: ${err.message}`);
         }
@@ -351,7 +382,7 @@ class AnvilAIClient extends EventEmitter {
     let usage = null;
     let finishReason = null;
 
-    // 流空闲超时检测: 120 秒无新 chunk 则 abort 触发重试
+    // 流空闲超时：120 秒无新 chunk 则 abort 触发重试
     const STREAM_IDLE_TIMEOUT = 120 * 1000;
     let lastChunkTime = Date.now();
     const idleTimer = setInterval(() => {
@@ -374,7 +405,6 @@ class AnvilAIClient extends EventEmitter {
 
         if (!delta) {continue;}
 
-        // 处理思考内容（DeepSeek 特有）
         if (delta.reasoning_content && providerConfig.thinkingMode) {
           thinking += delta.reasoning_content;
           this.emit('thinking', delta.reasoning_content);
@@ -454,10 +484,14 @@ class AnvilAIClient extends EventEmitter {
       };
     }
 
-    // 确保缓存命中字段被正确传递（不同提供商命名不同）
-    // DeepSeek: prompt_cache_hit_tokens, Kimi: 可能类似, OpenAI: cached_tokens
-    if (usage.prompt_cache_hit_tokens === undefined && usage.cached_tokens !== undefined) {
-      usage.prompt_cache_hit_tokens = usage.cached_tokens;
+    // 统一缓存命中字段：DeepSeek=prompt_cache_hit_tokens, Kimi=prompt_caching_tokens, OpenAI=cached_tokens
+    if (usage.prompt_cache_hit_tokens === undefined) {
+      const cachedTokens = usage.cached_tokens
+        || usage.prompt_caching_tokens
+        || 0;
+      if (cachedTokens > 0) {
+        usage.prompt_cache_hit_tokens = cachedTokens;
+      }
     }
 
     this.emit('usage', usage);
@@ -475,7 +509,6 @@ class AnvilAIClient extends EventEmitter {
     const client = this._getAnthropicClient();
     this._abortController = new AbortController();
 
-    // 支持外部取消信号
     const combinedSignal = signal;
     if (combinedSignal) {
       combinedSignal.addEventListener('abort', () => {
@@ -496,7 +529,7 @@ class AnvilAIClient extends EventEmitter {
     let usage = null;
     let finishReason = null;
 
-    // 流空闲超时检测: 120 秒无新 chunk 则 abort 触发重试
+    // 流空闲超时：120 秒无新 chunk 则 abort 触发重试
     const STREAM_IDLE_TIMEOUT = 120 * 1000;
     let lastChunkTime = Date.now();
     const idleTimer = setInterval(() => {
@@ -510,7 +543,6 @@ class AnvilAIClient extends EventEmitter {
       for await (const event of stream) {
         lastChunkTime = Date.now();
 
-        // 处理 thinking 块（Claude 3.7 Sonnet 扩展思考）
         if (event.type === 'content_block_delta' && event.delta.type === 'thinking_delta') {
           const thinkingText = event.delta.thinking;
           if (thinkingText) {
@@ -520,7 +552,6 @@ class AnvilAIClient extends EventEmitter {
           continue;
         }
 
-        // 处理文本内容
         if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
           const text = event.delta.text;
           if (text) {
@@ -530,7 +561,6 @@ class AnvilAIClient extends EventEmitter {
           continue;
         }
 
-        // 处理工具使用开始
         if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
           currentToolUse = {
             id: event.content_block.id,
@@ -543,7 +573,6 @@ class AnvilAIClient extends EventEmitter {
           continue;
         }
 
-        // 处理工具使用输入
         if (event.type === 'content_block_delta' && event.delta.type === 'input_json_delta') {
           if (currentToolUse) {
             currentToolUse.function.arguments += event.delta.partial_json;
@@ -551,29 +580,28 @@ class AnvilAIClient extends EventEmitter {
           continue;
         }
 
-        // 处理工具使用结束
         if (event.type === 'content_block_stop' && currentToolUse) {
           try {
             currentToolUse.function.arguments = JSON.parse(currentToolUse.function.arguments);
           } catch {
-            // 解析失败保持字符串
+            // 解析失败保留原始字符串
           }
           toolCalls.push(currentToolUse);
           currentToolUse = null;
           continue;
         }
 
-        // 处理停止原因
         if (event.type === 'message_stop') {
           finishReason = 'stop';
         }
 
-        // 处理用量信息（Anthropic 在消息结束时提供）
+        // Anthropic 在 message_delta 事件携带用量
         if (event.type === 'message_delta' && event.usage) {
           usage = {
             prompt_tokens: event.usage.input_tokens || 0,
             completion_tokens: event.usage.output_tokens || 0,
             total_tokens: (event.usage.input_tokens || 0) + (event.usage.output_tokens || 0),
+            cache_read_input_tokens: event.usage.cache_read_input_tokens || 0,
           };
         }
       }
@@ -589,7 +617,7 @@ class AnvilAIClient extends EventEmitter {
     }
     clearInterval(idleTimer);
 
-    // 如果还有未完成的 toolUse，添加到列表
+    // 流结束还有未闭合的 toolUse 也加入列表
     if (currentToolUse) {
       try {
         currentToolUse.function.arguments = JSON.parse(currentToolUse.function.arguments);
@@ -609,7 +637,7 @@ class AnvilAIClient extends EventEmitter {
       },
     }));
 
-    // Anthropic 可能没有返回用量，需要估算
+    // Anthropic 可能不返回用量，按字符数估算兜底
     if (!usage) {
       const outputText = content + thinking;
       const estimatedOutput = estimateTokens(outputText);
@@ -630,11 +658,10 @@ class AnvilAIClient extends EventEmitter {
       };
     }
 
-    // 确保 Anthropic 缓存命中字段被正确传递
-    // Anthropic prompt caching 使用不同的字段名
+    // 统一缓存命中字段：Anthropic=cache_read_input_tokens, Kimi=prompt_caching_tokens, OpenAI=cached_tokens
     if (usage.prompt_cache_hit_tokens === undefined) {
-      // 尝试其他可能的字段名
-      const cachedTokens = usage.prompt_caching_tokens
+      const cachedTokens = usage.cache_read_input_tokens
+        || usage.prompt_caching_tokens
         || usage.cached_tokens
         || 0;
       if (cachedTokens > 0) {

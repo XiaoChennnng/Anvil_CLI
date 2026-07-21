@@ -17,20 +17,23 @@ class MessageRenderer {
     const borderColor = isUser ? t.colors.secondary : t.colors.primary;
     const marker = chalk.hex(borderColor)('●');
 
-    // Markdown 渲染
-    const contentWithNewline = content.endsWith('\n') ? content : content + '\n';
-    const rendered = this.markdown.write(contentWithNewline);
-    const lines = rendered.split('\n');
+    // 提取 <think> 思考块（部分模型如 MiniMax 会嵌入到文本中）渲染为灰色斜体
+    const thinkLines = [];
+    content = content.replace(/<think>([\s\S]*?)<\/think>/g, (_, thinkContent) => {
+      const lines = thinkContent.trim().split('\n').filter(l => l.trim());
+      for (const line of lines) {
+        thinkLines.push(` ${marker} ${t.thinking(line.trim())}`);
+      }
+      return '';
+    });
 
-    // 过滤空行
-    const result = [];
-    for (const line of lines) {
+    const rendered = this.markdown.write(content.endsWith('\n') ? content : content + '\n');
+    const result = [...thinkLines];
+    for (const line of rendered.split('\n')) {
       if (line.trim()) {
         result.push(` ${marker} ${line}`);
       }
     }
-
-    // 添加额外信息
     for (const infoLine of info) {
       result.push(` ${marker} ${t.textMuted(infoLine)}`);
     }
