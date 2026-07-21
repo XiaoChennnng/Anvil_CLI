@@ -13,11 +13,13 @@ const { EventEmitter } = require('events');
 const MAIN_AGENT_ID = '__main__';
 
 class TeamQuestionQueue extends EventEmitter {
-  constructor() {
+  constructor(options = {}) {
     super();
     this.current = null;     // 当前展示的问题
     this.pending = [];       // 待处理队列
     this.history = [];       // 历史记录
+    // P2 修复:history 上限,避免长跑任务内存无限增长
+    this.maxHistory = options.maxHistory ?? 100;
   }
 
   /** 子 Agent / 主 Agent 提交问题,返回用户答案的 Promise(null = 取消)。 */
@@ -44,6 +46,10 @@ class TeamQuestionQueue extends EventEmitter {
     if (!next) {return;}
     this.current = next;
     this.history.push(next);
+    // P2 修复:超长截断,从头丢最旧
+    while (this.history.length > this.maxHistory) {
+      this.history.shift();
+    }
     this.emit('show', next);
   }
 

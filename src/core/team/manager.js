@@ -86,6 +86,13 @@ class TeamManager extends EventEmitter {
     // 任务指纹（用于去重检测）
     this._taskFingerprint = null;
 
+    // 用户约束(从 options.disabledTools 传入由 startTeamTask 注入)
+    this._constraints = [];
+
+    // 当前执行链路与结果(p2 修复:sharedContext 共享用)
+    this._currentExecutionChain = [];
+    this._currentResults = new Map();
+
     // 研究上下文隔离机制
     // 代码分析、架构研究等使用独立 context，不污染主 context
     this._researchContext = new ResearchContext({
@@ -119,7 +126,52 @@ class TeamManager extends EventEmitter {
     // 启动空闲检测
     this._startIdleTimer();
 
+    // P1 修复:监听 communication 的 agent_unresponsive,自动走 errorHandler
+    // 真正打通"30s 无心跳 → 降级 → respawnAgent"的链路
+    if (this.communication?.on) {
+      this.communication.on('agent_unresponsive', (data) => {
+        this.logger?.warn(`Agent ${data.agentId} 心跳超时 (${data.elapsed}ms),走降级`);
+        this._handleUnresponsiveAgent(data.agentId, data).catch((err) => {
+          this.logger?.error(`处理 unresponsive agent 失败: ${err.message}`);
+        });
+      });
+    }
+
     return this;
+  }
+
+  /**
+   * P1 修复:处理 unresponsive agent — 走 errorHandler.communication_failed 分支
+   * 复用 _handleAgentCrash 同样的 RETRY → FALLBACK_TO_MAIN 兜底逻辑
+   */
+  async _handleUnresponsiveAgent(agentId, data) {
+    const agentInfo = this.agents.get(agentId);
+    if (!agentInfo || agentInfo.status === 'terminated' || agentInfo.status === 'failed') {
+      return;
+    }
+
+    const error = new Error(`心跳超时 ${data.elapsed}ms`);
+    const errorDecision = this.errorHandler.handleError(error, {
+      agentId,
+      type: 'communication_failed',
+      role: agentInfo.role,
+      teamManager: this,
+      originalTask: null,
+    });
+
+    if (typeof errorDecision?.action === 'function') {
+      try {
+        const actionResult = await errorDecision.action();
+        if (actionResult?.newAgent) {
+          // respawn 成功,通知 TUI
+          this.logger?.info(`Agent ${agentId} 已 respawn → ${actionResult.newAgent.agentId}`);
+        } else if (actionResult?.shouldFallback) {
+          this.logger?.warn(`Agent ${agentId} 心跳多次超时,标记 fallback`);
+        }
+      } catch (actionErr) {
+        this.logger?.warn(`heartbeat 降级 action 失败: ${actionErr.message}`);
+      }
+    }
   }
 
   /**
@@ -129,6 +181,20 @@ class TeamManager extends EventEmitter {
    * @returns {Object} { needsTeam: boolean, reason: string, suggestedAgents: Array }
    */
   async evaluateTaskComplexity(taskDescription, context = {}) {
+    // P0 修复:executionMode 控制规模上限
+    // 'simple' 拉高阈值,只允许 ≤1 Agent / 'balanced' 默认 / 'thorough' 阈值×0.6 更激进
+    const executionMode = context.executionMode
+      || this.config.team?.executionMode
+      || 'simple';
+    const modeFactor = executionMode === 'thorough' ? 0.6
+      : executionMode === 'balanced' ? 1.0
+        : 1.0;  // simple 与 balanced 走相同阈值,但 suggestedAgents 选择不同
+    const THRESHOLD = {
+      TEAM_NOT_NEEDED: Math.round(this._complexityThreshold.low * modeFactor),
+      SIMPLE_TEAM: Math.round(this._complexityThreshold.medium * modeFactor),
+      COMPLEX_TEAM: Math.round(this._complexityThreshold.high * modeFactor),
+    };
+
     // 复杂度评估维度
     const complexityFactors = {
       fileOperations: 0,
@@ -193,13 +259,6 @@ class TeamManager extends EventEmitter {
     if (context.messageCount > 20) {complexityScore += 10;}
     if (context.toolCallCount > 10) {complexityScore += 10;}
 
-    // 决策阈值（使用动态阈值，根据 context 使用情况调整）
-    const THRESHOLD = {
-      TEAM_NOT_NEEDED: this._complexityThreshold.low,
-      SIMPLE_TEAM: this._complexityThreshold.medium,
-      COMPLEX_TEAM: this._complexityThreshold.high,
-    };
-
     let needsTeam = false;
     let reason = '';
     let suggestedAgents = [];
@@ -207,6 +266,14 @@ class TeamManager extends EventEmitter {
     if (complexityScore < THRESHOLD.TEAM_NOT_NEEDED) {
       needsTeam = false;
       reason = '任务足够简单，主Agent可直接完成';
+    } else if (executionMode === 'simple') {
+      // P0 修复:'simple' 模式下即使分数高也只起 1 executor
+      // 防止用户未主动配置时跳到 3-5 Agent
+      needsTeam = true;
+      reason = `executionMode=simple:即使分数高(${complexityScore})也只起 1 executor,避免幽灵 Agent`;
+      suggestedAgents = [
+        { role: 'executor', count: 1, description: '执行者 - simple 模式兜底' }
+      ];
     } else if (complexityScore < THRESHOLD.SIMPLE_TEAM) {
       needsTeam = true;
       reason = '任务有少量可独立执行的子任务';
@@ -243,6 +310,12 @@ class TeamManager extends EventEmitter {
   async startTeamTask(task, context = {}, options = {}) {
     const force = options.force === true;
 
+    // P0 修复:executionMode 透传到 context 给 evaluateTaskComplexity
+    // 优先级:options.executionMode > context.executionMode > config 默认 > 'simple'
+    if (options.executionMode) {
+      context = { ...context, executionMode: options.executionMode };
+    }
+
     // force=true 时强制解散旧团队再开新团,避免状态机死锁
     if (force && (this.state === TeamState.PLANNING
         || this.state === TeamState.EXECUTING
@@ -264,9 +337,9 @@ class TeamManager extends EventEmitter {
     }
 
     // force=true:跳过复杂度评估直接启动,用于"用户明确开团但评估分低"场景
+    // 修复 P0:force=true 必须传 suggestedRoles,缺则拒绝(防止 AI 静默起 1 executor 让用户体感"幽灵 Agent")
     let evaluation;
     if (force) {
-      // 角色配置由 suggestedRoles(AI 给) 决定,兜底 1 executor
       const suggestedRoles = options.suggestedRoles;
 
       if (Array.isArray(suggestedRoles) && suggestedRoles.length > 0) {
@@ -283,17 +356,14 @@ class TeamManager extends EventEmitter {
           complexityFactors: { forceStart: true, aiSuggested: true },
         };
       } else {
-        // 兜底:1 executor(无法识别或 AI 未给 suggestedRoles 时)
-        // 这是"用户说开团 + AI 没说怎么开"的最小安全配置
-        evaluation = {
-          complexityScore: 100,
-          needsTeam: true,
-          reason: '用户明确要求启动团队(force=true),使用默认 1 executor 配置(建议 AI 调用时传 suggestedRoles 显式指定角色)',
-          suggestedAgents: [
-            { role: 'executor', count: 1, description: '执行者 - 默认配置' },
-          ],
-          complexityFactors: { forceStart: true, defaultConfig: true },
-        };
+        // P0 修复:不再静默兜底 1 executor,直接抛错让 chat.js 把错误转给 AI 重新调
+        // AI 看到错误后会用更明确的 suggestedRoles 重新发起
+        throw new Error(
+          '[start_team_task] force=true 必须显式传 suggestedRoles,'
+          + '不允许静默兜底。'
+          + '请重新调用时传入形如 '
+          + 'suggestedRoles=[{role:"executor",count:1}] 的角色配置。',
+        );
       }
     } else {
       // 评估是否需要团队
@@ -306,6 +376,16 @@ class TeamManager extends EventEmitter {
 
     // 生成任务指纹
     this._taskFingerprint = generateTaskFingerprint(task);
+
+    // P1/P2 修复:把 disabledTools + constraints 注入到 agentSpawner
+    // 角色白名单由 agentSpawner 内部 _filterToolsForAgent 生效
+    if (Array.isArray(options.disabledTools)) {
+      this.agentSpawner.setDisabledTools(options.disabledTools);
+    }
+    if (Array.isArray(options.constraints)) {
+      this.agentSpawner.setConstraints(options.constraints);
+      this._constraints = options.constraints;
+    }
 
     // 状态转换
     this._transitionTo(TeamState.PLANNING);
@@ -445,6 +525,18 @@ class TeamManager extends EventEmitter {
 
         createdAgents.push(agent);
 
+        // P1 修复:心跳真调度,communication 启动 _checkHeartbeat 定时器
+        // 30s 检测一次,90s 无心跳 emit 'agent_unresponsive'
+        if (this.communication?.startHeartbeat) {
+          this.communication.startHeartbeat(agent.agentId);
+        }
+
+        // P2 修复:同步 agent 角色到 communication._roleMap,
+        // _validateAgentCommunication 用此校验 agent 间通信权限
+        if (this.communication?.setAgentRole) {
+          this.communication.setAgentRole(agent.agentId, suggestion.role);
+        }
+
         this.emit('agent_created', {
           teamId: this.teamId,
           agentId: agent.agentId,
@@ -477,23 +569,54 @@ class TeamManager extends EventEmitter {
   }
 
   /**
-   * 执行所有Agent任务(仅串行)
-   * parallel 模式已移除——多个 agent 同时读写同一批文件会冲突,
-   * 串行按 role 顺序逐个执行,前一个 agent 的结果可通过 result-aggregator 传给下一个。
+   * P3 修复:Role 内并行(半并行)
+   * 串行模式已升级为"按 role 分组,role 内并行"
+   * - 不同 role 之间串行(architect → executor → reviewer → coordinator)
+   *   理由:下游 role 依赖上游产出(架构师定方案,执行者去实现)
+   * - 同一 role 内的多个 Agent 并行(Promise.all)
+   *   理由:同 role 通常处理不同子模块,不冲突
+   * - 文件软锁留给 P3 完整版,本次只做 role-group 并行(架构粒度已安全)
    * @param {Map} assignments - agentId -> assignment
    */
   async _executeAllAgents(assignments) {
-    const results = new Map();
+    const ROLE_ORDER = ['architect', 'executor', 'reviewer', 'coordinator'];
 
-    this.logger?.info(`串行执行 ${assignments.size} 个 Agent`);
+    // 按 role 分组
+    const roleGroups = new Map();
     for (const [agentId, assignment] of assignments) {
-      let agentResult;
-      try {
-        agentResult = await this._executeAgent(agentId, assignment);
-      } catch (error) {
-        agentResult = { success: false, error: error.message };
+      const role = assignment.agent.role || 'executor';
+      if (!roleGroups.has(role)) {roleGroups.set(role, []);}
+      roleGroups.get(role).push([agentId, assignment]);
+    }
+
+    // 按 ROLE_ORDER 排序(其他 role 追加在末尾)
+    const orderedGroups = [];
+    for (const role of ROLE_ORDER) {
+      if (roleGroups.has(role)) {
+        orderedGroups.push([role, roleGroups.get(role)]);
+        roleGroups.delete(role);
       }
-      results.set(agentId, agentResult);
+    }
+    for (const [role, group] of roleGroups) {
+      orderedGroups.push([role, group]);
+    }
+
+    // role 间串行,role 内并行
+    const results = new Map();
+    for (const [role, group] of orderedGroups) {
+      this.logger?.info(`[Role: ${role}] 并行执行 ${group.length} 个 Agent`);
+      const groupResults = await Promise.all(
+        group.map(async ([agentId, assignment]) => {
+          try {
+            return [agentId, await this._executeAgent(agentId, assignment)];
+          } catch (error) {
+            return [agentId, { success: false, error: error.message }];
+          }
+        })
+      );
+      for (const [agentId, result] of groupResults) {
+        results.set(agentId, result);
+      }
     }
 
     return results;
@@ -534,10 +657,21 @@ class TeamManager extends EventEmitter {
     });
 
     // 前缀 L0 硬性规则,改 L0 子 Agent 自动同步
+    // P2 修复:constraints 透传到 generatePromptForRole,注入子 Agent system prompt 的 ## 约束条件 块
+    // 新签名:(role, projectContext, sharedContext, constraints) — 第 2 位是 projectContext 不是 tasks
+    const projectContext = this.parentAgent?.contextManager?.getProjectOverviewText?.() || '';
+    const constraints = this.agentSpawner.constraints || [];
+    // P2 修复(用户决策):sharedContext 内累计超阈值时由 AI 总结(不机械截断)
+    const aiClient = this.parentAgent?.aiClient || null;
+    const previousResultsMap = this._currentResults instanceof Map
+      ? this._currentResults
+      : new Map();
+    const sharedContext = await this._buildSharedContext(agentId, previousResultsMap, aiClient);
     const rolePrompt = this.agentSpawner.generatePromptForRole(
       agent.role,
-      tasks,
-      this.parentAgent?.contextManager?.getProjectOverviewText?.() || ''
+      projectContext,
+      sharedContext,
+      constraints
     );
     const systemPrompt = `${L0_CORE_IDENTITY}\n\n---\n\n## 你的子 Agent 角色\n\n${rolePrompt}`;
 
@@ -647,6 +781,11 @@ class TeamManager extends EventEmitter {
       agentInfo.status = success ? 'completed' : 'failed';
       agentInfo.lastResult = result;
       this.agents.set(agentId, agentInfo);
+    }
+
+    // P1 修复:成功路径上重置 errorStats,避免同一 taskId 多次失败累积导致 respawn 死循环
+    if (success && this.errorHandler?.resetErrorCount) {
+      this.errorHandler.resetErrorCount(agentId);
     }
 
     // 通知 taskStateManager
@@ -868,6 +1007,169 @@ class TeamManager extends EventEmitter {
       clearTimeout(this._idleTimer);
       this._idleTimer = null;
     }
+  }
+
+  // ==================== sharedContext(团队上下文)====================
+  // 团队共享上下文是 Phase A 协作机制的核心:让上游 Agent 的产出被下游 Agent 看到,
+  // 而不是各自闭门造车后被 result-aggregator 拼凑。
+  //
+  // 修复(用户决策):窗口耗尽时不要机械截断,应调 AI 总结压缩上下文,
+  // 让 AI 决定保留什么、舍什么。机械截断会把技术决策的关键段落切掉,
+  // AI 总结至少能保留语义级的关键点。
+
+  /**
+   * 构建团队结构总览
+   * @param {string} agentId - 当前 Agent 的 id
+   * @returns {{totalAgents, myPosition:{idx,total}, prevRole, nextRole, executionOrder, roles, finalDeliverable}}
+   */
+  _buildTeamOverview(agentId) {
+    const chain = this._currentExecutionChain || [];
+    const idx = chain.indexOf(agentId);
+    const total = chain.length;
+
+    const rolesChain = chain.map((aid) => this.agents.get(aid)?.role).filter(Boolean);
+    const prevRole = idx > 0 ? rolesChain[idx - 1] : null;
+    const nextRole = idx >= 0 && idx < total - 1 ? rolesChain[idx + 1] : null;
+
+    // roles 按 group by role count 聚合
+    const roleCounts = new Map();
+    for (const role of rolesChain) {
+      roleCounts.set(role, (roleCounts.get(role) || 0) + 1);
+    }
+    const roles = [...roleCounts.entries()].map(([role, count]) => ({ role, count }));
+
+    return {
+      totalAgents: total,
+      myPosition: { idx: idx >= 0 ? idx + 1 : 0, total },
+      prevRole,
+      nextRole,
+      executionOrder: 'serial',
+      roles,
+      finalDeliverable: this._originalTaskDescription || '按团队目标产出最终交付',
+    };
+  }
+
+  /**
+   * AI 总结长内容(替代机械截断)
+   * @param {string} text - 长原文
+   * @param {Object} aiClient - 主 Agent 的 aiClient(可注入 mock)
+   * @param {number} targetLen - 目标压缩后长度(字符)
+   * @returns {Promise<string>} 总结文本
+   */
+  async _aiSummarizeLongContent(text, aiClient, targetLen = 1500) {
+    if (!text || text.length <= targetLen) {return text || '';}
+
+    if (!aiClient || typeof aiClient.chat !== 'function') {
+      // 无 aiClient 时兜底:保留头 + 关键中段 + 尾,不做 AI 总结
+      const headLen = Math.floor(targetLen * 0.5);
+      const tailLen = Math.floor(targetLen * 0.3);
+      return `${text.slice(0, headLen)}\n\n...（中段省略 ${text.length - headLen - tailLen} 字,请留意这是兜底截断,非 AI 总结）...\n\n${text.slice(-tailLen)}`;
+    }
+
+    try {
+      const prompt = `请将以下内容压缩总结为不超过 ${targetLen} 字,保留关键决策、技术方案、产出物、共识点。删掉细节、过程、重复描述:
+
+"""
+${text}
+"""
+
+只返回压缩后的内容,不要加任何前言。`;
+      const response = await aiClient.chat(
+        [{ role: 'user', content: prompt }],
+        { thinkingMode: false },
+      );
+      const summarized = response?.content || response?.text || '';
+      if (!summarized) {
+        this.logger?.warn('AI 总结返回空,降级到头尾截断');
+        return text.slice(0, targetLen * 0.8);
+      }
+      return summarized;
+    } catch (err) {
+      this.logger?.warn(`AI 总结失败,降级到头尾截断: ${err.message}`);
+      const headLen = Math.floor(targetLen * 0.5);
+      const tailLen = Math.floor(targetLen * 0.3);
+      return `${text.slice(0, headLen)}\n\n...（中段省略 ${text.length - headLen - tailLen} 字,请留意这是兜底截断）...\n\n${text.slice(-tailLen)}`;
+    }
+  }
+
+  /**
+   * 收集当前 Agent 的所有前序 Agent 产出
+   * 用户决策:窗口耗尽时由 AI 总结压缩(不机械截断)
+   * 简化设计:先估算总长,若超预算则一次性 AI 总结全部前序产出 → 单条 summary
+   * 否则按原样展开所有项
+   * @param {string} agentId - 当前 Agent id
+   * @param {Map} results - agentId -> {success, content, error, ...}
+   * @param {Object} aiClient - 可选 aiClient,用于调 AI 总结
+   * @returns {Promise<Array<{role, content, label, summarizedFrom?}>>}
+   */
+  async _collectPreviousResults(agentId, results = new Map(), aiClient = null) {
+    const chain = this._currentExecutionChain || [];
+    const idx = chain.indexOf(agentId);
+    if (idx <= 0) {return [];}
+
+    const previousAgents = chain.slice(0, idx);
+    const CONTENT_BUDGET_TOTAL = 8000;
+
+    // 先把"成功"的前序产出收集成 rawItems(失败跳过)
+    const rawItems = [];
+    for (const aid of previousAgents) {
+      const result = results.get(aid);
+      if (!result || result.success === false) {continue;}
+
+      const agentInfo = this.agents.get(aid);
+      rawItems.push({
+        aid,
+        role: agentInfo?.role || 'agent',
+        content: result.content || '',
+      });
+    }
+
+    if (rawItems.length === 0) {return [];}
+
+    // 单条前序产出自身已超 summary 目标长度 → 单独调 AI 总结这条
+    const SUMMARY_TARGET = 1500;
+    if (rawItems.length === 1 && rawItems[0].content.length > SUMMARY_TARGET) {
+      const summarized = await this._aiSummarizeLongContent(rawItems[0].content, aiClient, SUMMARY_TARGET);
+      return [{
+        role: rawItems[0].role,
+        content: summarized,
+        label: `${rawItems[0].role} (#${rawItems[0].aid.slice(0, 4)}) — 已 AI 总结`,
+        summarizedFrom: [rawItems[0].aid],
+      }];
+    }
+
+    const totalLen = rawItems.reduce((s, x) => s + x.content.length, 0);
+
+    // 没超预算 → 全展开
+    if (totalLen <= CONTENT_BUDGET_TOTAL) {
+      return rawItems.map((x) => ({
+        role: x.role,
+        content: x.content,
+        label: `${x.role} (#${x.aid.slice(0, 4)})`,
+      }));
+    }
+
+    // 超出预算 → 一次性 AI 总结全部前序产出
+    const combined = rawItems.map((x) => `[${x.role}]\n${x.content}`).join('\n\n---\n\n');
+    const summarized = await this._aiSummarizeLongContent(combined, aiClient, SUMMARY_TARGET);
+
+    return [{
+      role: 'summary',
+      content: summarized,
+      label: '前序产出 AI 总结',
+      summarizedFrom: rawItems.map((x) => x.aid),
+    }];
+  }
+
+  /**
+   * 合并 teamOverview + previousResults 为子 Agent 注入的 sharedContext
+   * @returns {Promise<{teamOverview, previousResults}>}
+   */
+  async _buildSharedContext(agentId, results = new Map(), aiClient = null) {
+    return {
+      teamOverview: this._buildTeamOverview(agentId),
+      previousResults: await this._collectPreviousResults(agentId, results, aiClient),
+    };
   }
 
 }

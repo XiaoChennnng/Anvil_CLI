@@ -731,3 +731,4 @@ class ToolRenderer {
 }
 
 module.exports = ToolRenderer;
+module.exports.TOOL_NAME_MAP = TOOL_NAME_MAP;

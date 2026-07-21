@@ -116,6 +116,10 @@ class TaskStateManager {
     this._clearTimeoutMonitor(taskId);
 
     this.tasks.set(taskId, task);
+
+    // P2 修复:失败也唤醒依赖方(completeTask 已调 _notifyDependents,失败路径对称补一份)
+    // 失败 deps 让依赖方醒过来跑 → 运行时自然会发现 dep 失败,自然失败
+    this._notifyDependents(taskId);
   }
 
   /**

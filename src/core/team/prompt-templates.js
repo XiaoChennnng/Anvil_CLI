@@ -129,6 +129,9 @@ ${constraintList}
 
   /**
    * 生成共享上下文块（其他Agent产出）
+   * 支持两种格式:
+   * 1. 新格式 { teamOverview, previousResults[] } — Phase A 团队上下文
+   * 2. 旧格式 { [agentId]: text } — 向后兼容
    */
   _generateSharedContextBlock(sharedContext) {
     let block = `
@@ -138,10 +141,53 @@ ${constraintList}
 
 `;
 
+    // 新格式:Phase A 团队上下文(分 teamOverview + previousResults 两段)
+    if (sharedContext.teamOverview || sharedContext.previousResults) {
+      // teamOverview 结构化展示
+      if (sharedContext.teamOverview && typeof sharedContext.teamOverview === 'object') {
+        const o = sharedContext.teamOverview;
+        block += `\n## 团队上下文\n\n`;
+        block += `**团队规模**: ${o.totalAgents} 个 Agent\n`;
+        if (Array.isArray(o.roles) && o.roles.length > 0) {
+          const roleStr = o.roles.map((r) => `${r.role} × ${r.count}`).join(', ');
+          block += `**角色构成**: ${roleStr}\n`;
+        }
+        if (o.executionOrder) {
+          const orderLabel = o.executionOrder === 'serial' ? '串行' : o.executionOrder;
+          block += `**执行顺序**: ${orderLabel}\n`;
+        }
+        if (o.myPosition) {
+          block += `**你在执行链上的位置**: 第 ${o.myPosition.idx} / ${o.myPosition.total} 个\n`;
+        }
+        block += `**你之前的 Agent**: ${o.prevRole
+          ? `[${o.prevRole}]`
+          : '无 — 你是第一个执行的 Agent'}\n`;
+        block += `**你之后的 Agent**: ${o.nextRole
+          ? `[${o.nextRole}]`
+          : '无 — 你是最后一个执行的 Agent'}\n`;
+        if (o.finalDeliverable) {
+          block += `**最终交付**: ${o.finalDeliverable}\n`;
+        }
+        block += '\n';
+      }
+
+      // previousResults 上游产出
+      if (Array.isArray(sharedContext.previousResults) && sharedContext.previousResults.length > 0) {
+        block += `\n## 上一执行单元的产出\n\n`;
+        for (const item of sharedContext.previousResults) {
+          const label = item.label || `[${item.role}]`;
+          block += `### ${label}\n${item.content}\n\n`;
+        }
+      }
+
+      block += `---\n`;
+      return block;
+    }
+
+    // 旧格式兼容
     for (const [agentId, output] of Object.entries(sharedContext)) {
       block += `### ${agentId} 的产出\n${output}\n\n`;
     }
-
     block += `---\n`;
     return block;
   }

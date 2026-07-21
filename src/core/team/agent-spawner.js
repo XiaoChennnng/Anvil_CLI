@@ -43,11 +43,53 @@ class AgentSpawner extends EventEmitter {
     // 心跳发送间隔：子 Agent 在 _agentLoop 中按此间隔向 communication 上报心跳
     this.heartbeatInterval = options.heartbeatInterval || 30 * 1000;
 
-    // 置 _aborted 让 while 快速退出,旧代码从未初始化此字段
-    this._aborted = false;
+    // P0 修复:删除类共享 _aborted,改为每个 agent 实例的属性
+    // 解决"终止一个 agent 会拖垮同一 spawner 其他 agent"的共享状态污染 bug
 
     // 提示词生成器
     this.promptGenerator = new DynamicPromptGenerator({ config: options.config, logger: options.logger });
+
+    // P1 修复:被禁用工具列表(从 TeamManager.startTeamTask options.disabledTools 透传)
+    // 与角色白名单(AgentRoles[role].tools)做双重过滤,第一道按角色裁,第二道按用户禁用裁
+    this.disabledTools = options.disabledTools || [];
+
+    // P2 修复:用户约束(注入到子 Agent system prompt 的 ## 约束条件 块)
+    this.constraints = options.constraints || [];
+  }
+
+  /**
+   * P1/P2 修复:setDisabledTools(setter)与 setConstraints
+   * TeamManager.startTeamTask 通过这两个 setter 注入用户级约束
+   */
+  setDisabledTools(tools) {
+    this.disabledTools = Array.isArray(tools) ? tools : [];
+  }
+
+  setConstraints(constraints) {
+    this.constraints = Array.isArray(constraints) ? constraints : [];
+  }
+
+  /**
+   * P1 修复:角色白名单 + disabledTools 双重过滤
+   * task_complete 是系统级必给工具,豁免白名单(disabledTools 不豁免)
+   * @returns {Array} 过滤后的 OpenAI tools 格式工具列表
+   */
+  _filterToolsForAgent(role, allTools) {
+    const roleConfig = AgentRoles[role.toUpperCase()] || AgentRoles.EXECUTOR;
+    const allowed = new Set(roleConfig.tools || []);
+    const disabled = new Set(this.disabledTools || []);
+    const SYSTEM_CRITICAL = new Set(['task_complete']);
+
+    return allTools.filter((t) => {
+      const name = t?.function?.name;
+      // 系统级工具(任务完成声明)豁免白名单 — 子 Agent 没它就跑不完
+      if (SYSTEM_CRITICAL.has(name)) {return true;}
+      // 第一道:角色白名单(角色不在白名单的不给)
+      if (allowed.size > 0 && !allowed.has(name)) {return false;}
+      // 第二道:用户禁用(被显式禁用去掉,系统级工具不被禁)
+      if (disabled.has(name)) {return false;}
+      return true;
+    });
   }
 
   async spawn(options) {
@@ -82,6 +124,7 @@ class AgentSpawner extends EventEmitter {
       toolResults: [],
       parentAgent,           // 持有主 Agent 引用，用于工具执行代理
       _suppressEvents: false, // check 阶段置 true，屏蔽 subagent_thinking/content
+      _aborted: false,        // P0 修复:per-agent 中断标志,替代类共享字段
     };
 
     this.activeAgents.set(agentId, agent);
@@ -108,6 +151,7 @@ class AgentSpawner extends EventEmitter {
     const {
       systemPrompt,
       tasks,
+      taskDescription,  // 修复:兜底时透传原始任务给子 Agent
       timeout = this.defaultTimeout,
       priority,
     } = options;
@@ -115,7 +159,7 @@ class AgentSpawner extends EventEmitter {
     const startTime = Date.now();
     agent.status = 'running';
     agent._priority = priority;
-    agent.originalTask = this._buildTaskPrompt(tasks, priority); // 供 check prompt 复用
+    agent.originalTask = this._buildTaskPrompt(tasks, priority, taskDescription); // 供 check prompt 复用
 
     try {
       // 初始化独立 messages 上下文
@@ -125,8 +169,10 @@ class AgentSpawner extends EventEmitter {
       ];
       agent.messages = messages;
 
-      // 获取工具列表（从 parentAgent 的 toolRegistry）
-      const tools = agent.parentAgent?.toolRegistry?.getOpenAITools() || [];
+      // P1 修复:按角色白名单 + disabledTools 双重过滤工具列表
+      // 注意:即使 disabledTools 为空,仍按角色白名单裁剪(让 reviewer 真的拿不到 write_file)
+      const allTools = agent.parentAgent?.toolRegistry?.getOpenAITools() || [];
+      const tools = this._filterToolsForAgent(agent.role, allTools);
 
       // 执行主循环（持续驱动）
       const result = await this._agentLoop(agent, messages, tools, timeout);
@@ -198,7 +244,8 @@ class AgentSpawner extends EventEmitter {
       }
 
       // 持续驱动循环：check → continue
-      while (iterationCount < maxIterations && !this._aborted) {
+      // P0 修复:读 agent 实例的 _aborted,避免一个 agent 被终止拖垮其他
+      while (iterationCount < maxIterations && !agent._aborted) {
         // 全局超时
         if (Date.now() - startTime > timeoutMs) {
           this.logger?.warn(`Agent ${agent.agentId} 达到 ${timeoutMs / 1000}s 超时`);
@@ -564,26 +611,59 @@ class AgentSpawner extends EventEmitter {
 
   /**
    * 生成角色特定的提示词
+   * @param {string} role - 角色名
+   * @param {string} projectContext - 项目上下文(可选)
+   * @param {Object} sharedContext - 团队共享上下文(团队上游产出等)
+   * @param {Array} constraints - 用户约束列表,注入到子 Agent system prompt 的 ## 约束条件 块
+   *
+   * 修复:旧版第 2 个参数是 tasks,导致 taskDescription 嵌入 system prompt(子 Agent 误读为系统规则)。
+   * 新签名:第 2 位是 projectContext,taskDescription 不再嵌入(由 spawner.run 单独传 user message)。
    */
-  generatePromptForRole(role, tasks, projectContext, sharedContext = null) {
-    const taskDescription = this._buildTaskPrompt(tasks);
-
+  generatePromptForRole(role, projectContext, sharedContext = null, constraints = []) {
     return this.promptGenerator.generateSubAgentPrompt({
       role,
-      taskDescription,
+      taskDescription: null,  // 修复:不嵌入任务到 system,只走 user message 路径
       projectContext,
       teamSharedContext: sharedContext,
+      constraints,             // P2 修复:用户约束透传到 promptTemplates
     });
   }
 
   /**
    * 构建任务提示词
+   * @param {Array} tasks 任务列表(可空,但要有 taskDescription 兜底)
+   * @param {number} overallPriority 整体优先级
+   * @param {string} taskDescription 原始任务描述(tasks 为空时的兜底源)
+   * @returns {string} 任务提示词
+   * @throws {Error} tasks 空且无 taskDescription 时:caller bug,不能静默兜底
+   *
+   * 修复:旧版在 tasks=[] 时返回 "请执行分配给你" 无信息字符串,
+   * 子 Agent 收到完全不知道干啥,瞎猜项目文档。
    */
-  _buildTaskPrompt(tasks, overallPriority) {
-    if (!tasks || tasks.length === 0) {
-      return '请执行分配给你的任务。完成后调用 task_complete 工具声明完成，一句话说明即可。';
+  _buildTaskPrompt(tasks, overallPriority, taskDescription) {
+    const hasTasks = Array.isArray(tasks) && tasks.length > 0;
+    const hasDesc = typeof taskDescription === 'string' && taskDescription.length > 0;
+
+    // 既没任务分解,也没原始描述 → caller 漏传,抛错
+    if (!hasTasks && !hasDesc) {
+      throw new Error(
+        '[AgentSpawner._buildTaskPrompt] 必须提供 tasks 或 taskDescription,'
+        + '不能静默给子 Agent 发无信息 prompt。',
+      );
     }
 
+    if (!hasTasks && hasDesc) {
+      // tasks 空但有原始描述 → 简化格式,直接用原始任务作 prompt
+      let prompt = '## 任务\n\n';
+      if (overallPriority !== undefined) {
+        prompt += `整体优先级: ${overallPriority}\n\n`;
+      }
+      prompt += `${taskDescription}\n\n`;
+      prompt += '完成后调用 task_complete 工具声明完成,一句话说明即可。';
+      return prompt;
+    }
+
+    // tasks 有内容 → 任务列表格式
     let prompt = '## 任务列表\n\n';
     if (overallPriority !== undefined) {
       prompt += `整体优先级: ${overallPriority}\n\n`;
@@ -616,8 +696,8 @@ class AgentSpawner extends EventEmitter {
     // 中断 AI 客户端
     agent.aiClient?.abort?.();
 
-    // 旧 terminate 没设 _aborted,外层 loop 还在转
-    this._aborted = true;
+    // P0 修复:只设被终止 agent 自己的 _aborted,不再用类共享变量
+    agent._aborted = true;
 
     // 更新状态
     agent.status = 'terminated';

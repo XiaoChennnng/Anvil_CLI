@@ -132,7 +132,13 @@ const DEFAULTS = {
     // 是否启用团队模式（用户可关闭）
     enabled: true,
 
+    // 执行模式 P0 修复:控制 AI 不传 suggestedRoles 时团队规模上限
+    // 'simple' ≤1 executor / 'balanced' 1-3 Agent / 'thorough' 1-5 Agent
+    // 默认 'simple' 防止"用户说用团队就起 5 个 Agent"的体感问题
+    executionMode: 'simple',
+
     // 任务复杂度评估阈值(分数 >= 对应阈值触发对应规模团队)
+    // executionMode 调整: 'simple' 用 base; 'balanced' 用 base; 'thorough' 用 base×0.6
     complexityThreshold: {
       low: 25,     // < 25 不需要团队
       medium: 50,  // 25-49 简单团队(1 executor)

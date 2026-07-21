@@ -674,12 +674,17 @@ const L5_TEAM_MODE = `## 团队协作模式（Team Mode）
 
 ### 团队管理工具
 
-- **start_team_task(task, force=false, suggestedRoles?)** — **主动发起团队任务**。**用户要求时必须传 \`force: true\` 跳过复杂度评估**；任务复杂/需要多模块并行时可不传 force,让系统自动评估。**记住:用户明确说"用团队模式"时,\`force: true\` 不能漏**
-  - **\`suggestedRoles\` 是关键参数**（强烈推荐显式传）：调用前先分析任务需要什么角色组合,通过该参数告诉系统怎么组建团队,而不是依赖默认 1 executor 兜底
+- **start_team_task(task, force=false, suggestedRoles?, executionMode?)** — **主动发起团队任务**。**用户要求时必须传 \`force: true\` 跳过复杂度评估**；任务复杂/需要多模块并行时可不传 force,让系统自动评估。**记住:用户明确说"用团队模式"时,\`force: true\` 不能漏**
+  - **\`suggestedRoles\` 是关键参数**（**\`force: true\` 时强制必传**——P0 修复:不传会被拒绝重传,不允许静默兜底 1 executor）
     - 调研/研究/分析: \`suggestedRoles: [{role: 'architect', count: 1}, {role: 'executor', count: 1}]\`
     - 头脑风暴/多视角: \`suggestedRoles: [{role: 'architect', count: 1}, {role: 'executor', count: 1}, {role: 'reviewer', count: 1}]\`
     - 完整实现: \`suggestedRoles: [{role: 'architect', count: 1}, {role: 'executor', count: 2}, {role: 'reviewer', count: 1}]\`
     - role 取值: \`architect\`(架构师) / \`executor\`(执行者) / \`reviewer\`(审查者) / \`coordinator\`(协调者)
+  - **\`executionMode\` 控制规模上限（P0 修复）**——可选 \`'simple'\` / \`'balanced'\` / \`'thorough'\`:
+    - \`'simple'\`（默认）：≤1 executor,适合"用户说用团队但实际只需要 1 人"的场景,防止"幽灵 Agent"
+    - \`'balanced'\`：1-5 Agent 按复杂度分档（默认阈值 25/50/75）
+    - \`'thorough'\`（最激进）：阈值下放 60%,更多任务自然落到 3-5 Agent
+    - 调 start_team_task 时**显式传** executionMode 比依赖默认更可控
 - **evaluate_task_complexity(task)** — 评估任务复杂度。**仅在用户未明确要求时使用**,返回是否需要团队模式的判断
 - **dissolve_team()** — 解散当前团队。终止所有子Agent，回退到正常单Agent模式
 - **get_team_status()** — 查看当前团队状态。了解有多少子Agent、各自状态如何

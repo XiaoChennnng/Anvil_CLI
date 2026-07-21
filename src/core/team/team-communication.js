@@ -36,6 +36,16 @@ class TeamCommunication extends EventEmitter {
 
     // 心跳记录
     this._heartbeatMap = new Map();  // agentId -> last heartbeat timestamp
+
+    // P2 修复:角色映射(agentId -> role),供 _validateAgentCommunication 校验权限
+    this._roleMap = new Map();
+  }
+
+  /**
+   * P2 修复:同步 agent 角色(由 TeamManager._createTeamAgents 调用)
+   */
+  setAgentRole(agentId, role) {
+    this._roleMap.set(agentId, role);
   }
 
   async sendToAgent(agentId, message) {
@@ -213,8 +223,32 @@ class TeamCommunication extends EventEmitter {
     this._heartbeatMap.set(agentId, timestamp);
   }
 
+  /**
+   * P2 修复:真实校验 agent 间通信权限
+   * - coordinator → 其他角色:允许(协调者负责协调)
+   * - 其他角色 → coordinator:允许(汇报)
+   * - 其他角色之间:拒绝(避免 executor 任意调动)
+   *
+   * 注:'-1' / '__main__' 代表主 Agent,所有 agent 都可以与主 Agent 通信
+   */
   _validateAgentCommunication(fromAgentId, toAgentId) {
-    return true;  // 暂只允许协调者↔执行者通信
+    const MAIN = '__main__';
+    if (fromAgentId === MAIN || toAgentId === MAIN) {return true;}
+    if (fromAgentId === toAgentId) {return false;} // 自己不发给自己
+
+    const fromRole = this._roleMap.get(fromAgentId);
+    const toRole = this._roleMap.get(toAgentId);
+
+    // 未注册角色的 agent(可能尚未 spawn 完成)默认允许 — 否则启动期通信会全卡死
+    if (!fromRole || !toRole) {return true;}
+
+    // 只有 coordinator 能作为主动发送方
+    if (fromRole === 'coordinator') {return true;}
+
+    // 其他角色只能发给 coordinator
+    if (toRole === 'coordinator') {return true;}
+
+    return false;
   }
 
   /**

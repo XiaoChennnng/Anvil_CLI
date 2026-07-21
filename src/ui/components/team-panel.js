@@ -4,13 +4,11 @@ const chalk = require('chalk');
 const { getTheme } = require('../theme');
 const MarkdownRenderer = require('../markdown');
 const { visibleLength, truncateToWidth } = require('../ansi');
+const ToolRenderer = require('../tool-renderer');
 
 // team-panel 容量与滚动配置:防止渲染输出超 32KB 截断导致 ANSI 残影
 const TEAM_PANEL_MAX_BYTES = 12 * 1024;
 const TEAM_PANEL_WARN_BYTES = 8 * 1024;
-const MAX_AGENT_OUTPUT_LINES = 80;        // 单 agent 最大行数
-const AGENT_OUTPUT_HEAD_LINES = 30;       // 折叠保留头
-const AGENT_OUTPUT_TAIL_LINES = 50;       // 折叠保留尾
 const MAX_AGENT_CONTENT_CHARS = 8000;     // 单 agent 内容上限
 const MAX_TOTAL_THINKING_CHARS = 4000;    // thinking 总上限
 
@@ -31,6 +29,7 @@ class TeamPanel {
     this.sidebar = null;  // 由 TUI 注入
     // TUI 注入的主消息区渲染器,保证 Markdown/宽度处理与主 Agent 一致
     this.messageBoxRenderer = null;
+    this.toolRenderer = new ToolRenderer(this.theme);
 
     this.scrollOffset = 0;     // 滚动位置(0 = 底部)
     this.agentFilter = null;   // agent 过滤(null = 全部)
@@ -109,18 +108,10 @@ class TeamPanel {
     const listEndRow = messageStartRow + contentHeight - 3;
     const listHeight = Math.max(1, listEndRow - listStartRow + 1);
 
-    // 单 agent 视口分配,硬上限 MAX_AGENT_OUTPUT_LINES 防止撑爆
     const agents = this.sidebar?.getAgentStatesSnapshot?.() || [];
-    const activeAgentCount = this.agentFilter !== null ? 1 : agents.length;
-    let agentMaxLines;
-    if (activeAgentCount > 1) {
-      agentMaxLines = Math.max(5, Math.min(MAX_AGENT_OUTPUT_LINES, Math.floor((listHeight - 4) / activeAgentCount)));
-    } else {
-      agentMaxLines = Math.min(MAX_AGENT_OUTPUT_LINES, listHeight - 4);
-    }
 
     let contentLines = this.viewMode === 'message'
-      ? this._renderMessageView(events, width, agentMaxLines)
+      ? this._renderMessageView(events, width)
       : this._renderEventView(events, width);
 
     let estimatedBytes = this._estimateLinesBytes(titleLine) + this._estimateLinesBytes(hintLine);
@@ -130,7 +121,7 @@ class TeamPanel {
 
     // 降级:超 WARN 去 tool 详细,超 MAX 只显示 chunkPreview
     if (estimatedBytes > TEAM_PANEL_WARN_BYTES) {
-      contentLines = this._renderMessageView(events, width, Math.max(5, Math.floor(agentMaxLines / 2)), { compact: true });
+      contentLines = this._renderMessageView(events, width, true);
       estimatedBytes = 0;
       for (const line of contentLines) {
         estimatedBytes += this._estimateLineBytes(line);
@@ -216,15 +207,11 @@ class TeamPanel {
    * @param {number} width - 可用宽度
    * @param {number|object} agentMaxLinesOrOpts - 单 agent 最大行数,或 {maxLines, compact}
    */
-  _renderMessageView(events, width, agentMaxLinesOrOpts = Infinity) {
+  _renderMessageView(events, width, compact = false) {
     const t = this.theme;
     const md = this._getMarkdownRenderer(width);
 
-    const opts = typeof agentMaxLinesOrOpts === 'object'
-      ? agentMaxLinesOrOpts
-      : { maxLines: agentMaxLinesOrOpts, compact: false };
-    const agentMaxLines = opts.maxLines || Infinity;
-    const compact = opts.compact || false;
+    // compact flag received via parameter
 
     const agents = this._getFilteredAgents();
     const filtered = this._filterEvents(events);
@@ -245,54 +232,95 @@ class TeamPanel {
       allLines.push(` ${chalk.hex(t.colors.primary).bold(agentName)} ${roleTag}${degradedTag}`);
       const agentLines = [];
 
-      // thinking 与主 Agent 一致:跳空行、thinkingFallback 灰色、无前缀
-      if (output?.thinking) {
-        let tLines = output.thinking.split('\n').filter(l => l.trim());
-        const totalThinkingChars = tLines.reduce((sum, l) => sum + l.length, 0);
-        if (totalThinkingChars > MAX_TOTAL_THINKING_CHARS) {
-          let accChars = 0;
-          let cutIdx = tLines.length;
-          for (let i = tLines.length - 1; i >= 0; i--) {
-            accChars += tLines[i].length;
-            if (accChars > MAX_TOTAL_THINKING_CHARS) {cutIdx = i + 1; break;}
-          }
-          tLines = tLines.slice(cutIdx);
-          agentLines.push(chalk.dim(`  ⋯ (前面 ${cutIdx} 行 thinking 已省略)`));
-        }
-        if (compact && tLines.length > 10) {
-          agentLines.push(chalk.dim(`  ⋯ (省略 ${tLines.length - 10} 行 thinking)`));
-          tLines = tLines.slice(-10);
-        }
-        for (const line of tLines) {
-          agentLines.push(t.thinkingFallback(line));
-        }
+      // 按时间排序事件,实现时序渲染（替代三段式 thinking→tools→content 分组）
+      const agentEvents = filtered
+        .filter(e => e.data?.agentId === agent.agentId)
+        .sort((a, b) => (a.time || 0) - (b.time || 0));
+
+      if (agentEvents.length === 0) {
+        allLines.push(chalk.dim('  <无消息>'));
+        allLines.push('');
+        continue;
       }
 
-      const toolLines = compact
-        ? this._renderAgentToolEventsCompact(filtered, agent.agentId, width)
-        : this._renderAgentToolEvents(filtered, agent.agentId, width);
-      agentLines.push(...toolLines);
+      // 预建 tool_result 查询表,避免逐事件线性查找
+      const resultByCallId = new Map();
+      for (const ev of agentEvents) {
+        if (ev.event === 'tool_result' && ev.data?.toolCall?.id) {
+          resultByCallId.set(ev.data.toolCall.id, ev);
+        }
+      }
+      const renderedResultIds = new Set();
 
-      // content 与主 Agent 一致:Markdown 渲染、跳空行、首行带 ●、后续 3 空格缩进
-      if (output?.content) {
-        let contentText = output.content;
-        if (contentText.length > MAX_AGENT_CONTENT_CHARS) {
-          const cutAt = contentText.length - MAX_AGENT_CONTENT_CHARS;
-          contentText = '⋯ ' + contentText.slice(cutAt + 2);
-          agentLines.push(chalk.dim(`  ⋯ (前 ${cutAt} 字符 content 已省略)`));
-        }
-        let cLines = md.write(contentText + '\n').split('\n').filter(l => l.trim());
-        if (compact && cLines.length > 15) {
-          agentLines.push(chalk.dim(`  ⋯ (省略 ${cLines.length - 15} 行 content)`));
-          cLines = cLines.slice(-15);
-        }
-        let firstContentLine = true;
-        for (const line of cLines) {
-          if (firstContentLine) {
-            agentLines.push(` ${chalk.hex(t.colors.primary)('●')} ${line}`);
-            firstContentLine = false;
+      for (const ev of agentEvents) {
+        if (ev.event === 'thinking') {
+          const text = output?.thinking || ev.data?.chunk || '';
+          if (!text) {continue;}
+          let tLines = text.split('\n').filter(l => l.trim());
+          const totalThinkingChars = tLines.reduce((sum, l) => sum + l.length, 0);
+          if (totalThinkingChars > MAX_TOTAL_THINKING_CHARS) {
+            let accChars = 0;
+            let cutIdx = tLines.length;
+            for (let i = tLines.length - 1; i >= 0; i--) {
+              accChars += tLines[i].length;
+              if (accChars > MAX_TOTAL_THINKING_CHARS) {cutIdx = i + 1; break;}
+            }
+            tLines = tLines.slice(cutIdx);
+            agentLines.push(chalk.dim(`  ⋯ (前面 ${cutIdx} 行 thinking 已省略)`));
+          }
+          if (compact && tLines.length > 10) {
+            agentLines.push(chalk.dim(`  ⋯ (省略 ${tLines.length - 10} 行 thinking)`));
+            tLines = tLines.slice(-10);
+          }
+          for (const line of tLines) {
+            agentLines.push(t.thinkingFallback(line));
+          }
+        } else if (ev.event === 'tool_calls' && ev.data?.toolCall) {
+          const tc = ev.data.toolCall;
+          const callId = tc.id;
+          if (callId) {renderedResultIds.add(callId);}
+          const resultEv = callId ? resultByCallId.get(callId) : null;
+          const rawName = tc.function?.name || tc.name || 'unknown';
+          if (compact) {
+            const success = resultEv?.data?.result?.success !== false && !resultEv?.data?.result?.error;
+            const icon = success ? t.success('\u2713') : t.error('\u2717');
+            agentLines.push(` ${icon} ${chalk.dim(this.toolRenderer.getToolName(rawName))}`);
           } else {
-            agentLines.push(`   ${line}`);
+            const tcLines = this.toolRenderer.renderToolCall(tc, width, false, true);
+            agentLines.push(...tcLines.map(l => ` ${l}`));
+            if (resultEv) {
+              const { toolName, result } = resultEv.data;
+              const resultLines = this.toolRenderer.renderToolResponse(toolName, result, tc, width, 5);
+              agentLines.push(...resultLines);
+            }
+          }
+        } else if (ev.event === 'tool_result') {
+          if (ev.data?.toolCall?.id && renderedResultIds.has(ev.data.toolCall.id)) {continue;}
+          const rawName = ev.data?.toolName || 'tool';
+          const icon = t.success('\u2713');
+          agentLines.push(` ${icon} ${chalk.dim(this.toolRenderer.getToolName(rawName))}`);
+        } else if (ev.event === 'content') {
+          const text = output?.content || ev.data?.chunk || '';
+          if (!text) {continue;}
+          let contentText = text;
+          if (contentText.length > MAX_AGENT_CONTENT_CHARS) {
+            const cutAt = contentText.length - MAX_AGENT_CONTENT_CHARS;
+            contentText = '\u22ef ' + contentText.slice(cutAt + 2);
+            agentLines.push(chalk.dim(`  \u22ef (前 ${cutAt} 字符 content 已省略)`));
+          }
+          let cLines = md.write(contentText + '\n').split('\n').filter(l => l.trim());
+          if (compact && cLines.length > 15) {
+            agentLines.push(chalk.dim(`  \u22ef (省略 ${cLines.length - 15} 行 content)`));
+            cLines = cLines.slice(-15);
+          }
+          let firstContentLine = true;
+          for (const line of cLines) {
+            if (firstContentLine) {
+              agentLines.push(` ${chalk.hex(t.colors.primary)('\u25cf')} ${line}`);
+              firstContentLine = false;
+            } else {
+              agentLines.push(`   ${line}`);
+            }
           }
         }
       }
@@ -301,19 +329,6 @@ class TeamPanel {
         allLines.push(chalk.dim('  <无消息>'));
         allLines.push('');
         continue;
-      }
-
-      // 超出 agentMaxLines 时折叠为 head + tail ring buffer
-      if (agentLines.length > agentMaxLines) {
-        const folded = agentLines.length - agentMaxLines;
-        const headCount = Math.min(AGENT_OUTPUT_HEAD_LINES, Math.floor((agentMaxLines - 1) / 2));
-        const tailCount = agentMaxLines - 1 - headCount;
-        const head = agentLines.slice(0, headCount);
-        const tail = agentLines.slice(-tailCount);
-        agentLines.length = 0;
-        agentLines.push(...head);
-        agentLines.push(`  ${chalk.dim('⋯')} ${chalk.dim(`(+${folded} 行已折叠)`)}`);
-        agentLines.push(...tail);
       }
 
       for (const line of agentLines) {
@@ -715,8 +730,6 @@ class TeamPanel {
 module.exports = TeamPanel;
 module.exports.TEAM_PANEL_MAX_BYTES = TEAM_PANEL_MAX_BYTES;
 module.exports.TEAM_PANEL_WARN_BYTES = TEAM_PANEL_WARN_BYTES;
-module.exports.MAX_AGENT_OUTPUT_LINES = MAX_AGENT_OUTPUT_LINES;
-module.exports.AGENT_OUTPUT_HEAD_LINES = AGENT_OUTPUT_HEAD_LINES;
-module.exports.AGENT_OUTPUT_TAIL_LINES = AGENT_OUTPUT_TAIL_LINES;
+
 module.exports.MAX_AGENT_CONTENT_CHARS = MAX_AGENT_CONTENT_CHARS;
 module.exports.MAX_TOTAL_THINKING_CHARS = MAX_TOTAL_THINKING_CHARS;

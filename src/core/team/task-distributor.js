@@ -220,6 +220,16 @@ class TaskDistributor {
     const tasks = [];
     let taskId = 1;
 
+    // purpose 描述模板:按 task type 给出明确说明,给子 Agent 提供工作目标
+    const PURPOSE_BY_TYPE = {
+      [TaskTypes.DESIGN]: '设计类:产出架构方案/接口设计/技术选型,作为下游实现的输入',
+      [TaskTypes.EXPLORE]: '探索类:摸清现有代码/文档/约束,为后续设计提供事实依据',
+      [TaskTypes.IMPLEMENT]: '实现类:按设计编写可工作的代码,确保自测通过',
+      [TaskTypes.TEST]: '测试类:运行测试套件,记录失败用例,验证修复不引入回归',
+      [TaskTypes.REVIEW]: '审查类:发现 bug/安全问题/规范违反,给出可执行的修复建议',
+      [TaskTypes.COORDINATE]: '协调类:整合上游产出,处理冲突,推进整体进度',
+    };
+
     // 识别分解模式
     for (const { pattern, tasks: patternTasks } of decompositionPatterns) {
       if (pattern.test(taskDescription)) {
@@ -234,6 +244,7 @@ class TaskDistributor {
             description: task.description,
             estimatedComplexity: 1,
             dependencies: [],
+            purpose: PURPOSE_BY_TYPE[task.type] || `执行: ${task.description}`,
           });
         }
         break;  // 只匹配一个主要模式
@@ -248,6 +259,7 @@ class TaskDistributor {
         description: taskDescription,
         estimatedComplexity: 1,
         dependencies: [],
+        purpose: `研究/调研类:从可信来源收集信息,产出可作为决策依据的调研结论`,
         _isFallback: true,  // 标记 _assignTasksToAgents 按 agent 数量展开
       });
     }
@@ -332,13 +344,32 @@ class TaskDistributor {
       for (const task of group) {
         // _isFallback 任务按 agent 数量展开为角色视角副本,避免空转+LLM 跑偏
         if (task._isFallback) {
-          for (const agent of agents) {
+          // P3 修复:fallback 真分工
+          // - N=1: 保留原任务
+          // - N=2: 1 主分析 + 1【独立视角验证】
+          // - N>=3: 1 主分析 + 1【独立视角】 + 1【交叉验证】 + 其余走【独立视角】
+          // 每份仍带 FALLBACK_ROLE_ANGLES[role] 视角前缀
+          const N = agents.length;
+          for (let i = 0; i < N; i++) {
+            const agent = agents[i];
             const agentId = getAgentId(agent);
-            const angleHint = FALLBACK_ROLE_ANGLES[agent.role] || FALLBACK_ROLE_ANGLES.executor;
+            const roleHint = FALLBACK_ROLE_ANGLES[agent.role] || FALLBACK_ROLE_ANGLES.executor;
+            // 第一份走"主分析",后续走不同分工
+            const divisionHint = i === 0 ? '【主分析视角】这是主分析,其他 Agent 会从不同角度切入,请独立先展开你的视角。'
+              : (N === 2 && i === 1)
+                ? '【独立视角验证】请从独立视角重新分析,不要重复主分析的结论,寻找主分析可能忽略的盲点。'
+                : (N >= 3 && i === 1)
+                  ? '【独立视角】请从独立视角切入,不要重复主分析的结论。'
+                  : (N >= 3 && i === 2)
+                    ? '【交叉验证】请审视前面的产出,寻找偏倚、漏洞、共识或矛盾,最终给出你自己的判断。'
+                    : '【独立视角】请从独立视角切入,与其他 Agent 输出保持差异性。';
             const angleTask = {
               ...task,
-              id: `${task.id}_${agent.role}_${agentId.slice(0, 4)}`,
-              description: `${angleHint}\n\n${task.description}`,
+              id: `${task.id}_${agent.role}_${i}_${agentId.slice(0, 4)}`,
+              description: `${roleHint}\n\n${divisionHint}\n\n${task.description}`,
+              purpose: task.purpose
+                ? `${task.purpose} | 分工: ${divisionHint}`
+                : divisionHint,
             };
             assignments[agentId].push(angleTask);
           }

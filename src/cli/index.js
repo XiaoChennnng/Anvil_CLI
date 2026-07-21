@@ -275,6 +275,7 @@ async function main() {
   });
 
   chatEngine.on('thinking', (chunk) => {
+    if (chunk?._subAgent) {return;}
     tui.renderThinkingChunk(chunk);
   });
 
@@ -297,6 +298,7 @@ async function main() {
   });
 
   chatEngine.on('content', (chunk) => {
+    if (chunk?._subAgent) {return;}
     if (!contentStarted) {
       tui.renderContentStart();
       contentStarted = true;

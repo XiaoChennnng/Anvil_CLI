@@ -1642,7 +1642,6 @@ class ChatEngine extends EventEmitter {
 
       // 成功路径:任务完成,补发 team_mode_end 让 UI 状态栏恢复
       // (之前漏 emit,导致团队跑完后状态栏永远卡在"团队模式中")
-      this._updateSystemPrompt();
       this.emit('team_mode_end', {
         reason: result?.result?.degraded ? 'degraded' : 'completed',
         teamId: result?.teamId,
@@ -1680,6 +1679,7 @@ class ChatEngine extends EventEmitter {
       return { needsTeam: false, error: error.message };
     } finally {
       this.teamMode = false;
+      this._updateSystemPrompt();
     }
   }
 
