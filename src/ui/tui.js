@@ -201,6 +201,7 @@ class TUI {
 
   _refreshStatusBar() {
     const out = this.statusBar.render();
+    // render() 内部已做了版本跳过，返回空时跳过写
     if (out) {this._safeWrite(out, true);}
   }
 
@@ -224,8 +225,10 @@ class TUI {
     });
   }
 
-  /** teamActivity 高频触发走 20ms 节流,防止破坏光标位置闪烁。 */
+  /** 状态栏独立渲染（render() 内部版本号跳过，不写空）。 */
   _queueStatusBar() {
+    if (this._lastStatusVersion === this.statusBar._renderVersion) { return; }
+    this._lastStatusVersion = this.statusBar._renderVersion;
     if (!this._renderQueue) {
       const RenderQueue = require('./render-queue');
       this._renderQueue = new RenderQueue(20);

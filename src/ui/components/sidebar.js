@@ -160,7 +160,7 @@ class Sidebar {
 
     // 同步维护 agentStates Map（M2 会用它做 agent 卡片渲染）
     // per-agent 150ms 节流，防止高频 chunk 每帧触发 version++
-    this._updateAgentState(eventName, data);
+    const stateChanged = this._updateAgentState(eventName, data);
 
     switch (eventName) {
       case 'team_created':
@@ -188,7 +188,7 @@ class Sidebar {
       default:
         break;
     }
-    this._teamEventsVersion++;
+    if (stateChanged) { this._teamEventsVersion++; }
   }
 
   /**
@@ -211,7 +211,7 @@ class Sidebar {
           state.degraded = true;
         }
       }
-      return;
+      return true;
     }
 
     // agent_respawned 必须在 agentId 检查之前：payload 只有 oldAgentId/newAgentId，没有顶层 agentId
@@ -219,7 +219,7 @@ class Sidebar {
     if (eventName === 'agent_respawned') {
       const oldId = data?.oldAgentId;
       const newId = data?.newAgentId;
-      if (!newId) { return; }
+      if (!newId) { return true; }
       const oldState = oldId ? this.agentStates.get(oldId) : null;
       this.agentStates.set(newId, {
         name: newId.slice(-4),
@@ -233,11 +233,11 @@ class Sidebar {
       if (oldId && oldId !== newId) {
         this.agentStates.delete(oldId);
       }
-      return;
+      return true;
     }
 
     const agentId = data?.agentId;
-    if (!agentId) {return;}
+    if (!agentId) {return false;}
 
     switch (eventName) {
       case 'agent_created': {
@@ -276,7 +276,7 @@ class Sidebar {
         const now = Date.now();
         if (now - state.lastChunkAt < 150) {
           state.chunkPreview = chunk.slice(-30);
-          return; // 仅更新数据，version 留给下次节流窗口到期
+          return false; // 节流中，不触 version++
         }
         state.lastChunkAt = now;
         state.chunkPreview = chunk.slice(-30);
@@ -296,6 +296,7 @@ class Sidebar {
       default:
         break;
     }
+     return true;
   }
 
   /**

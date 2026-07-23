@@ -315,6 +315,9 @@ async function main() {
       }
       return;
     }
+    // task_complete 是系统内部信号，不渲染到前端消息区
+    const toolName = typeof data === 'object' ? (data?.function?.name || '') : '';
+    if (toolName === 'task_complete') { return; }
     // 主 Agent 的工具调用 → 消息区
     if (!contentStarted) { tui.renderContentStart(); contentStarted = true; }
     tui.renderToolCall(data);
@@ -327,7 +330,9 @@ async function main() {
     _cmdBuf.push(...lines);
   });
 
-  chatEngine.on('tool_result', ({ name, result, toolCall, _subAgent, agentId, args }) => {
+  chatEngine.on('tool_result', ({ name, result, toolCall, _subAgent, agentId, args }) => {
+    // task_complete 结果不渲染到消息区
+    if (name === 'task_complete') { return; }
     // 子 Agent 的工具结果 → sidebar/team-panel(走节流)
     if (_subAgent) {
       if (tui.sidebar && tui.sidebar.handleTeamEvent) {

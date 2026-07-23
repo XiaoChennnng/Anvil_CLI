@@ -67,20 +67,24 @@ class StatusBar {
 
   setPlanMode(enabled) {
     this.planMode = enabled;
+    this._renderVersion++;
   }
 
   // 设置 Team Mode 状态 + agent 数（供 widget 显示）
   setTeamMode(enabled, agentCount = 0) {
     this.teamMode = !!enabled;
     this.teamAgentCount = agentCount;
+    this._renderVersion++;
   }
 
   setPendingContext(hasPending) {
     this.hasPendingContext = hasPending;
+    this._renderVersion++;
   }
 
   setTodoStats(total, completed) {
     this.todoStats = { total: total || 0, completed: completed || 0 };
+    this._renderVersion++;
   }
 
   setContextInfo(used, total, percent) {
@@ -89,6 +93,7 @@ class StatusBar {
       total: total || 1000000,
       percent: percent || 0,
     };
+    this._renderVersion++;
   }
 
   setCacheInfo(hitRate, cachedTokens, totalTokens) {
@@ -97,6 +102,7 @@ class StatusBar {
       cachedTokens: cachedTokens || 0,
       totalTokens: totalTokens || 0,
     };
+    this._renderVersion++;
   }
 
   setThinking(thinking) {
@@ -108,6 +114,7 @@ class StatusBar {
       this.thinkingStartTime = null;
       this.thinkingMessage = '';
     }
+    this._renderVersion++;
   }
 
   // 随机换一条 thinking 提示语（timer 或工具调用时触发）
@@ -118,6 +125,7 @@ class StatusBar {
     } else {
       this._pickRandomMessage();
     }
+    this._renderVersion++;
   }
 
   _pickRandomMessage() {
@@ -157,19 +165,23 @@ class StatusBar {
       this.tokenUsage.totalOutput += this.tokenUsage.roundOutput;
       this.tokenUsage.totalCacheHit = (this.tokenUsage.totalCacheHit || 0) + this.tokenUsage.roundCacheHit;
     }
+    this._renderVersion++;
   }
 
   setPricing(pricing) {
     this.pricing = pricing;
+    this._renderVersion++;
   }
 
   setDiagnostics(errors, warnings) {
     this.diagnostics = { errors: errors || 0, warnings: warnings || 0 };
+    this._renderVersion++;
   }
 
   setInfoMessage(msg, type, ttl) {
     this.infoMessage = { msg, type: type || 'info', ttl: ttl || 10000 };
     this._infoMessageTime = Date.now();
+    this._renderVersion++;
   }
 
   /**
@@ -191,6 +203,7 @@ class StatusBar {
     this._teamActivityTimer = setTimeout(() => {
       this.teamActivity = null;
     }, this.TEAM_ACTIVITY_TTL);
+    this._renderVersion++;
   }
 
   /**
@@ -202,6 +215,7 @@ class StatusBar {
       clearTimeout(this._teamActivityTimer);
       this._teamActivityTimer = null;
     }
+    this._renderVersion++;
   }
 
   /**
@@ -229,7 +243,9 @@ class StatusBar {
 
   // 渲染状态栏
   render(model) {
-    if (model) {this.model = model;}
+    if (model) { this.model = model; this._renderVersion++; }
+    if (this._lastRenderedVersion === this._renderVersion) { return ''; }
+    this._lastRenderedVersion = this._renderVersion;
     const t = this.theme;
     const { statusBarRow, _width } = this.layout;
 

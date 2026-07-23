@@ -669,7 +669,7 @@ class ChatEngine extends EventEmitter {
         for (const toolCall of response.toolCalls) {
           // request_plan_approval 已触发：跳过后续工具（仍需推入 tool result）
           if (awaitingPlanBreak) {
-            if (!this._suppressUI) {this.emit('tool_calls', toolCall);}
+            if (!this._suppressUI && toolCall.function?.name !== 'task_complete') {this.emit('tool_calls', toolCall);}
             this.messages.push({
               role: 'tool',
               tool_call_id: toolCall.id,
@@ -685,7 +685,7 @@ class ChatEngine extends EventEmitter {
           }
 
           // 逐个发射工具调用事件（UI 逐个展示）
-          if (!this._suppressUI) {this.emit('tool_calls', toolCall);}
+          if (!this._suppressUI && toolCall.function?.name !== 'task_complete') {this.emit('tool_calls', toolCall);}
           const name = toolCall.function?.name || '';
           let args = {};
           try {
