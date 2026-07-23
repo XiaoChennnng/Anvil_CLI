@@ -18,8 +18,8 @@ function setupOptions() {
   return program.opts();
 }
 
-function showKeyBindings() {
-  console.log(`
+function showKeyBindings(outputMode) {
+  const text = `
 快捷键:
   Ctrl+C          中断当前 AI 回复
   Ctrl+D          退出 Anvil
@@ -38,7 +38,13 @@ function showKeyBindings() {
   /keys, /shortcuts   查看快捷键和命令
   /clear              清屏
   /help               显示帮助信息
-`);
+`;
+
+  if (outputMode === 'console') {
+    console.log(text);
+    return;
+  }
+  return text.trim();
 }
 
 module.exports = { setupOptions, showKeyBindings };

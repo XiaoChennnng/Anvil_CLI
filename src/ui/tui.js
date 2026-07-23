@@ -680,6 +680,14 @@ class TUI {
       return { action: 'team_panel_toggle' };
     }
 
+    // ─── Ctrl+? (0x1f = Ctrl+/) — 显示快捷键帮助 ───
+    if (buf[0] === 0x1f && buf.length === 1) {
+      if (this._onSend) {
+        this._onSend('/shortcuts');
+      }
+      return { action: 'show_shortcuts' };
+    }
+
     // ─── 处理期间也允许翻页 ───
     if (this._isProcessing) {
       // Ctrl+C 中断

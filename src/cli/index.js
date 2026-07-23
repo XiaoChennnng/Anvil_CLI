@@ -35,7 +35,7 @@ async function main() {
   const cliOptions = setupOptions();
 
   if (cliOptions.keys) {
-    showKeyBindings();
+    showKeyBindings('console');
     process.exit(0);
   }
 
@@ -330,7 +330,7 @@ async function main() {
     _cmdBuf.push(...lines);
   });
 
-  chatEngine.on('tool_result', ({ name, result, toolCall, _subAgent, agentId, args }) => {
+  chatEngine.on('tool_result', ({ name, result, toolCall, _subAgent, agentId, args }) => {
     // task_complete 结果不渲染到消息区
     if (name === 'task_complete') { return; }
     // 子 Agent 的工具结果 → sidebar/team-panel(走节流)
@@ -612,7 +612,10 @@ async function main() {
         } else if (result.response) {
           const t = tui.layout.theme;
           const border = chalk.hex(t.colors.primary)('┃');
-          tui.messageBox.renderedLines.push(`${border} ${result.response}`);
+          const lines = result.response.split('\n');
+          for (const line of lines) {
+            tui.messageBox.renderedLines.push(`${border} ${line}`);
+          }
           tui.messageBox.renderedLines.push('');
           tui._refreshMessages();
         }

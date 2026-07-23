@@ -346,6 +346,13 @@ class MarkdownRenderer {
     if (line.indexOf('**') !== -1 || line.indexOf('__') !== -1) {return true;}
     // 删除线 ~~
     if (line.indexOf('~~') !== -1) {return true;}
+    // 斜体 * 或 _（非列表标记、非加粗的单个标记）
+    if (line.indexOf('*') !== -1 && line.indexOf('**') === -1) {return true;}
+    if (line.indexOf('_') !== -1 && line.indexOf('__') === -1) {return true;}
+    // Emoji 短代码 :word:
+    if (/:[a-zA-Z_+-]+:/.test(line)) {return true;}
+    // URL autolink ://
+    if (line.indexOf('://') !== -1) {return true;}
 
     return false;
   }

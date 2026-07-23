@@ -291,8 +291,7 @@ async function handleCommand(input, chatEngine, options = {}) {
     case 'keys':
     case 'shortcuts': {
       const { showKeyBindings } = require('./options');
-      showKeyBindings();
-      return { handled: true, response: null };
+      return { handled: true, response: showKeyBindings() };
     }
 
     case 'clear': {
@@ -301,23 +300,19 @@ async function handleCommand(input, chatEngine, options = {}) {
     }
 
     case 'help': {
-      console.log(`
-Anvil — AI-driven CLI Programming Assistant
-
-用法:
-  anvil                          启动 Anvil
-  anvil --dir /path/to/project   指定工作目录
-  anvil --model <name>           指定模型
-  anvil --resume <id>            恢复会话
-  anvil --help                   显示帮助
-  anvil --keys                   显示快捷键
-  anvil --version                显示版本
-
-使用 ${Object.keys(COMMANDS).map((k) => '/' + k).join(', ')} 等命令
-
-更多信息请查看: /keys
-`);
-      return { handled: true, response: null };
+      return {
+        handled: true,
+        response: 'Anvil — AI-driven CLI Programming Assistant\n\n'
+          + '用法:\n'
+          + '  anvil                          启动 Anvil\n'
+          + '  anvil --dir /path/to/project   指定工作目录\n'
+          + '  anvil --model <name>           指定模型\n'
+          + '  anvil --resume <id>            恢复会话\n'
+          + '  anvil --help                   显示帮助\n'
+          + '  anvil --keys                   显示快捷键\n'
+          + '  anvil --version                显示版本\n\n'
+          + '更多信息请查看: /keys',
+      };
     }
 
     case 'todo': {
