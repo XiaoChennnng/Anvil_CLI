@@ -4,7 +4,9 @@ const chalk = require('chalk');
 const { highlight } = require('cli-highlight');
 const { marked } = require('marked');
 const { markedTerminal } = require('marked-terminal');
+const Table = require('cli-table3');
 const { getTheme } = require('./theme');
+const { visibleLength } = require('./ansi');
 
 class MarkdownRenderer {
   constructor(width) {
@@ -418,12 +420,299 @@ class MarkdownRenderer {
     const tableSource = this._tableBuffer.join('\n');
     this._tableBuffer = [];
 
+    // 半残表格(无分隔行 |---|---|)不构成完整 GFM 表格,marked.parse 会原样返回
+    // 不渲染框线,用户看到的是"无框线的半个表格"。这里用 dim 灰色直接显示原行,
+    // 让用户清楚这是未渲染的 markdown 源码(AI 输出格式异常)而非渲染失败。
+    if (!this._hasTableSeparator(tableSource)) {
+      const lines = tableSource.split('\n');
+      const rendered = [];
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('|') && trimmed.indexOf('|', 1) !== -1) {
+          rendered.push(chalk.hex(this.theme.colors.textMuted).dim(line));
+        } else {
+          const r = this._renderLine(line, false);
+          if (r) {rendered.push(r);}
+        }
+      }
+      return rendered.join('\n');
+    }
+
+    // marked-terminal 不按 width 压缩表格列宽,超宽时终端硬截断带 ANSI 转义符的行
+    // 会导致框线和文字错位。这里预估自然宽度,超限就接管 cli-table3 自己渲染压缩表格
+    // (保留框线视觉,列内文字按 visibleLength 预换行)。极窄放不下最小列宽时才退回 bullet list。
+    const naturalWidth = this._estimateTableWidth(tableSource);
+    if (naturalWidth > 0 && naturalWidth > this.width) {
+      try {
+        return this._renderCompressedTable(tableSource);
+      } catch {
+        // 异常兜底:走 list 路径,保证用户至少看到结构化内容而不是错位框线
+        return this._tableToListFallback(tableSource);
+      }
+    }
+
     try {
       const rendered = marked.parse(tableSource);
       return rendered.replace(/\n$/, '');
     } catch {
       return tableSource;
     }
+  }
+
+  // 检测表格源是否包含 GFM 分隔行(形如 |---|---| 或 |:---:|---:|)
+  _hasTableSeparator(source) {
+    const lines = source.split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      // GFM 分隔行:每格必须是 - 或 : 组合,允许首尾 | 缺省
+      if (/^\|?[\s\-:|]+\|?$/.test(trimmed) && /-/.test(trimmed)) {return true;}
+    }
+    return false;
+  }
+
+  // 解析 markdown 表格,估算每列自然宽度,返回表格总宽(含 padding 和边框)
+  _estimateTableWidth(source) {
+    const lines = source.split('\n').filter((l) => l.trim().startsWith('|'));
+    if (lines.length < 2) {return 0;}
+    const parseRow = (line) => {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('|')) {return null;}
+      // 允许缺左 | 或缺右 | 的宽松解析
+      const inner = trimmed.replace(/^\|/, '').replace(/\|$/, '');
+      return inner.split('|').map((c) => c.trim());
+    };
+    const isSeparator = (row) => row && row.every((c) => /^[\-:\s]+$/.test(c));
+    const rows = lines.map(parseRow).filter(Boolean).filter((r) => !isSeparator(r));
+    if (rows.length === 0) {return 0;}
+    const colCount = Math.max(...rows.map((r) => r.length));
+    const colWidths = new Array(colCount).fill(0);
+    for (const row of rows) {
+      for (let i = 0; i < row.length; i++) {
+        const w = visibleLength(row[i] || '');
+        if (w > colWidths[i]) {colWidths[i] = w;}
+      }
+    }
+    // cli-table3: 总宽 = 列宽之和 + (列数+1) 个边框字符 + 列数*2 padding + 内部开销 buffer
+    // 实际渲染会因字符宽度舍入、列最小宽度等有几字符偏差,加 8 字符 buffer 兜底
+    const total = colWidths.reduce((a, b) => a + b, 0) + (colCount + 1) + colCount * 2 + 8;
+    return total;
+  }
+
+  // 把 markdown 表格转成 bullet list markdown,避免窄终端下框线错位
+  _tableToList(source) {
+    const lines = source.split('\n').filter((l) => l.trim());
+    const parseRow = (line) => {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('|')) {return null;}
+      const inner = trimmed.replace(/^\|/, '').replace(/\|$/, '');
+      return inner.split('|').map((c) => c.trim());
+    };
+    const isSeparator = (row) => row && row.every((c) => /^[\-:\s]+$/.test(c));
+    const rows = lines.map(parseRow).filter(Boolean).filter((r) => !isSeparator(r));
+    if (rows.length === 0) {return '';}
+    const headers = rows[0];
+    const dataRows = rows.slice(1);
+    const labelFor = (i) => headers[i] && headers[i].trim() ? headers[i].trim() : `列${i + 1}`;
+    if (dataRows.length === 0) {
+      // 只有表头时按"key: value"列表展示
+      return headers
+        .filter((h, i) => !(h && h.trim() === ''))
+        .map((h) => `- **${h.trim() || `列${headers.indexOf(h) + 1}`}**`)
+        .join('\n');
+    }
+    const blocks = [];
+    for (const row of dataRows) {
+      const items = [];
+      for (let i = 0; i < headers.length; i++) {
+        const value = (row[i] || '').trim();
+        if (!value) {continue;}
+        items.push(`  - **${labelFor(i)}**: ${value}`);
+      }
+      if (items.length > 0) {blocks.push(items.join('\n'));}
+    }
+    return blocks.join('\n\n');
+  }
+
+  // bullet list 渲染入口:对 _tableToList 的 markdown 走 marked.parse,统一极窄 + 异常兜底
+  _tableToListFallback(source) {
+    const listMarkdown = this._tableToList(source);
+    if (!listMarkdown) {return '';}
+    try {
+      return marked.parse(listMarkdown).replace(/\n$/, '');
+    } catch {
+      return listMarkdown;
+    }
+  }
+
+  // 压缩渲染超宽表格:保留框线视觉,列内文字按 visibleLength 预换行
+  // 极窄放不下最小列宽时退回 _tableToListFallback
+  _renderCompressedTable(source) {
+    const lines = source.split('\n').filter((l) => l.trim());
+    const parseRow = (line) => {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('|')) {return null;}
+      const inner = trimmed.replace(/^\|/, '').replace(/\|$/, '');
+      return inner.split('|').map((c) => c.trim());
+    };
+    const isSeparator = (row) => row && row.every((c) => /^[\-:\s]+$/.test(c));
+    const rows = lines.map(parseRow).filter(Boolean).filter((r) => !isSeparator(r));
+    if (rows.length === 0) {return '';}
+    const headers = rows[0];
+    const dataRows = rows.slice(1);
+    const colCount = Math.max(headers.length, ...dataRows.map((r) => r.length));
+
+    // 1. 每列自然宽度(visibleLength,含 ANSI 剥离 + CJK 双倍宽)
+    const naturalWidths = new Array(colCount).fill(0);
+    for (const row of [headers, ...dataRows]) {
+      for (let i = 0; i < colCount; i++) {
+        const w = visibleLength(row[i] || '');
+        if (w > naturalWidths[i]) {naturalWidths[i] = w;}
+      }
+    }
+
+    // 2. 边框 + padding 开销;极窄兜底:连最小列宽都放不下就退回 list
+    // MIN_COL_WIDTH=8 保证每列至少能放 4 个 CJK 汉字(colWidth 减 4 = 4 字符可见宽)
+    const MIN_COL_WIDTH = 8;
+    const borderOverhead = colCount + 1 + colCount * 2;
+    if (this.width < colCount * MIN_COL_WIDTH + borderOverhead) {
+      return this._tableToListFallback(source);
+    }
+
+    // 3. 按自然宽度比例压缩到 usableWidth,保证每列至少 MIN_COL_WIDTH
+    const usableWidth = Math.max(this.width - borderOverhead, colCount * MIN_COL_WIDTH);
+    const totalNatural = naturalWidths.reduce((a, b) => a + b, 0) || 1;
+    const targetWidths = new Array(colCount).fill(0);
+    let remaining = usableWidth;
+    for (let i = 0; i < colCount; i++) {
+      const raw = Math.floor(usableWidth * naturalWidths[i] / totalNatural);
+      const target = Math.max(MIN_COL_WIDTH, Math.min(raw, remaining - (colCount - 1 - i) * MIN_COL_WIDTH));
+      targetWidths[i] = target;
+      remaining -= target;
+    }
+    // 取整差补给最宽列
+    if (remaining > 0) {
+      let widestIdx = 0;
+      for (let i = 1; i < colCount; i++) {
+        if (naturalWidths[i] > naturalWidths[widestIdx]) {widestIdx = i;}
+      }
+      targetWidths[widestIdx] += remaining;
+    }
+
+    // 4. 预换行:marked.parseInline 拿带 ANSI 字符串,再按 visibleLength 切多行
+    // cli-table3 的 cell 不接受数组(虽然不报错但显示为空),必须传 \n 分隔的字符串
+    // cli-table3 实际 cell 可用宽 = colWidth - 4(padding 2 + 内部 overhead 2)
+    const CELL_OVERHEAD = 4;
+    const wrapCell = (rawText, width) => {
+      if (width <= 0) {return '';}
+      const ansiText = marked.parseInline(rawText || '');
+      const inner = Math.max(1, width - CELL_OVERHEAD);
+      return this._wrapByVisibleLength(ansiText, inner).join('\n');
+    };
+
+    // 5. 构造 cli-table3,关闭它自己的 wordWrap(我们已预换行)
+    const table = new Table({
+      head: headers.map((h, i) => wrapCell(h, targetWidths[i])),
+      colWidths: targetWidths,
+      wordWrap: false,
+      wrapOnWordBoundary: false,
+      truncate: '…',
+      style: { 'padding-left': 1, 'padding-right': 1, head: [], border: [] },
+    });
+    for (const row of dataRows) {
+      const padded = new Array(colCount);
+      for (let i = 0; i < colCount; i++) {padded[i] = wrapCell(row[i] || '', targetWidths[i]);}
+      table.push(padded);
+    }
+
+    // 6. 主题替换(与 markedTerminal 的 o.table 回调一致的两段替换)
+    return this._applyTableTheme(table.toString());
+  }
+
+  // 把带 ANSI 的字符串按 visibleLength 切成多行,切行时延续色码避免半截着色
+  // 处理 CJK 双倍宽 + emoji surrogate pair 不拆开
+  _wrapByVisibleLength(ansiText, maxWidth) {
+    if (!ansiText || maxWidth <= 0) {return [ansiText || ''];}
+    // 先按显式 \n 切(用户手动换行优先),再对每段按可见宽度切
+    const segments = ansiText.split('\n');
+    const out = [];
+    // 当前累计的"激活色码",切行时在新行首重发,避免半截着色
+    let activeCodes = '';
+
+    for (let segIdx = 0; segIdx < segments.length; segIdx++) {
+      const segment = segments[segIdx];
+      if (!segment) {
+        out.push('');
+        continue;
+      }
+
+      let line = '';
+      let lineWidth = 0;
+      let i = 0;
+      while (i < segment.length) {
+        // 1. 完整 ANSI 转义序列:不占显示宽度,记录到 activeCodes
+        if (segment[i] === '\x1b') {
+          const m = segment.slice(i).match(/^\x1b\[[0-9;]*[mHKhlA-Za-z=]|\x1b\?[0-9;]*[hl]|\x1b\][^\x07]*\x07|\x1b\\|\x1b\[\?1049[hl]|\x1b\[38;2;\d+;\d+;\d+m|\x1b\[48;2;\d+;\d+;\d+m/);
+          if (m) {
+            const code = m[0];
+            if (code.endsWith('m')) {activeCodes += code;}
+            line += code;
+            i += code.length;
+            continue;
+          }
+        }
+
+        // 2. 计算当前字符的显示宽度
+        let charLen = 1;
+        let charStr = segment[i];
+        // surrogate pair:高代理 + 低代理 视为单字符,宽度按可见长度(多数 emoji=2)
+        if (i + 1 < segment.length && charStr.charCodeAt(0) >= 0xD800 && charStr.charCodeAt(0) <= 0xDBFF) {
+          charStr = segment.slice(i, i + 2);
+          charLen = 2;
+        }
+        const visible = visibleLength(charStr);
+
+        // 3. 当前字符放得下就累积
+        if (lineWidth + visible <= maxWidth) {
+          line += charStr;
+          lineWidth += visible;
+          i += charLen;
+          continue;
+        }
+
+        // 4. 放不下就切行:新行首补 activeCodes 延续色码
+        out.push(line);
+        line = activeCodes;
+        lineWidth = 0;
+
+        // 5. 边界保护:单字符宽度 > maxWidth,强制放入新行(交给 cli-table3 truncate 兜底)
+        if (visible > maxWidth) {
+          line += charStr;
+          i += charLen;
+          // 下一行再继续
+          continue;
+        }
+      }
+
+      if (line.length > 0 || segIdx < segments.length - 1) {
+        out.push(line);
+      }
+    }
+
+    return out.length > 0 ? out : [''];
+  }
+
+  // 复用 markedTerminal o.table 回调的主题替换:灰边框→文本色,红表头→标题色
+  _applyTableTheme(rawText) {
+    const t = this.theme;
+    const hexToFgAnsi = (hex) => {
+      const r = parseInt(hex.slice(1, 3), 16);
+      const g = parseInt(hex.slice(3, 5), 16);
+      const b = parseInt(hex.slice(5, 7), 16);
+      return `\x1b[38;2;${r};${g};${b}m`;
+    };
+    return rawText
+      .replace(/\x1b\[90m/g, '\x1b[1m' + hexToFgAnsi(t.colors.text))
+      .replace(/\x1b\[31m/g, '\x1b[1m' + hexToFgAnsi(t.colors.markdownHeading));
   }
 
   // 刷新缓冲区（处理剩余内容）

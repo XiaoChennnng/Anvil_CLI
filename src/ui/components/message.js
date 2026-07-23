@@ -6,16 +6,28 @@ const MarkdownRenderer = require('../markdown');
 const ToolRenderer = require('../tool-renderer');
 
 class MessageRenderer {
-  constructor() {
+  constructor(width) {
     this.theme = getTheme();
-    this.markdown = new MarkdownRenderer();
+    this.markdown = new MarkdownRenderer(width);
     this.toolRenderer = new ToolRenderer(this.theme);
+  }
+
+  // TUI 主消息区实际宽度变化时调用,让 markdown 表格宽度限制跟随
+  setContentWidth(width) {
+    if (typeof width === 'number' && width > 0) {
+      this.markdown.width = width;
+    }
   }
 
   renderMessage(content, isUser, width, info = []) {
     const t = this.theme;
     const borderColor = isUser ? t.colors.secondary : t.colors.primary;
     const marker = chalk.hex(borderColor)('●');
+
+    // 同步主消息区宽度给 markdown 实例,保证表格宽度判断用的是 TUI 实际可用宽度
+    if (typeof width === 'number' && width > 0) {
+      this.setContentWidth(width);
+    }
 
     // 提取 <think> 思考块（部分模型如 MiniMax 会嵌入到文本中）渲染为灰色斜体
     const thinkLines = [];

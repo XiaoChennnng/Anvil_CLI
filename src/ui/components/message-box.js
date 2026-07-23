@@ -151,6 +151,8 @@ class MessageBox {
   _renderContentText(text) {
     if (!text || text.trim() === '') {return;}
     const t = this.theme;
+    // 流式渲染时同步主消息区宽度给 markdown,确保超宽表格能正确降级
+    this.renderer.setContentWidth(this.layout.messageWidth - 2);
     const rendered = this.renderer.markdown.write(text);
     if (!rendered) {return;}
 
@@ -188,6 +190,8 @@ class MessageBox {
   flushContentBuffer() {
     const t = this.theme;
 
+    // 同步主消息区宽度,保证 flush 时表格宽度判断用的是 TUI 实际宽度
+    this.renderer.setContentWidth(this.layout.messageWidth - 2);
     const remaining = this.renderer.markdown.flush();
     if (remaining) {
       const lines = remaining.split('\n');
@@ -344,6 +348,8 @@ class MessageBox {
   finishResponse(model) {
     const t = this.theme;
 
+    // 同步主消息区宽度,保证 finishResponse 时表格宽度判断用的是 TUI 实际宽度
+    this.renderer.setContentWidth(this.layout.messageWidth - 2);
     // flush markdown 缓冲（AI 自己决定响应结束语，代码不硬编码）
     const remaining = this.renderer.markdown.flush();
     if (remaining) {

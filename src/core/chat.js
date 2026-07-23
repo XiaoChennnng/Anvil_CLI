@@ -74,6 +74,8 @@ class ChatEngine extends EventEmitter {
     this._planApproved = false;
     this._pendingPlan = null;
     this._pendingQuestionResolve = null;
+    this._pendingMemoryRewrite = null; // Memory 审阅检测到需重构时暂存，下轮通知主 AI
+    this._memoryReviewDone = false; // 每轮只审阅一次
     // 统一管理主 Agent + 子 Agent 提问,避免单值 resolve 被覆盖
     this.teamQuestionQueue = new TeamQuestionQueue();
     this.teamManager = null;
@@ -175,6 +177,7 @@ class ChatEngine extends EventEmitter {
 
     this._aborted = false;
     this.isProcessing = true;
+    this._memoryReviewDone = false;
 
     try {
       if (this._isTodoClearRequest(input)) {
@@ -259,6 +262,19 @@ class ChatEngine extends EventEmitter {
       this._currentTask = input;
       this._awaitingPlanApproval = false;
 
+      // 检查上一轮审阅留下的 Memory.md 重构建议
+      // 追加到用户最后一条消息末尾，不产生独立消息污染 TUI
+      if (this._pendingMemoryRewrite) {
+        const rewrite = this._pendingMemoryRewrite;
+        this._pendingMemoryRewrite = null;
+        const lastUserIdx = this.messages.length - 1;
+        if (lastUserIdx >= 0 && this.messages[lastUserIdx]?.role === 'user') {
+          this.messages[lastUserIdx].content +=
+            `\n\n---\n[Memory 系统通知] 记忆审阅分析发现 .anvil/Memory.md 需要整体重构。请在回复完用户当前问题后，主动询问用户是否要执行重构。\n原因: ${rewrite.reason}\n用户同意后请调用 memory_write 工具执行重构（工具会自动请求用户确认）。如果用户拒绝或说暂时不用，就不要再提出。`;
+          this.logger?.info('Memory 重构建议已追加到本轮用户消息中');
+        }
+      }
+
       const result = await this._agentLoop(input);
 
       if (result.plan) {
@@ -285,10 +301,6 @@ class ChatEngine extends EventEmitter {
       }
 
       // 后台压缩已移除——统一走语义压缩路径
-
-      // 每轮结束：AI 额外回顾本轮对话，检查是否有要写入记忆的内容
-      this._totalRoundsProcessed++;
-      await this._runEndOfRoundMemoryReview();
 
       // 任务指纹提高缓存复用率
       const taskFingerprint = generateTaskFingerprint(input);
@@ -397,6 +409,12 @@ class ChatEngine extends EventEmitter {
 
     // 没有工具调用直接返回(闲聊/问答/纯文字回复都不弹窗)
     if (!result.hadToolCalls) {
+      // 简单对话也得跑审阅：检查偏好或检测重构需求（不注入，下轮带出来）
+      this._totalRoundsProcessed++;
+      if (!this._memoryReviewDone) {
+        this._memoryReviewDone = true;
+        await this._runEndOfRoundMemoryReview();
+      }
       return {
         thinking: fullThinking,
         content: fullContent,
@@ -571,6 +589,30 @@ class ChatEngine extends EventEmitter {
         lastUsage = recheckResult.usage || lastUsage;
       }
 
+    }
+
+    // ─── 主 Agent 输出总结前：跑记忆审阅 ───
+    // 若检测到重构需求，注入到对话让 AI 当前轮就询问用户
+    this._totalRoundsProcessed++;
+    if (!this._memoryReviewDone) {
+      this._memoryReviewDone = true;
+      await this._runEndOfRoundMemoryReview();
+      if (this._pendingMemoryRewrite) {
+        const rewrite = this._pendingMemoryRewrite;
+        this._pendingMemoryRewrite = null;
+        this.messages.push({
+          role: 'user',
+          content: `[Memory 系统通知] 记忆审阅分析发现 .anvil/Memory.md 需要整体重构。请先完成当前工作，然后主动询问用户是否要执行重构。\n原因: ${rewrite.reason}\n用户同意后请调用 memory_write 工具执行重构。如果用户拒绝就不要再提出。`,
+        });
+        this.logger?.info('Memory 重构建议已注入，AI 将在总结中询问用户');
+        const finalResult = await this._sendAndProcess();
+        return {
+          thinking: fullThinking + (finalResult.thinking || ''),
+          content: fullContent + (finalResult.content || ''),
+          toolCalls: finalResult.toolCalls || [],
+          usage: finalResult.usage || lastUsage,
+        };
+      }
     }
 
     return {
@@ -1030,29 +1072,85 @@ class ChatEngine extends EventEmitter {
   }
 
   // 每轮结束后 AI 额外回顾本轮对话，检查是否有要写入记忆的内容
+  // 独立 LLM 调用:不污染主 messages,不影响主对话流和 prompt cache
   async _runEndOfRoundMemoryReview() {
-    if (!this.aiClient) return;
-    // 跳过空白对话（无实质内容）
-    const recentContent = this.messages.slice(-6).filter(m =>
-      m.role === 'user' || (m.role === 'assistant' && m.tool_calls?.length)
+    if (!this.aiClient) {return;}
+
+    // 艹！必须把 UI 事件屏蔽掉，不然这货流式输出的内容全泄漏到 TUI 上去了
+    const prevSuppress = this._suppressUI;
+    this._suppressUI = true;
+
+    // 跳过空白对话(无实质内容)
+    const recentContent = this.messages.slice(-6).filter((m) =>
+      m.role === 'user' || (m.role === 'assistant' && m.tool_calls?.length),
     );
-    if (recentContent.length < 2) return;
+    if (recentContent.length < 2) {return;}
 
     this.emit('status', '[Memory] AI正在审阅本轮对话，检查是否有需要长期记录的内容...');
 
-    this.messages.push({
-      role: 'user',
-      content: '[Memory 检查点] 快速回顾本轮对话：用户是否表达了需要长期记住的偏好、规则或约定？如果有，调用 memory_append 写入。没有就回复"无"。',
-      _memoryCheckReminder: true,
-    });
+    // 检查本轮 AI 是否已主动调用 memory_append（用户说"记住X"已当场写入）
+    // 若已主动添加，审阅只需检查重构需求，跳过重复的偏好扫描
+    const alreadyAppended = this.messages.slice(-10).some(m =>
+      m.role === 'assistant' && m.tool_calls?.some(tc => tc.function?.name === 'memory_append')
+    );
 
-    this._suppressUI = true;
+    // 构造临时 messages:只读最近几轮 + 审阅提示,不写回主 messages
+    let reviewHint;
+    if (alreadyAppended) {
+      reviewHint = '[Memory 检查点] 本轮用户已主动添加记忆条目，无需再检查偏好。仅检查记忆文件结构是否需要整体重构?→ 调 memory_write。不需要就回复"无"。';
+    } else {
+      reviewHint = '[Memory 检查点] 快速回顾上面这段对话:\n1) 用户是否表达了需要长期记住的偏好、规则或约定?→ 调 memory_append 写入\n2) 现有记忆条目是否大量冲突、过期或结构混乱需要整体重构?→ 调 memory_write 重构（系统会暂存建议，下轮主动询问用户确认执行）\n都没有就回复"无"。';
+    }
+
+    const reviewMessages = [
+      ...recentContent.map((m) => ({ role: m.role, content: m.content || '' })),
+      { role: 'user', content: reviewHint },
+    ];
+
     try {
-      await this._sendAndProcess();
+      // 单独调一次 LLM,不走 _sendAndProcess,主 chat 完全不感知这次调用
+      const reviewResult = await this.aiClient.chat(reviewMessages);
+      // 分类处理:memory_append 自动执行(增量安全);memory_write 捕获意图但不直接执行
+      // (requiresConfirm 工具不能绕过确认,避免 AI 误判清空用户记忆)
+      const toolCalls = reviewResult.toolCalls || [];
+      for (const tc of toolCalls) {
+        let args = {};
+        try { args = JSON.parse(tc.function.arguments || '{}'); } catch { /* skip malformed */ }
+
+        if (tc.function?.name === 'memory_append') {
+          if (!args.section || !args.entry) {continue;}
+          try {
+            await this.toolRegistry.execute('memory_append', {
+              section: args.section,
+              entry: args.entry,
+            }, {
+              projectDir: this.contextManager?.projectDir,
+              config: this.config,
+              logger: this.logger,
+            });
+          } catch (err) {
+            this.logger?.warn('Memory 写入失败', err.message);
+          }
+        } else if (tc.function?.name === 'memory_write') {
+          // 重构 Memory.md:不绕过 requiresConfirm
+          // 改为暂存到 ChatEngine 状态，下轮用户输入时主 AI 主动询问用户
+          if (!args.content) {continue;}
+          this._pendingMemoryRewrite = {
+            reason: 'AI 审阅判断当前 Memory.md 需要整体重构',
+            preview: String(args.content).slice(0, 200),
+          };
+          this.emit('memory_rewrite_suggested', {
+            reason: this._pendingMemoryRewrite.reason,
+            preview: this._pendingMemoryRewrite.preview,
+          });
+          this.emit('status', '[Memory] AI 建议重构 Memory.md，将在您下一次提问时主动询问是否执行');
+        }
+      }
     } catch (err) {
       this.logger?.warn('Memory 回顾失败', err.message);
+    } finally {
+      this._suppressUI = prevSuppress;
     }
-    this._suppressUI = false;
     this.emit('status', '[Memory] 审阅完成');
   }
   /**
@@ -1377,18 +1475,6 @@ class ChatEngine extends EventEmitter {
     }
   }
 
-  async updatePlanInFile(additionalContent) {
-    if (!this._planModeFilePath) {return;}
-    const fsp = require('fs/promises');
-    try {
-      const current = await fsp.readFile(this._planModeFilePath, 'utf8');
-      const divider = `\n---\n\n_更新于 ${new Date().toLocaleString('zh-CN')}_\n\n`;
-      await fsp.writeFile(this._planModeFilePath, current + divider + additionalContent, 'utf8');
-    } catch (err) {
-      this.logger?.warn('更新 Anvil.md 失败', err.message);
-    }
-  }
-
   resolveQuestion(answers) {
     // 优先解析 queue(主+子 Agent 共享),queue 无 current 时兜底旧单值 resolve
     if (this.teamQuestionQueue && this.teamQuestionQueue.current) {
@@ -1418,7 +1504,6 @@ class ChatEngine extends EventEmitter {
 
     this.messages.push({ role: 'user', content: '计划已批准，请按计划执行。' });
     this.emit('status', '[完成]计划已批准，正在执行...');
-    await this.updatePlanInFile('\n\n## [完成]计划已批准，正在执行...\n');
 
     const result = await this._agentLoop(this._currentTask);
     return this._finishPlanResponse(result);
@@ -1435,7 +1520,6 @@ class ChatEngine extends EventEmitter {
       : '计划被拒绝，请提供替代方案。';
     this.messages.push({ role: 'user', content: msg });
     this.emit('status', '[重做]计划被拒绝，正在重新规划...');
-    await this.updatePlanInFile(`\n\n## [失败]计划被拒绝\n\n**反馈**: ${feedback || '无'}\n\n正在重新规划...\n`);
 
     const result = await this._agentLoop(this._currentTask);
     return this._finishPlanResponse(result);
@@ -1449,7 +1533,6 @@ class ChatEngine extends EventEmitter {
 
     this.messages.push({ role: 'user', content: `对计划的修改建议：${feedback}` });
     this.emit('status', '[状态] 收到计划反馈，正在调整...');
-    await this.updatePlanInFile(`\n\n## 用户反馈\n\n${feedback}\n\n**正在调整计划...**\n`);
 
     const result = await this._agentLoop(this._currentTask);
     return this._finishPlanResponse(result);
