@@ -202,8 +202,8 @@ class AnvilAIClient extends EventEmitter {
           throw new Error(`无法连接到 API 服务器 (${providerConfig.baseURL})，请检查网络`);
         }
 
-        if ((err.status >= 500 || err.code === 'ETIMEDOUT' || err.code === 'UND_ERR_HEADERS_TIMEOUT') && attempt < retryCount) {
-          this.emit('status', `API 错误，第 ${attempt + 1} 次重试...`);
+        if ((err.status >= 500 || err.code === 'ETIMEDOUT' || err.code === 'UND_ERR_HEADERS_TIMEOUT' || err.code === 'STREAM_TERMINATED') && attempt < retryCount) {
+          this.emit('status', `API 连接中断，第 ${attempt + 1} 次重试...`);
           await new Promise((resolve) => setTimeout(resolve, (attempt + 1) * 1000));
           continue;
         }
@@ -283,8 +283,8 @@ class AnvilAIClient extends EventEmitter {
           throw new Error(`无法连接到 API 服务器 (${providerConfig.baseURL})，请检查网络`);
         }
 
-        if ((err.status >= 500 || err.code === 'ETIMEDOUT') && attempt < retryCount) {
-          this.emit('status', `API 错误，第 ${attempt + 1} 次重试...`);
+        if ((err.status >= 500 || err.code === 'ETIMEDOUT' || err.code === 'STREAM_TERMINATED') && attempt < retryCount) {
+          this.emit('status', `API 连接中断，第 ${attempt + 1} 次重试...`);
           await new Promise((resolve) => setTimeout(resolve, (attempt + 1) * 1000));
           continue;
         }
@@ -449,6 +449,10 @@ class AnvilAIClient extends EventEmitter {
         }
         throw new Error(`AI 响应超时：超过 ${STREAM_IDLE_TIMEOUT / 1000} 秒未收到数据`);
       }
+      // Node.js undici 连接被服务端终止时抛出 TypeError: terminated，标记为重试
+      if (err.name === 'TypeError' && /terminated/i.test(err.message)) {
+        throw Object.assign(err, { code: 'STREAM_TERMINATED' });
+      }
       throw err;
     }
     clearInterval(idleTimer);
@@ -612,6 +616,10 @@ class AnvilAIClient extends EventEmitter {
           throw new Error('请求已被中断');
         }
         throw new Error(`AI 响应超时：超过 ${STREAM_IDLE_TIMEOUT / 1000} 秒未收到数据`);
+      }
+      // 连接被服务端终止，标记为重试
+      if (err.name === 'TypeError' && /terminated/i.test(err.message)) {
+        throw Object.assign(err, { code: 'STREAM_TERMINATED' });
       }
       throw err;
     }
