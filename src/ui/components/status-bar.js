@@ -1,9 +1,24 @@
 'use strict';
 
 const chalk = require('chalk');
+const fs = require('fs');
+const path = require('path');
 const { getTheme } = require('../theme');
 const { calculateCost } = require('../tokens');
 const { visibleLength } = require('../ansi');
+
+// 从项目自身 JSON 文件加载思考提示语（用户可直接编辑该 JSON）
+function _loadThinkingMessages() {
+  const jsonPath = path.join(__dirname, 'thinking-messages.json');
+  try {
+    const raw = fs.readFileSync(jsonPath, 'utf8');
+    const msgs = JSON.parse(raw);
+    if (Array.isArray(msgs) && msgs.length > 0) return msgs;
+  } catch {}
+  return ['Anvil 正在思考'];
+}
+
+const _thinkingMessages = _loadThinkingMessages();
 
 class StatusBar {
   constructor(layout) {
@@ -23,6 +38,7 @@ class StatusBar {
     this.hasPendingContext = false;
     this.isThinking = false;
     this.thinkingStartTime = null;
+    this.thinkingMessage = ''; // 当前展示的趣味思考提示语
 
     // 侧边栏信息（保留数据，但不显示在状态栏中）
     this.todoStats = { total: 0, completed: 0 };
@@ -87,9 +103,49 @@ class StatusBar {
     this.isThinking = thinking;
     if (thinking) {
       this.thinkingStartTime = Date.now();
+      this._pickRandomMessage();
     } else {
       this.thinkingStartTime = null;
+      this.thinkingMessage = '';
     }
+  }
+
+  // 随机换一条 thinking 提示语（timer 或工具调用时触发）
+  updateThinkingMessage(toolName) {
+    if (!this.isThinking) return;
+    if (toolName) {
+      this.thinkingMessage = this._pickMessageForTool(toolName);
+    } else {
+      this._pickRandomMessage();
+    }
+  }
+
+  _pickRandomMessage() {
+    this.thinkingMessage = _thinkingMessages[Math.floor(Math.random() * _thinkingMessages.length)];
+  }
+
+  // 根据工具名选一条相关提示语
+  _pickMessageForTool(toolName) {
+    const toolMap = {
+      read_file: ['Anvil 正在读代码', 'Anvil 正在翻文档', 'Anvil 正在刨代码'],
+      view: ['Anvil 正在读代码', 'Anvil 正在翻文档'],
+      write_file: ['Anvil 正在码字', 'Anvil 正在搬砖', 'Anvil 正在砌墙'],
+      edit_file: ['Anvil 正在改 bug', 'Anvil 正在补锅', 'Anvil 正在填坑'],
+      delete_file: ['Anvil 正在拆东墙', 'Anvil 正在删注释'],
+      create_directory: ['Anvil 正在砌墙', 'Anvil 正在糊水泥'],
+      search_in_files: ['Anvil 正在捉虫', 'Anvil 正在刨代码', 'Anvil 正在放虫'],
+      glob_files: ['Anvil 正在找插头', 'Anvil 正在翻箱倒柜'],
+      list_directory: ['Anvil 正在翻箱倒柜', 'Anvil 正在看风景'],
+      execute_command: ['Anvil 正在敲键盘', 'Anvil 正在搬砖', 'Anvil 正在焊电路'],
+      bash: ['Anvil 正在敲键盘', 'Anvil 正在拧螺丝'],
+      get_document_symbols: ['Anvil 正在画架构图', 'Anvil 正在码字'],
+      find_definition: ['Anvil 正在顿悟', 'Anvil 正在思考人生'],
+      find_references: ['Anvil 正在翻文档', 'Anvil 正在薅头发'],
+      analyze_dependencies: ['Anvil 正在画架构图', 'Anvil 正在拆东墙'],
+      format_code: ['Anvil 正在优化算法', 'Anvil 正在重构'],
+    };
+    const candidates = toolMap[toolName] || _thinkingMessages;
+    return candidates[Math.floor(Math.random() * candidates.length)];
   }
 
   updateTokenUsage(usage) {
@@ -188,7 +244,8 @@ class StatusBar {
     let thinkingWidget = '';
     if (this.isThinking) {
       const elapsed = this._getElapsedTime();
-      thinkingWidget = chalk.bgHex(t.colors.warning).hex(t.colors.background).bold(` thinking ${elapsed} `);
+      const msg = this.thinkingMessage || 'Anvil 正在思考';
+      thinkingWidget = chalk.bgHex(t.colors.warning).hex(t.colors.background).bold(` ${msg} ${elapsed} `);
     }
 
     // ─── Plan Mode Indicator ───

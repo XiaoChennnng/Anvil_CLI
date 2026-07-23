@@ -41,8 +41,8 @@ class MessageRenderer {
     return result;
   }
 
-  renderToolCall(toolCall, width, nested = false) {
-    return this.toolRenderer.renderToolCall(toolCall, width, nested);
+  renderToolCall(toolCall, width, nested = false, status = 'pending', blinkVisible = true) {
+    return this.toolRenderer.renderToolCall(toolCall, width, nested, true, status, blinkVisible);
   }
 
   renderToolResponse(name, result, toolCall, width, maxLines = 10) {

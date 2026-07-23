@@ -70,9 +70,6 @@ class ChatEngine extends EventEmitter {
     this._planModeFilePath = null;
     this._awaitingPlanApproval = false;
 
-    // Memory 定期总结计数器：每 N 轮注入一次 reminder，让 AI 主动提取偏好
-    this._memoryCheckInterval = 5;
-    this._roundSinceMemoryCheck = 0;
     this._totalRoundsProcessed = 0;
     this._planApproved = false;
     this._pendingPlan = null;
@@ -220,22 +217,23 @@ class ChatEngine extends EventEmitter {
         const compLevel = this.contextManager.getCompressionLevel(this.messages, currentTokens);
 
         if (compLevel.needsCompression) {
-	          this.emit('status', `[警告]${compLevel.label} — 使用率 ${Math.round(compLevel.ratio * 100)}%`);
+          this.emit('status', `[警告]${compLevel.label} — 使用率 ${Math.round(compLevel.ratio * 100)}%`);
 
-	          // 压缩上下文（实际执行压缩的方法是 compactContext）
-	          const compressResult = this.contextManager.compactContext(this.messages);
-	          this.messages = compressResult.messages;
-	          const stats = compressResult.stats;
+          // 语义压缩后停止，不让 AI 接着干活
+          const compressResult = await this.compactContext({ level: 'auto' });
+          this.messages = compressResult.messages;
 
-          if (stats.compressed) {
+          if (compressResult.stats?.compressed) {
             this.emit('status',
-              `[完成]压缩完成 (L${stats.level}): ${stats.beforeTokens.toLocaleString()} → ${stats.afterTokens.toLocaleString()} tokens (节省 ${stats.savedPercent}%)`
+              `[完成]语义压缩: ${compressResult.stats.beforeTokens.toLocaleString()} → ${compressResult.stats.afterTokens.toLocaleString()} tokens (节省 ${compressResult.stats.savedPercent}%, 预算 ${compressResult.stats.budget?.toLocaleString() || '?'})`
             );
-
             if (this.logger) {
-              this.logger.info('上下文压缩', stats);
+              this.logger.info('预检查语义压缩完成，停止进入 agent loop', compressResult.stats);
             }
           }
+
+          this.isProcessing = false;
+          return { content: '', toolCalls: [], usage: null, compressed: true };
         } else if (compLevel.level >= 1) {
           this.emit('status', `[提示]${compLevel.label} (${Math.round(compLevel.ratio * 100)}%)`);
         }
@@ -269,20 +267,11 @@ class ChatEngine extends EventEmitter {
         });
       }
 
-      // 主动后台压缩(非阻塞,失败不影响主流程)
-      if (this.contextManager && typeof this.contextManager.proactiveCompress === 'function') {
-        try {
-          this.messages = this.contextManager.proactiveCompress(this.messages);
-        } catch {}
-      }
+      // 后台压缩已移除——统一走语义压缩路径
 
-      // 每 N 轮注入一次 reminder,让 AI 主动提取偏好
-      this._roundSinceMemoryCheck++;
+      // 每轮结束：AI 额外回顾本轮对话，检查是否有要写入记忆的内容
       this._totalRoundsProcessed++;
-      if (this._roundSinceMemoryCheck >= this._memoryCheckInterval) {
-        this._injectMemoryCheckReminder();
-        this._roundSinceMemoryCheck = 0;
-      }
+      await this._runEndOfRoundMemoryReview();
 
       // 任务指纹提高缓存复用率
       const taskFingerprint = generateTaskFingerprint(input);
@@ -328,6 +317,17 @@ class ChatEngine extends EventEmitter {
     fullContent += result.content || '';
     fullThinking += result.thinking || '';
     lastUsage = result.usage;
+
+    // compact_context 工具调用后立即返回，不让 AI 在压缩后的混乱上下文中继续
+    if (result.toolCalls?.some(tc => tc.function?.name === 'compact_context')) {
+      this.logger?.info('Agent 循环检测到 compact_context，停止继续');
+      return {
+        thinking: fullThinking,
+        content: fullContent,
+        toolCalls: [],
+        usage: lastUsage,
+      };
+    }
 
     // Plan Mode:AI 调用 request_plan_approval → 暂停等用户确认
     if (this._planMode && this._awaitingPlanApproval) {
@@ -412,26 +412,16 @@ class ChatEngine extends EventEmitter {
         lastSoftWarning = elapsed;
       }
 
-      // 上下文使用率检查:第 1、4、7... 轮触发,作为低成本周期性监控
+      // 上下文使用率检查:语义压缩后停止循环
       if (this.contextManager && (iterationCount % 3 === 1)) {
         try {
           const compLevel = this.contextManager.getCompressionLevel(this.messages);
           if (compLevel.needsCompression || compLevel.ratio > 0.85) {
-            const compressResult = await this.compactContext({ level: 'auto', keep: ['recent', 'decisions'] });
+            const compressResult = await this.compactContext({ level: 'auto' });
             if (compressResult.stats?.compressed) {
-              if (isTaskLost(compressResult.messages, taskFingerprint)) {
-                compressResult.messages.push({
-                  role: 'system',
-                  content: `[长期任务提醒] 你的原始任务是：${originalTask}。已进行 ${iterationCount} 次迭代，请继续完成此任务。`,
-                  _taskReminder: true,
-                });
-              }
               this.messages = compressResult.messages;
-              this.logger?.info('Agent 循环自动压缩', {
-                beforeTokens: compressResult.stats.beforeTokens,
-                afterTokens: compressResult.stats.afterTokens,
-                savedPercent: compressResult.stats.savedPercent,
-              });
+              this.logger?.info('Agent 循环语义压缩完成，停止循环', compressResult.stats);
+              break;
             }
           }
         } catch (err) {
@@ -471,6 +461,18 @@ class ChatEngine extends EventEmitter {
       fullThinking += checkResult.thinking || '';
       lastUsage = checkResult.usage || lastUsage;
 
+      // 关键修复:while 循环中触发了 plan approval → 立即返回计划
+      if (this._awaitingPlanApproval) {
+        this._suppressUI = false;
+        return {
+          thinking: fullThinking,
+          content: fullContent,
+          toolCalls: [],
+          usage: lastUsage,
+          plan: this._pendingPlan,
+        };
+      }
+
       this.messages.push({
         role: 'assistant',
         content: checkResult.content || '',
@@ -508,6 +510,17 @@ class ChatEngine extends EventEmitter {
       fullContent += result.content || '';
       fullThinking += result.thinking || '';
       lastUsage = result.usage || lastUsage;
+
+      // compact_context 在 while 循环中被调用 → 立即返回
+      if (result.toolCalls?.some(tc => tc.function?.name === 'compact_context')) {
+        this.logger?.info('while 循环检测到 compact_context，停止继续');
+        return {
+          thinking: fullThinking,
+          content: fullContent,
+          toolCalls: [],
+          usage: lastUsage,
+        };
+      }
 
       // "继续"后无工具调用:连续多次卡住才停(给 AI 多次机会)
       if (!result.hadToolCalls) {
@@ -775,6 +788,12 @@ class ChatEngine extends EventEmitter {
           break;
         }
 
+        // compact_context 执行后立即停止 AI 继续（压缩后的上下文已不连贯，AI 继续会生成垃圾）
+        if (response.toolCalls?.some(tc => tc.function?.name === 'compact_context')) {
+          this.logger?.info('compact_context 执行完成，停止 AI 继续');
+          break;
+        }
+
         continue;
       }
 
@@ -823,7 +842,7 @@ class ChatEngine extends EventEmitter {
       return { messages: this.messages, stats: { compressed: false, error: '上下文管理器未初始化' } };
     }
 
-    // 触发动画：从当前进度 → 100%（覆盖普通压缩和语义压缩两条路径）
+    // 触发动画：从当前进度 → 100%
     const beforeStatus = this.contextManager?.getStatusReport(this.messages);
     const beforePercent = beforeStatus?.usagePercent || 0;
     this.emit('compression_animation', {
@@ -832,40 +851,26 @@ class ChatEngine extends EventEmitter {
       toPercent: 100,
     });
 
-    // 语义预算压缩：硬性 1w-5w tokens 预算，无条件触发
-    if (options.level === 'semantic') {
-      const result = await this._semanticBudgetCompress(options);
-      this._emitCompressionAnimationEnd(result, beforePercent);
-      return result;
-    }
+    // 所有级别都走语义预算压缩，按级别映射不同预算
+    // light=50k (保留更多细节), medium=30k, heavy=15k, critical=10k, auto=30k
+    const BUDGET_MAP = {
+      light: 50000,
+      medium: 30000,
+      heavy: 15000,
+      critical: 10000,
+      auto: 30000,
+    };
+    const budget = options.budgetTokens || BUDGET_MAP[options.level] || 30000;
 
-    // 先执行实际压缩（基于当前消息）
-    const result = this.contextManager.compactContext(this.messages, options);
-    this.messages = result.messages;
-
-    // 语义摘要：在压缩后生成（从压缩前的消息生成摘要，加入压缩后的消息）
-    // 这样摘要本身不参与压缩计算，避免无效开销
-    if (!skipSemanticSummary && result.stats.compressed) {
-      const budget = this._calculateSummaryBudget();
-      const semanticSummary = await this._generateSemanticSummary(budget);
-      if (semanticSummary) {
-        // 找到压缩后 system 消息的位置，在那之后插入语义摘要
-        const lastSystemIdx = this.messages.findLastIndex((m) => m.role === 'system');
-        const insertIdx = lastSystemIdx >= 0 ? lastSystemIdx + 1 : 0;
-        this.messages.splice(insertIdx, 0, {
-          role: 'system',
-          content: `[AI 语义摘要]\n${semanticSummary}\n[/AI 语义摘要]`,
-          _semanticSummary: true,
-          _compressedAt: new Date().toISOString(),
-        });
-      }
-    }
-
+    const result = await this._semanticBudgetCompress({
+      ...options,
+      level: 'semantic',
+      budgetTokens: budget,
+    });
     this._emitCompressionAnimationEnd(result, beforePercent);
     return result;
   }
 
-  // 压缩结束后触发动画收尾（100% → 实际压缩后进度）
   _emitCompressionAnimationEnd(result, beforePercent) {
     const afterStatus = this.contextManager?.getStatusReport(this.messages);
     const afterPercent = afterStatus?.usagePercent || 0;
@@ -1007,61 +1012,39 @@ class ChatEngine extends EventEmitter {
     if (this.logger) {this.logger.info('任务已清除', { reason });}
   }
 
-  /**
-   * 注入 Memory 检查点 reminder
-   *
-   * 每隔 _memoryCheckInterval 轮（默认 5）触发一次：
-   * 1) 清理上一条 reminder（避免堆积）
-   * 2) 注入新 reminder 到消息历史末尾，提示 AI 主动调用 memory_append 提取用户长期偏好/规则
-   *
-   * reminder 用 role='user' 注入（跟 clearTask 一致），AI 看到后会理解这是"系统通知"而非用户真实输入。
-   * 同时发一个 status 事件让 TUI 提示用户"正在检查 Memory"。
-   */
-  _injectMemoryCheckReminder() {
-    // 1) 清理旧 reminder（避免堆积多条）
-    const before = this.messages.length;
-    this.messages = this.messages.filter((m) => !m._memoryCheckReminder);
-    const cleaned = before - this.messages.length;
+  // 每轮结束后 AI 额外回顾本轮对话，检查是否有要写入记忆的内容
+  async _runEndOfRoundMemoryReview() {
+    if (!this.aiClient) return;
+    // 跳过空白对话（无实质内容）
+    const recentContent = this.messages.slice(-6).filter(m =>
+      m.role === 'user' || (m.role === 'assistant' && m.tool_calls?.length)
+    );
+    if (recentContent.length < 2) return;
 
-    // 2) 注入新 reminder
-    const reminder = {
+    this.emit('status', '[Memory] AI正在审阅本轮对话，检查是否有需要长期记录的内容...');
+
+    this.messages.push({
       role: 'user',
-      content: [
-        '[Memory 总结检查点]',
-        `你已经处理了 ${this._totalRoundsProcessed} 轮对话。请回顾本段对话（最近 ${this._memoryCheckInterval} 轮），`,
-        '如果用户表达了【长期偏好、规则、约定】（例如"以后都用 X"、"不要 Y"、"我偏好 Z"、"请务必 W"），',
-        '请使用 memory_append 工具写入 .anvil/Memory.md。',
-        '',
-        '【触发条件】用户消息含"记住/我要求/以后/不要/请务必/记得/偏好/习惯"等关键词，或重复表达同一偏好。',
-        '【不要写入】临时任务、一次性需求、单次调试偏好。',
-        '【不要回应该 reminder】无需在回复中提及本提醒，仅在确认有需要写入的内容时才调用 memory_append。',
-      ].join(''),
+      content: '[Memory 检查点] 快速回顾本轮对话：用户是否表达了需要长期记住的偏好、规则或约定？如果有，调用 memory_append 写入。没有就回复"无"。',
       _memoryCheckReminder: true,
-      _injectedAt: new Date().toISOString(),
-    };
-    this.messages.push(reminder);
+    });
 
-    // 3) TUI 状态提示（让用户知道系统在做什么，但不打扰）
-    this.emit('status', `[Memory] 检查点 (第 ${this._totalRoundsProcessed} 轮) — AI 正在审视是否需要更新 .anvil/Memory.md`);
-
-    if (this.logger) {
-      this.logger.info('Memory 检查点触发', {
-        totalRounds: this._totalRoundsProcessed,
-        cleaned,
-        messagesAfter: this.messages.length,
-      });
+    this._suppressUI = true;
+    try {
+      await this._sendAndProcess();
+    } catch (err) {
+      this.logger?.warn('Memory 回顾失败', err.message);
     }
+    this._suppressUI = false;
+    this.emit('status', '[Memory] 审阅完成');
   }
-
   /**
    * 获取 Memory 检查点状态（供 UI/命令显示）
    */
   getMemoryCheckStatus() {
     return {
-      interval: this._memoryCheckInterval,
-      roundsSinceLastCheck: this._roundSinceMemoryCheck,
       totalRounds: this._totalRoundsProcessed,
-      nextCheckIn: this._memoryCheckInterval - this._roundSinceMemoryCheck,
+      mode: '每轮结束自动回顾',
     };
   }
 

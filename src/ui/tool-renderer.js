@@ -38,6 +38,8 @@ const TOOL_NAME_MAP = {
   remove_todo: 'Todo',
   list_todos: 'Todo',
   clear_completed_todos: 'Todo',
+  // 内部状态机信号——主路径已屏蔽 emit,这里兜底,防止其他路径误触时显示原名
+  task_complete: 'TaskComplete',
 };
 
 // 工具执行状态文本
@@ -87,9 +89,11 @@ class ToolRenderer {
    * @param {number} width
    * @param {boolean} nested
    * @param {boolean} withMarker - 是否显示 ● 前缀，默认 true
+   * @param {string} status - 工具状态: 'pending'(执行中) | 'success' | 'error' | 'warning'
+   * @param {boolean} blinkVisible - 闪烁可见状态(true 显示 ●，false 显示空格)
    * @returns {string[]}
    */
-  renderToolCall(toolCall, width, nested = false, withMarker = true) {
+  renderToolCall(toolCall, width, nested = false, withMarker = true, status = 'pending', blinkVisible = true) {
     const t = this.theme;
     const result = [];
 
@@ -99,7 +103,7 @@ class ToolRenderer {
     // 解析参数
     let args = {};
     try {
-      args = typeof toolCall.function?.arguments === 'string'
+      args = typeof toolCall.function.arguments === 'string'
         ? JSON.parse(toolCall.function.arguments)
         : (toolCall.function?.arguments || {});
     } catch { args = {}; }
@@ -114,14 +118,21 @@ class ToolRenderer {
     // 渲染参数
     const paramsStr = this._renderParams(rawName, args, remainingWidth);
 
-    // 组装行: ● ToolName(params)
-    const marker = withMarker ? chalk.hex(t.colors.primary)('●') : '';
-    const nameStyle = chalk.hex(t.colors.primary)(namePart);
+    // 状态色编码:pending=默认/白,success=绿,error=红,warning=黄
+    const markerColor = status === 'success' ? t.colors.success
+      : status === 'error' ? t.colors.error
+      : status === 'warning' ? t.colors.warning
+      : t.colors.text; // pending 用默认文字色(白色)
+
+    // 闪烁:pending 状态下按 blinkVisible 切换显示/隐藏
+    const markerChar = (status === 'pending' && !blinkVisible) ? ' ' : '●';
+    const marker = withMarker ? chalk.hex(markerColor)(markerChar) : '';
+    const nameStyle = t.text(namePart);
     const paramsStyled = paramsStr ? ` ${t.dim(paramsStr)}` : '';
     const content = `${nameStyle}${paramsStyled}`;
 
     if (nested) {
-      const prefix = chalk.hex(t.colors.primary)('└─');
+      const prefix = chalk.hex(markerColor)('└─');
       result.push(`${prefix}${content}`);
     } else if (withMarker) {
       result.push(`${marker} ${content}`);
@@ -526,7 +537,7 @@ class ToolRenderer {
           const modeLabel = result.mode === 'append' ? 'Appended to' : 'Written to';
           lines.push(`${indent}${branch} ${t.success('✓')} ${modeLabel} ${filePath}${t.dim(size)}`);
 
-          // 展示写入的内容（正常颜色+行号，不用全绿）
+          // 展示写入的内容（绿色标注，新增/写入的代码）
           const content = args.content || '';
           if (content) {
             const contentLines = content.split('\n');
@@ -537,7 +548,7 @@ class ToolRenderer {
               const ln = String(lineOffset + i + 1).padStart(LN_WIDTH);
               const sep = t.dim('│');
               const maxContentLen = contentWidth - LN_WIDTH - 10;
-              lines.push(`${indent}${indent}${t.dim(ln)} ${sep} ${t.text(this._truncate(displayLines[i], maxContentLen))}`);
+              lines.push(`${indent}${indent}${t.dim(ln)} ${sep} ${t.diff.added(this._truncate(displayLines[i], maxContentLen))}`);
             }
             if (contentLines.length > maxLines) {
               const overflow = `... +${contentLines.length - maxLines} more lines`;
@@ -579,7 +590,21 @@ class ToolRenderer {
       case 'search_in_files':
       case 'grep': {
         const output = result.output || result.content || '';
-        if (output) {
+        // 没 output 时至少给个统计摘要，别干巴巴啥也没有
+        if (!output) {
+          let summary = '';
+          if (name === 'glob_files' || name === 'glob') {
+            summary = `Found ${result.count || 0} files`;
+          } else if (name === 'search_in_files' || name === 'grep') {
+            summary = `Found ${result.count || 0} matches`;
+            if (result.truncated) {summary += ' (truncated, set maxResults to see more)';}
+          } else if (name === 'list_directory' || name === 'ls') {
+            const files = result.totalFiles || 0;
+            const dirs = result.totalDirs || 0;
+            summary = `${files} files, ${dirs} directories`;
+          }
+          lines.push(`${indent}${branch} ${t.dim(summary)}`);
+        } else {
           const outputLines = output.split('\n').filter(l => l.trim());
           const displayLines = outputLines.slice(0, maxLines);
           for (const line of displayLines) {
@@ -590,6 +615,100 @@ class ToolRenderer {
             const pad = Math.max(0, Math.floor((contentWidth - overflow.length) / 2));
             lines.push(`${indent}${' '.repeat(pad)}${t.textMuted(overflow)}`);
           }
+        }
+        break;
+      }
+
+      // ─── 代码分析工具结果（symbol/grep 类，统计摘要先行） ───
+      case 'get_document_symbols': {
+        const count = result.count || 0;
+        const filePath = this._formatPath(result.filePath || '');
+        lines.push(`${indent}${branch} ${t.dim(`Found ${count} symbols in ${filePath}`)}`);
+        if (result.symbols && result.symbols.length > 0) {
+          for (const sym of result.symbols.slice(0, maxLines)) {
+            lines.push(`${indent}${indent}${t.dim(`${sym.kind}: ${sym.name}  (${sym.filePath}:${sym.line})`)}`);
+          }
+          if (result.symbols.length > maxLines) {
+            lines.push(`${indent}${indent}${t.textMuted(`... +${result.symbols.length - maxLines} more`)}`);
+          }
+        }
+        break;
+      }
+      case 'find_definition': {
+        const count = result.count || 0;
+        const symbol = result.symbol || '';
+        lines.push(`${indent}${branch} ${t.dim(`Found ${count} definitions for "${symbol}"`)}`);
+        if (result.definitions && result.definitions.length > 0) {
+          for (const def of result.definitions.slice(0, maxLines)) {
+            lines.push(`${indent}${indent}${t.dim(`${def.file}:${def.line}  (${def.kind})`)}`);
+          }
+          if (result.definitions.length > maxLines) {
+            lines.push(`${indent}${indent}${t.textMuted(`... +${result.definitions.length - maxLines} more`)}`);
+          }
+        }
+        break;
+      }
+      case 'find_references': {
+        const count = result.count || 0;
+        const symbol = result.symbol || '';
+        const truncated = result.truncated ? ` (truncated at ${count})` : '';
+        lines.push(`${indent}${branch} ${t.dim(`Found ${count} references for "${symbol}"${truncated}`)}`);
+        if (result.references && result.references.length > 0) {
+          for (const ref of result.references.slice(0, maxLines)) {
+            lines.push(`${indent}${indent}${t.dim(`${ref.file}:${ref.line}  ${this._truncate(ref.content, 60)}`)}`);
+          }
+          if (result.references.length > maxLines) {
+            lines.push(`${indent}${indent}${t.textMuted(`... +${result.references.length - maxLines} more`)}`);
+          }
+        }
+        break;
+      }
+      case 'analyze_dependencies': {
+        const filePath = this._formatPath(result.file || result.filePath || '');
+        const deps = result.summary?.totalDependencies || (result.requires?.length || 0) + (result.imports?.length || 0);
+        const depFiles = result.summary?.totalDependents || result.dependents?.length || 0;
+        lines.push(`${indent}${branch} ${t.dim(`${filePath} — ${deps} dependencies, ${depFiles} dependents`)}`);
+        // 显示外部依赖模块
+        const extMods = result.summary?.externalModules || [];
+        if (extMods.length > 0) {
+          const maxMods = Math.min(extMods.length, maxLines);
+          for (let i = 0; i < maxMods; i++) {
+            lines.push(`${indent}${indent}${t.dim(extMods[i])}`);
+          }
+          if (extMods.length > maxMods) {
+            lines.push(`${indent}${indent}${t.textMuted(`... +${extMods.length - maxMods} more`)}`);
+          }
+        }
+        break;
+      }
+      case 'get_hover_info': {
+        const word = result.word || '';
+        let hoverFilePath = this._formatPath(result.filePath || '');
+        // 从工具参数拿文件路径（result 可能没有顶层 filePath）
+        if (!hoverFilePath && toolCall?.function?.arguments) {
+          try {
+            const args = typeof toolCall.function.arguments === 'string'
+              ? JSON.parse(toolCall.function.arguments)
+              : toolCall.function.arguments;
+            hoverFilePath = this._formatPath(args.filePath || '');
+          } catch {}
+        }
+        if (word) {
+          lines.push(`${indent}${branch} ${t.dim(`"${word}" at ${hoverFilePath}:${result.line}:${result.column}`)}`);
+          if (result.definition) {
+            lines.push(`${indent}${indent}${t.dim(`Defined at ${result.definition.file}:${result.definition.line} (${result.definition.kind})`)}`);
+          }
+        } else {
+          lines.push(`${indent}${branch} ${t.dim(`No symbol at cursor`)}`);
+        }
+        break;
+      }
+      case 'format_code': {
+        if (result.changed) {
+          const sizeDelta = result.saved ? ` (${result.saved > 0 ? '-' : '+'}${Math.abs(result.saved)}B)` : '';
+          lines.push(`${indent}${branch} ${t.success('✓')} Formatted ${this._formatPath(result.filePath || '')}${t.dim(sizeDelta)}`);
+        } else if (result.message) {
+          lines.push(`${indent}${branch} ${t.dim(result.message)}`);
         }
         break;
       }

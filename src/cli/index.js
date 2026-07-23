@@ -363,7 +363,12 @@ async function main() {
   });
 
   chatEngine.on('status', (msg) => {
-    if (msg.includes('任务进行中')) {
+    if (msg.startsWith('[Memory]')) {
+      // Memory 审阅状态显示在底部栏中间区域，不推入消息区
+      const displayMsg = msg.replace('[Memory] ', '');
+      tui.statusBar.setInfoMessage(displayMsg, 'info', 30000);
+      tui._refreshStatusBar();
+    } else if (msg.includes('任务进行中')) {
       tui.setStatusInfo(msg);
     } else {
       tui.renderStatus(msg);
@@ -384,6 +389,23 @@ async function main() {
   chatEngine.on('compression_animation', (data) => {
     const duration = 600;
     tui.sidebar.startProgressAnimation(data.fromPercent, data.toPercent, duration);
+
+    // 压缩完成后刷新侧边栏和底部栏的上下文数据，避免 context 条爆红不恢复
+    if (data.phase === 'end') {
+      try {
+        tui.sidebar.updateMessages(chatEngine.messages);
+        const contextStatus = chatEngine.contextManager?.getStatusReport(chatEngine.messages);
+        if (contextStatus) {
+          tui.statusBar.setContextInfo(
+            contextStatus.currentTokens || 0,
+            contextStatus.windowSize || 1000000,
+            contextStatus.usagePercent || 0
+          );
+        }
+        tui._refreshSidebarOnly();
+        tui._refreshStatusBar();
+      } catch {}
+    }
   });
 
   chatEngine.on('check_pending_context', () => {

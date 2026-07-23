@@ -7,6 +7,13 @@ const fs = require('fs');
 // 模块级缓存 detectShell 结果，避免每次 executeCommand 都重新检测
 let _cachedShell = null;
 
+// 检测当前 shell 是否为 Windows 原生（cmd/PowerShell），中文输出大概率是 GBK
+function _isWindowsNativeShell() {
+  if (process.platform !== "win32") return false;
+  const shell = _cachedShell || detectShell();
+  return shell.includes("cmd.exe") || shell.includes("powershell.exe") || shell.includes("pwsh.exe");
+}
+
 function detectShell() {
   if (_cachedShell) {return _cachedShell;}
 
@@ -36,20 +43,28 @@ function detectShell() {
 
 // 将 GBK/GB2312/GB18030 编码的 Buffer 转换为 UTF-8
 function convertEncoding(buffer, fallbackEncoding = 'gbk') {
+  // Windows 原生 shell 优先试 GBK（中文 Windows 默认编码）
+  if (_isWindowsNativeShell()) {
+    try {
+      const iconv = require('iconv-lite');
+      const gbkStr = iconv.decode(buffer, 'gbk');
+      if (!gbkStr.includes('�')) {
+        return gbkStr;
+      }
+    } catch {}
+  }
+
   try {
     const utf8Str = buffer.toString('utf8');
-    // 首先尝试 UTF-8
-    if (!utf8Str.includes('\uFFFD')) {
+    if (!utf8Str.includes('�')) {
       return utf8Str;
     }
   } catch {}
 
-  // 回退到 GBK
   try {
     const iconv = require('iconv-lite');
     return iconv.decode(buffer, 'gbk');
   } catch {
-    // iconv-lite 不可用，fallback 到 latin1
     return buffer.toString('latin1');
   }
 }

@@ -90,7 +90,7 @@ async function requestPlanApproval(params, context) {
 function registerPlanModeTools(registry, chatEngine) {
   registry.register({
     name: 'enter_plan_mode',
-    description: '请求进入计划模式。当任务涉及多文件修改、架构变更、新功能开发等复杂场景时调用此工具。进入后先做只读分析、产出计划、调用 request_plan_approval 请求批准，用户批准后再执行写操作。简单任务（查询信息、单行修改、闲聊）无需使用。',
+    description: '请求进入计划模式。进入后先做只读分析熟悉现有代码，然后产出**包含背景分析、技术方案、详细实施步骤（每个步骤精确到文件名+函数名+代码改动）、文件清单表格、风险评估、验证方式的完整计划**，最后调用 request_plan_approval 请求批准。简单任务（查询信息、单行修改、闲聊）无需使用。',
     parameters: {
       type: 'object',
       properties: {
@@ -105,23 +105,23 @@ function registerPlanModeTools(registry, chatEngine) {
 
   registry.register({
     name: 'request_plan_approval',
-    description: '完成计划方案后调用此工具请求用户批准。调用后系统会弹出同意/拒绝选项让用户确认。只在 Plan Mode 下使用。用户批准后才能执行写操作。',
+    description: '完成计划方案后调用此工具请求用户批准。调用后系统会弹出同意/拒绝选项让用户确认。只在 Plan Mode 下使用。用户批准后才能执行写操作。**参数内容必须详细充实，禁止三言两语带过**。',
     parameters: {
       type: 'object',
       properties: {
         summary: {
           type: 'string',
-          description: '计划概述：一段或几句话说明目标和方案（支持 Markdown）',
+          description: '**计划概述（必填，必须详细）**：用 3-5 段说明整个计划——背景、目标、技术方案、关键决策原因。不要只写一句话。支持 Markdown。',
         },
         steps: {
-          description: '实施步骤：推荐传字符串数组（每个元素是一步），也可以传多行 Markdown 字符串（每行一步，可用 "1. xxx" 或 "- xxx" 格式）。**禁止**把所有步骤挤在单行字符串里用字面 \\n 分隔。',
+          description: '**实施步骤（每步必须极其详细）**：推荐传字符串数组，每个元素是一步。**每步必须包含**：[文件名] + 具体改动（函数/类/行号级描述）+ 预期结果。示例：\n```\n"1. [src/core/parser.js] — 新增 parseInput() 函数，接收原始字符串，用正则提取 key=value 对，返回 Map 对象 —— 用户输入能正确结构化，后续处理不再裸操作字符串"\n```\n**禁止**用一句话描述一步。支持 Markdown 数组或字符串。',
           oneOf: [
             { type: 'string' },
             { type: 'array', items: { type: 'string' } },
           ],
         },
         files: {
-          description: '涉及文件列表：推荐传字符串数组（每个元素是一个文件路径或 "路径 - 说明"），也可以传多行 Markdown 字符串。**禁止**用逗号在一行里堆所有文件。',
+          description: '**涉及文件列表（每行一个文件+改动说明）**：推荐传字符串数组。**每行必须包含**：文件路径 + 操作类型（修改/新增/删除）+ 改动什么（具体到函数或模块）。示例：\n```\n"- src/core/parser.js — 修改，新增 parseInput() 函数\n- test/parser.test.js — 新增，测试 parseInput 的边界情况"\n```\n**禁止**只用文件名不写改动内容。支持 Markdown 数组或字符串。',
           oneOf: [
             { type: 'string' },
             { type: 'array', items: { type: 'string' } },
@@ -129,7 +129,7 @@ function registerPlanModeTools(registry, chatEngine) {
         },
         notes: {
           type: 'string',
-          description: '额外备注或注意事项（支持 Markdown）',
+          description: '**备注（必须写）**：至少包含风险评估（兼容性/难点/回滚方案）和验证方式（如何确认改对了）。支持 Markdown。',
         },
       },
       required: ['summary'],

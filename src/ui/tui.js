@@ -21,6 +21,15 @@ class TUI {
     this.questionPanel = new QuestionPanel(this.layout);
     this.questionPanel.messageBox = this.messageBox;  // 注入消息区引用
     this.questionPanel._refreshDisplay = () => this._refreshMessages();  // 注入刷新回调
+    // 工具调用执行中闪烁:MessageBox 通知 TUI 启停 100ms timer
+    this.messageBox._onLoadingChange = (shouldRun) => {
+      if (shouldRun) {
+        this._startLoadingTimer();
+      } else {
+        this._stopLoadingTimer();
+      }
+    };
+    this.messageBox._onLoadingTick = () => this._refreshMessages();
     // Team Panel(M4) — 团队事件日志 modal,共享 sidebar 数据源
     this.teamPanel = new TeamPanel(this.layout);
     this.teamPanel.setSidebar(this.sidebar);
@@ -43,6 +52,10 @@ class TUI {
 
     // 思考中状态栏定时刷新
     this._thinkingTimer = null;
+
+    // 工具调用执行中闪烁 timer(500ms 间隔,● 字符 1s 闪烁周期)
+    this._loadingTimer = null;
+    this._loadingTickInterval = 500;
 
     // stdout 反压检测
     this._stdoutBackedUp = false;
@@ -70,7 +83,26 @@ class TUI {
       clearInterval(this._thinkingTimer);
       this._thinkingTimer = null;
     }
+    this._stopLoadingTimer();
     this.layout.leaveAltScreen();
+  }
+
+  /**
+   * 启动 100ms 闪烁 timer,定时触发 messageBox.tickLoading() 重新生成 runningToolCall 行
+   * runningToolCall 全部完成或用户向下滚动到底时自动停止
+   */
+  _startLoadingTimer() {
+    if (this._loadingTimer) {return;}
+    this._loadingTimer = setInterval(() => {
+      this.messageBox.tickLoading();
+    }, this._loadingTickInterval);
+  }
+
+  _stopLoadingTimer() {
+    if (this._loadingTimer) {
+      clearInterval(this._loadingTimer);
+      this._loadingTimer = null;
+    }
   }
 
   // 完整重绘，合并所有 write 为一次
@@ -93,13 +125,14 @@ class TUI {
     this._restoreCursorToEditor();
   }
 
-  // 刷新消息区 + 侧边栏（流式输出时使用）
+  // 刷新消息区 + 侧边栏（侧边栏被 \x1b[K 擦掉了需要重绘，内容稳定不会闪烁）
   _refreshMessages() {
     this.layout.startBuf();
     // M4:teamPanel active 时跳过 messageBox 渲染(保留 renderedLines 不动)
     const messageOut = this.teamPanel?.active
       ? (this.teamPanel.render() || '')
       : (this.messageBox.render() || '');
+    // 消息区 \x1b[K 会擦掉右侧侧边栏区域，必须补绘
     let out = messageOut + (this.sidebar.render() || '');
 
     // 如果 editor 有未刷新的变化，也要重绘输入框
@@ -110,6 +143,12 @@ class TUI {
 
     if (out) { this._safeWrite(out, false); }
     this.layout.endBuf();
+  }
+
+  // 仅刷新侧边栏（独立于消息流，不走 _refreshMessages 避免闪烁）
+  _refreshSidebarOnly() {
+    const out = this.sidebar.render() || '';
+    if (out) { this._safeWrite(out, false); }
   }
 
   // 刷新全部组件（响应结束后调用）
@@ -165,12 +204,12 @@ class TUI {
     if (out) {this._safeWrite(out, true);}
   }
 
-  // 旧版空 stub 导致 subagent_content 事件被静默吞掉,新版走 messageBox 完整重绘
+  // 仅刷新侧边栏（子 Agent 事件专用，不动消息区）
   _refreshSidebar() {
-    this._refreshMessages();
+    this._refreshSidebarOnly();
   }
 
-  /** 子 Agent 高频事件 20ms 节流渲染,避免逐 chunk 完整重绘导致闪烁。 */
+  /** 子 Agent 高频事件 20ms 节流渲染，仅刷侧边栏，不与消息区绑定。 */
   _queueSidebar() {
     if (!this.sidebar) {return;}
     if (this._lastSidebarVersion === this.sidebar._teamEventsVersion) {return;}
@@ -181,7 +220,7 @@ class TUI {
     this._renderQueue.requestRender(() => {
       if (!this.sidebar || this._lastSidebarVersion === this.sidebar._teamEventsVersion) {return;}
       this._lastSidebarVersion = this.sidebar._teamEventsVersion;
-      this._refreshMessages();
+      this._refreshSidebarOnly();
     });
   }
 
@@ -280,11 +319,16 @@ class TUI {
     this._refreshMessages();
   }
 
-  // 启动 thinking 定时器，每秒刷新状态栏
+  // 启动 thinking 定时器，每秒刷新状态栏，每 3 秒换一条提示语
   _startThinkingTimer() {
     if (this._thinkingTimer) {clearInterval(this._thinkingTimer);}
+    let tickCount = 0;
     this._thinkingTimer = setInterval(() => {
       if (this.statusBar.isThinking) {
+        tickCount++;
+        if (tickCount % 30 === 0) {
+          this.statusBar.updateThinkingMessage();
+        }
         this._refreshStatusBar();
       } else {
         clearInterval(this._thinkingTimer);
@@ -323,6 +367,12 @@ class TUI {
 
   renderToolCall(toolCalls) {
     this.messageBox.addToolCall(toolCalls);
+    // 根据工具名换一条相关的 thinking 提示语
+    if (toolCalls?.function?.name) {
+      this.statusBar.updateThinkingMessage(toolCalls.function.name);
+    } else if (Array.isArray(toolCalls) && toolCalls[0]?.function?.name) {
+      this.statusBar.updateThinkingMessage(toolCalls[0].function.name);
+    }
     this._queueRender();
   }
 

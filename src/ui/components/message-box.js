@@ -28,6 +28,19 @@ class MessageBox {
     this._visibleLengthCache = new Map();
     this._wrapLineCache = new Map(); // key = str|maxWidth
     this._cjkCache = new Map();
+
+    // 工具调用执行中状态机(callId -> {toolCall, lineIndex, status, startTime, blinkVisible})
+    // status: 'pending' | 'success' | 'error' | 'warning'
+    this._runningToolCalls = new Map();
+    // 闪烁 tick 计数器(100ms 步进),控制 ● 字符显示/隐藏
+    this._loadingFrame = 0;
+    this._loadingTimer = null;
+    // TUI 注入的回调:runningToolCalls 数量变化时通知(用于启停 timer)
+    this._onLoadingChange = null;
+    // TUI 注入的 tick 回调:让 TUI 重绘消息区
+    this._onLoadingTick = null;
+    // 工具结果后恢复内容输出时,先空一行再渲染
+    this._resumeAfterTool = false;
   }
 
   // 修剪 renderedLines 防止无限增长
@@ -86,6 +99,8 @@ class MessageBox {
       this.renderedLines.push(this.theme.thinkingFallback(this._thinkingBuffer));
       this._thinkingBuffer = '';
     }
+    // 思考块与内容块之间空一行
+    this.renderedLines.push('');
     this._scrollToBottom();
   }
 
@@ -139,6 +154,13 @@ class MessageBox {
     const rendered = this.renderer.markdown.write(text);
     if (!rendered) {return;}
 
+    // 刚从工具结果恢复内容输出,先空一行
+    if (this._resumeAfterTool) {
+      this.renderedLines.push('');
+      this._firstContentBlock = true;
+      this._resumeAfterTool = false;
+    }
+
     const lines = rendered.split('\n');
     for (const line of lines) {
       if (line.trim() === '') {continue;}
@@ -188,16 +210,31 @@ class MessageBox {
     // 先 flush markdown 缓冲，避免未渲染内容被截断
     this.flushContentBuffer();
 
+    // 内容与工具调用之间空一行
+    this.renderedLines.push('');
+
     const calls = Array.isArray(toolCalls) ? toolCalls : [toolCalls];
     for (const call of calls) {
-      const lines = this.renderer.renderToolCall(call, this.layout.messageWidth - 2);
+      const lines = this.renderer.renderToolCall(call, this.layout.messageWidth - 2, false, 'pending', true);
       this.renderedLines.push(...lines);
+      // 记录 runningToolCall(callId 缺失时跳过闪烁)
+      const callId = call.id;
+      if (callId && lines.length > 0) {
+        this._runningToolCalls.set(callId, {
+          toolCall: call,
+          lineIndex: this.renderedLines.length - lines.length,
+          status: 'pending',
+          startTime: Date.now(),
+          lineCount: lines.length,
+        });
+      }
     }
     // 移除末尾空行让结果紧贴工具调用
     while (this.renderedLines.length > 0 && this.renderedLines[this.renderedLines.length - 1].trim() === '') {
       this.renderedLines.pop();
     }
     this._scrollToBottom();
+    this._notifyLoadingChange();
   }
 
   addToolResult(name, result, toolCall) {
@@ -220,7 +257,88 @@ class MessageBox {
     const maxResultHeight = 50; // 超出滚动查看
     const lines = this.renderer.renderToolResponse(name, displayResult, toolCall, this.layout.messageWidth - 2, maxResultHeight);
     this.renderedLines.push(...lines);
+
+    // 标记工具调用完成后恢复内容输出时需空一行
+    this._resumeAfterTool = true;
+
+    // 标记工具调用完成(更新状态色:成功/失败/超时)
+    const callId = toolCall?.id;
+    if (callId && this._runningToolCalls.has(callId)) {
+      const run = this._runningToolCalls.get(callId);
+      run.status = result?.error
+        ? 'error'
+        : (result?.warning || result?.timedOut ? 'warning' : 'success');
+      // 重新渲染该调用行,把 status 色(绿/红/黄)烧进 ANSI,替代原先的 pending 白色
+      this._reRenderToolCallLine(run);
+      // 从 running 移除(完成态不再闪烁)
+      this._runningToolCalls.delete(callId);
+      this._notifyLoadingChange();
+    }
+
     this._scrollToBottom();
+  }
+
+  /**
+   * 重新渲染指定 toolCall 行(替换 renderedLines 中的对应行)
+   * 用于完成时把 pending 状态色换成 success/error/warning 终态色
+   */
+  _reRenderToolCallLine(run) {
+    if (!run || run.lineIndex === null || run.lineIndex === undefined) {return;}
+    const newLines = this.renderer.renderToolCall(
+      run.toolCall,
+      this.layout.messageWidth - 2,
+      false,
+      run.status,
+      true, // 完成时总是显示 ●
+    );
+    for (let i = 0; i < run.lineCount; i++) {
+      this.renderedLines[run.lineIndex + i] = newLines[i] || '';
+    }
+  }
+
+  /**
+   * 滚动暂停时,停止闪烁 timer(避免边滚边闪)
+   */
+  _maybeStopLoadingOnScroll() {
+    if (this._scrollPaused && this._runningToolCalls.size > 0) {
+      this._notifyLoadingChange(); // 触发 timer 暂停
+    }
+  }
+
+  /**
+   * 通知 TUI loading 状态变化(启用/停止 timer)
+   * 由 TUI 注入 _onLoadingChange 时调用
+   */
+  _notifyLoadingChange() {
+    if (this._onLoadingChange) {
+      const shouldRun = this._runningToolCalls.size > 0 && !this._scrollPaused;
+      this._onLoadingChange(shouldRun);
+    }
+  }
+
+  /**
+   * 闪烁 tick:由 TUI 100ms timer 触发,重新渲染所有 runningToolCall 行并标记刷帧
+   * 内部递增 _loadingFrame,renderToolCall 用 _loadingFrame % 2 决定 ● 显示/隐藏
+   */
+  tickLoading() {
+    if (this._runningToolCalls.size === 0 || this._scrollPaused) {return;}
+    this._loadingFrame++;
+    const visible = this._loadingFrame % 2 === 0;
+    for (const run of this._runningToolCalls.values()) {
+      const newLines = this.renderer.renderToolCall(
+        run.toolCall,
+        this.layout.messageWidth - 2,
+        false,
+        run.status,
+        visible,
+      );
+      for (let i = 0; i < run.lineCount; i++) {
+        this.renderedLines[run.lineIndex + i] = newLines[i] || '';
+      }
+    }
+    if (this._onLoadingTick) {
+      this._onLoadingTick();
+    }
   }
 
   finishResponse(model) {
@@ -248,6 +366,8 @@ class MessageBox {
     while (this.renderedLines.length > 0 && this.renderedLines[this.renderedLines.length - 1].trim() === '') {
       this.renderedLines.pop();
     }
+    // 消息末尾空一行，与下一条消息分开
+    this.renderedLines.push('');
     this._scrollToBottom();
   }
 
@@ -340,6 +460,8 @@ class MessageBox {
       this._scrollPaused = true;
       this._showScrollHint = true;
       this._lastRenderedVisibleLines = [];
+      // 滚动暂停时停止闪烁 timer(避免边滚边闪)
+      this._notifyLoadingChange();
     }
   }
 
@@ -352,6 +474,8 @@ class MessageBox {
       this._scrollPaused = false;
       this._showScrollHint = false;
       this._lastRenderedVisibleLines = [];
+      // 回到底部时恢复闪烁
+      this._notifyLoadingChange();
     } else if (this.scrollOffset !== prevOffset) {
       this._lastRenderedVisibleLines = [];
     }

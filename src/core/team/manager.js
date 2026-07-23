@@ -1133,7 +1133,8 @@ ${text}
       return [{
         role: rawItems[0].role,
         content: summarized,
-        label: `${rawItems[0].role} (#${rawItems[0].aid.slice(0, 4)}) — 已 AI 总结`,
+        // label 放纯短码 + 总结标记,role 信息由 prompt-templates 渲染时拼接([role] label)
+        label: `${rawItems[0].aid.slice(0, 4)} — 已 AI 总结`,
         summarizedFrom: [rawItems[0].aid],
       }];
     }
@@ -1145,7 +1146,8 @@ ${text}
       return rawItems.map((x) => ({
         role: x.role,
         content: x.content,
-        label: `${x.role} (#${x.aid.slice(0, 4)})`,
+        // label 放纯短码,role 信息由 prompt-templates 渲染时拼接
+        label: `${x.aid.slice(0, 4)}`,
       }));
     }
 

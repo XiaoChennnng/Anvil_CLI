@@ -175,8 +175,9 @@ ${constraintList}
       if (Array.isArray(sharedContext.previousResults) && sharedContext.previousResults.length > 0) {
         block += `\n## 上一执行单元的产出\n\n`;
         for (const item of sharedContext.previousResults) {
-          const label = item.label || `[${item.role}]`;
-          block += `### ${label}\n${item.content}\n\n`;
+          // 统一格式:`[role] label` — label 缺省时只渲染 [role](不拼 undefined)
+          const header = item.label ? `[${item.role}] ${item.label}` : `[${item.role}]`;
+          block += `### ${header}\n${item.content}\n\n`;
         }
       }
 

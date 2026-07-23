@@ -3,6 +3,14 @@
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
+
+// 剥离 UTF-8 BOM（﻿），Windows 编辑器常见
+function stripBOM(content) {
+  if (content && content.charCodeAt(0) === 0xFEFF) {
+    return content.slice(1);
+  }
+  return content;
+}
 const { generateDiff } = require('../ui/diff');
 const { minimatch } = require('minimatch');
 
@@ -118,12 +126,12 @@ async function readFile(params, context) {
     let content;
     if (maxLines > 0) {
       const allContent = await fsp.readFile(resolvedPath, 'utf8');
-      const lines = allContent.split(/\r?\n/);
+      const lines = stripBOM(allContent).split(/\r?\n/);
       const startLine = params.offset || 0;
       const selected = lines.slice(startLine, startLine + maxLines);
       content = selected.join('\n');
     } else {
-      content = await fsp.readFile(resolvedPath, 'utf8');
+      content = stripBOM(await fsp.readFile(resolvedPath, 'utf8'));
       if (content.length > MAX_FILE_READ_SIZE) {
         content = content.substring(0, MAX_FILE_READ_SIZE)
           + `\n\n... (文件过大，仅读取前 ${MAX_FILE_READ_SIZE} 字符，共 ${stat.size} 字节)`;
@@ -233,7 +241,7 @@ async function editFile(params, context) {
   try {
     let content;
     try {
-      content = await fsp.readFile(resolvedPath, 'utf8');
+      content = stripBOM(await fsp.readFile(resolvedPath, 'utf8'));
     } catch (readErr) {
       if (readErr.code === 'ENOENT') {
         return { error: `文件不存在: ${filePath}` };
@@ -503,7 +511,7 @@ async function searchInFiles(params, context) {
 
       let content;
       try {
-        content = await fsp.readFile(filePath, 'utf8');
+        content = stripBOM(await fsp.readFile(filePath, 'utf8'));
       } catch { return; }
       const lines = content.split('\n');
 
