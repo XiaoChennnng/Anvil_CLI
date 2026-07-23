@@ -25,7 +25,7 @@ class SessionManager {
       updatedAt: new Date().toISOString(),
       model: meta.model || 'deepseek-v4-flash',
       messages: [],
-      tokenUsage: { input: 0, output: 0, total: 0 },
+      tokenUsage: { input: 0, output: 0, cacheHit: 0, total: 0 },
       operationHistory: [],
       metadata: meta,
     };

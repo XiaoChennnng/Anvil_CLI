@@ -194,13 +194,17 @@ class ChatEngine extends EventEmitter {
 
       // 构建对话上下文 hash，确保缓存感知对话状态
       const recentMsgs = this.messages.slice(-12);
+      const systemPrompt = this.messages[0]?.role === 'system' ? (this.messages[0].content || '') : '';
       const contextHash = crypto.createHash('md5')
-        .update(JSON.stringify(recentMsgs.map((m) => ({
-          role: m.role,
-          content: (m.content || '').slice(0, 200),
-          hasTools: !!(m.tool_calls && m.tool_calls.length),
-          toolCount: m.tool_calls?.length || 0,
-        }))))
+        .update(JSON.stringify({
+          system: systemPrompt.slice(0, 500),
+          messages: recentMsgs.map((m) => ({
+            role: m.role,
+            content: (m.content || '').slice(0, 200),
+            hasTools: !!(m.tool_calls && m.tool_calls.length),
+            toolCount: m.tool_calls?.length || 0,
+          })),
+        }))
         .digest('hex');
 
       // 检查缓存（带上上下文 hash，避免不同对话上下文命中同一缓存）
@@ -208,6 +212,19 @@ class ChatEngine extends EventEmitter {
       if (cached) {
         this.isProcessing = false;
         this.messages.push({ role: 'assistant', ...cached });
+
+        // SessionCache 命中可见化：emit 合成 usage 事件供 UI 统计
+        const cachedTokens = this.contextManager
+          ? this.contextManager.estimateMessagesTokenCount(this.messages)
+          : 0;
+        this.emit('usage', {
+          prompt_tokens: cachedTokens,
+          completion_tokens: 0,
+          total_tokens: cachedTokens,
+          prompt_cache_hit_tokens: cachedTokens,
+        });
+        this.emit('status', `[缓存] 命中会话缓存（~${cachedTokens.toLocaleString()} tokens），跳过 API 调用`);
+
         return cached;
       }
 
@@ -1479,13 +1496,6 @@ class ChatEngine extends EventEmitter {
     if (this.contextManager && typeof this.contextManager.proactiveCompress === 'function') {
       try { this.messages = this.contextManager.proactiveCompress(this.messages); } catch {}
     }
-
-    const contextHash = '';
-    this.cache.set(this._currentTask, { model: this.model, contextHash }, {
-      thinking: result.thinking,
-      content: result.content,
-      toolCalls: result.toolCalls,
-    });
 
     this.emit('complete', {
       thinking: result.thinking,

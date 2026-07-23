@@ -19,8 +19,8 @@ function calculateCost(cacheMissTokens, cacheHitTokens, outputTokens, pricing) {
   // DeepSeek 价格单位是 元/千token
   const pricePerKInput = pricing?.input || 0;
   const pricePerKOutput = pricing?.output || 0;
-  // 缓存命中价格 = 未命中价格的 1/10
-  const pricePerKCacheHit = pricePerKInput / 10;
+  // 缓存命中价格：优先用模型定义的 cachedInput，没有则按 input 的 1/10
+  const pricePerKCacheHit = pricing?.cachedInput != null ? pricing.cachedInput : pricePerKInput / 10;
 
   const missCost = (cacheMissTokens / 1000) * pricePerKInput;
   const hitCost = (cacheHitTokens / 1000) * pricePerKCacheHit;

@@ -225,8 +225,8 @@ class AnvilAIClient extends EventEmitter {
 
     const anthropicMessages = this._convertToAnthropicMessages(messages);
 
-    const systemMessage = messages.find(m => m.role === 'system');
-    const system = systemMessage ? systemMessage.content : undefined;
+    // 收集所有 system 消息（Tier 0/1/1.5）用于 Anthropic system 参数
+    const systemBlocks = this._buildAnthropicSystemBlocks(messages);
 
     const requestOptions = {
       model,
@@ -235,8 +235,8 @@ class AnvilAIClient extends EventEmitter {
       stream: true,
     };
 
-    if (system) {
-      requestOptions.system = system;
+    if (systemBlocks.length > 0) {
+      requestOptions.system = systemBlocks;
     }
 
     if (options.tools && options.tools.length > 0) {
@@ -349,6 +349,24 @@ class AnvilAIClient extends EventEmitter {
     }
 
     return anthropicMessages;
+  }
+
+  /**
+   * 构建 Anthropic system blocks，将所有 system 消息转为 content blocks
+   * 并在最后一个 block 上添加 cache_control 断点以提高缓存命中率
+   */
+  _buildAnthropicSystemBlocks(messages) {
+    const blocks = messages
+      .filter(m => m.role === 'system')
+      .map((m, i, arr) => {
+        const block = { type: 'text', text: m.content || '' };
+        if (i === arr.length - 1) {
+          block.cache_control = { type: 'ephemeral' };
+        }
+        return block;
+      })
+      .filter(b => b.text);
+    return blocks;
   }
 
   _convertToAnthropicTools(tools) {
