@@ -5,12 +5,21 @@ const path = require('path');
 const { EventEmitter } = require('events');
 const SessionCache = require('../ai/cache');
 const TeamQuestionQueue = require('./team/question-queue');
-const { getSystemPrompt, getLayerContent, getAgentCheckPrompt, getAgentContinuePrompt, PromptLayer, L3Granularity } = require('../ai/prompts');
+const {
+  getSystemPrompt,
+  getLayerContent,
+  getAgentCheckPrompt,
+  getAgentContinuePrompt,
+  PromptLayer,
+  L3Granularity,
+} = require('../ai/prompts');
 
 const DEFAULT_MAX_ITERATIONS = 100;
 
 function parseTaskCompleteResult(content) {
-  if (!content) { return { complete: null, reason: 'no_result', summary: '' }; }
+  if (!content) {
+    return { complete: null, reason: 'no_result', summary: '' };
+  }
   try {
     const result = JSON.parse(content);
     return {
@@ -33,17 +42,21 @@ function parseTaskCompleteResult(content) {
 }
 
 function generateTaskFingerprint(task) {
-  if (!task) { return { keyWords: [], full: '' }; }
-  const words = task.split(/[\s,.，、。]+/).filter(w => w.length > 1);
+  if (!task) {
+    return { keyWords: [], full: '' };
+  }
+  const words = task.split(/[\s,.，、。]+/).filter((w) => w.length > 1);
   const stopWords = new Set(['的', '了', '和', '与', '或', '一个', '一些', '相关', '以及']);
-  const keyWords = words.filter(w => !stopWords.has(w) && w.length > 2);
+  const keyWords = words.filter((w) => !stopWords.has(w) && w.length > 2);
   return { keyWords: keyWords.slice(0, 5), full: task.slice(0, 80), length: task.length };
 }
 
 function isTaskLost(messages, fingerprint) {
-  if (!fingerprint.keyWords.length) { return false; }
-  const allText = messages.map(m => m.content || '').join('');
-  const foundCount = fingerprint.keyWords.filter(w => allText.includes(w)).length;
+  if (!fingerprint.keyWords.length) {
+    return false;
+  }
+  const allText = messages.map((m) => m.content || '').join('');
+  const foundCount = fingerprint.keyWords.filter((w) => allText.includes(w)).length;
   return foundCount < fingerprint.keyWords.length * 0.6;
 }
 
@@ -70,12 +83,9 @@ class ChatEngine extends EventEmitter {
     this._planModeFilePath = null;
     this._awaitingPlanApproval = false;
 
-    this._totalRoundsProcessed = 0;
     this._planApproved = false;
     this._pendingPlan = null;
     this._pendingQuestionResolve = null;
-    this._pendingMemoryRewrite = null; // Memory 审阅检测到需重构时暂存，下轮通知主 AI
-    this._memoryReviewDone = false; // 每轮只审阅一次
     // 统一管理主 Agent + 子 Agent 提问,避免单值 resolve 被覆盖
     this.teamQuestionQueue = new TeamQuestionQueue();
     this.teamManager = null;
@@ -84,10 +94,14 @@ class ChatEngine extends EventEmitter {
     // 监听 AI 客户端事件并转发（内部检查消息不转发到 UI）
     if (this.aiClient) {
       this.aiClient.on('thinking', (chunk) => {
-        if (!this._suppressUI) {this.emit('thinking', chunk);}
+        if (!this._suppressUI) {
+          this.emit('thinking', chunk);
+        }
       });
       this.aiClient.on('content', (chunk) => {
-        if (!this._suppressUI) {this.emit('content', chunk);}
+        if (!this._suppressUI) {
+          this.emit('content', chunk);
+        }
       });
       this.aiClient.on('usage', (usage) => this.emit('usage', usage));
       this.aiClient.on('status', (msg) => this.emit('status', msg));
@@ -123,7 +137,9 @@ class ChatEngine extends EventEmitter {
   restoreMessages(messages) {
     if (Array.isArray(messages)) {
       const systemMsgs = this.messages.filter((m) => m.role === 'system');
-      const historyMsgs = messages.filter((m) => m.role !== 'system' || m._archiveTier !== undefined);
+      const historyMsgs = messages.filter(
+        (m) => m.role !== 'system' || m._archiveTier !== undefined,
+      );
       this.messages = [...systemMsgs, ...this._validateToolPairs(historyMsgs)];
     }
   }
@@ -134,7 +150,9 @@ class ChatEngine extends EventEmitter {
     for (const m of messages) {
       if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
         for (const tc of m.tool_calls) {
-          if (tc && tc.id) {validToolIds.add(tc.id);}
+          if (tc && tc.id) {
+            validToolIds.add(tc.id);
+          }
         }
       }
     }
@@ -154,7 +172,9 @@ class ChatEngine extends EventEmitter {
     // 额外处理:assistant 声明了 tool_calls 但所有 tool 都被丢弃的情况
     const existingToolIds = new Set();
     for (const m of this.messages) {
-      if (m.role === 'tool' && m.tool_call_id) {existingToolIds.add(m.tool_call_id);}
+      if (m.role === 'tool' && m.tool_call_id) {
+        existingToolIds.add(m.tool_call_id);
+      }
     }
     this.messages = this.messages.filter((m) => {
       if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
@@ -177,7 +197,6 @@ class ChatEngine extends EventEmitter {
 
     this._aborted = false;
     this.isProcessing = true;
-    this._memoryReviewDone = false;
 
     try {
       if (this._isTodoClearRequest(input)) {
@@ -197,17 +216,21 @@ class ChatEngine extends EventEmitter {
 
       // 构建对话上下文 hash，确保缓存感知对话状态
       const recentMsgs = this.messages.slice(-12);
-      const systemPrompt = this.messages[0]?.role === 'system' ? (this.messages[0].content || '') : '';
-      const contextHash = crypto.createHash('md5')
-        .update(JSON.stringify({
-          system: systemPrompt.slice(0, 500),
-          messages: recentMsgs.map((m) => ({
-            role: m.role,
-            content: (m.content || '').slice(0, 200),
-            hasTools: !!(m.tool_calls && m.tool_calls.length),
-            toolCount: m.tool_calls?.length || 0,
-          })),
-        }))
+      const systemPrompt =
+        this.messages[0]?.role === 'system' ? this.messages[0].content || '' : '';
+      const contextHash = crypto
+        .createHash('md5')
+        .update(
+          JSON.stringify({
+            system: systemPrompt.slice(0, 500),
+            messages: recentMsgs.map((m) => ({
+              role: m.role,
+              content: (m.content || '').slice(0, 200),
+              hasTools: !!(m.tool_calls && m.tool_calls.length),
+              toolCount: m.tool_calls?.length || 0,
+            })),
+          }),
+        )
         .digest('hex');
 
       // 检查缓存（带上上下文 hash，避免不同对话上下文命中同一缓存）
@@ -226,7 +249,10 @@ class ChatEngine extends EventEmitter {
           total_tokens: cachedTokens,
           prompt_cache_hit_tokens: cachedTokens,
         });
-        this.emit('status', `[缓存] 命中会话缓存（~${cachedTokens.toLocaleString()} tokens），跳过 API 调用`);
+        this.emit(
+          'status',
+          `[缓存] 命中会话缓存（~${cachedTokens.toLocaleString()} tokens），跳过 API 调用`,
+        );
 
         return cached;
       }
@@ -237,15 +263,19 @@ class ChatEngine extends EventEmitter {
         const compLevel = this.contextManager.getCompressionLevel(this.messages, currentTokens);
 
         if (compLevel.needsCompression) {
-          this.emit('status', `[警告]${compLevel.label} — 使用率 ${Math.round(compLevel.ratio * 100)}%`);
+          this.emit(
+            'status',
+            `[警告]${compLevel.label} — 使用率 ${Math.round(compLevel.ratio * 100)}%`,
+          );
 
           // 语义压缩后停止，不让 AI 接着干活
           const compressResult = await this.compactContext({ level: 'auto' });
           this.messages = compressResult.messages;
 
           if (compressResult.stats?.compressed) {
-            this.emit('status',
-              `[完成]语义压缩: ${compressResult.stats.beforeTokens.toLocaleString()} → ${compressResult.stats.afterTokens.toLocaleString()} tokens (节省 ${compressResult.stats.savedPercent}%, 预算 ${compressResult.stats.budget?.toLocaleString() || '?'})`
+            this.emit(
+              'status',
+              `[完成]语义压缩: ${compressResult.stats.beforeTokens.toLocaleString()} → ${compressResult.stats.afterTokens.toLocaleString()} tokens (节省 ${compressResult.stats.savedPercent}%, 预算 ${compressResult.stats.budget?.toLocaleString() || '?'})`,
             );
             if (this.logger) {
               this.logger.info('预检查语义压缩完成，停止进入 agent loop', compressResult.stats);
@@ -262,24 +292,13 @@ class ChatEngine extends EventEmitter {
       this._currentTask = input;
       this._awaitingPlanApproval = false;
 
-      // 检查上一轮审阅留下的 Memory.md 重构建议
-      // 追加到用户最后一条消息末尾，不产生独立消息污染 TUI
-      if (this._pendingMemoryRewrite) {
-        const rewrite = this._pendingMemoryRewrite;
-        this._pendingMemoryRewrite = null;
-        const lastUserIdx = this.messages.length - 1;
-        if (lastUserIdx >= 0 && this.messages[lastUserIdx]?.role === 'user') {
-          this.messages[lastUserIdx].content +=
-            `\n\n---\n[Memory 系统通知] 记忆审阅分析发现 .anvil/Memory.md 需要整体重构。请在回复完用户当前问题后，主动询问用户是否要执行重构。\n原因: ${rewrite.reason}\n用户同意后请调用 memory_write 工具执行重构（工具会自动请求用户确认）。如果用户拒绝或说暂时不用，就不要再提出。`;
-          this.logger?.info('Memory 重构建议已追加到本轮用户消息中');
-        }
-      }
-
       const result = await this._agentLoop(input);
 
       if (result.plan) {
         this.emit('plan_ready', result.plan);
-        if (this.logger) {this.logger.info('产出了计划，等待用户批准');}
+        if (this.logger) {
+          this.logger.info('产出了计划，等待用户批准');
+        }
         this.isProcessing = false;
         return { plan: result.plan };
       }
@@ -288,9 +307,11 @@ class ChatEngine extends EventEmitter {
 
       // 避免重复:如果 _agentLoop 已推入同一条 assistant 消息则跳过
       const lastMsg = this.messages[this.messages.length - 1];
-      const isDuplicate = lastMsg && lastMsg.role === 'assistant'
-        && lastMsg.content === (result.content || '')
-        && JSON.stringify(lastMsg.tool_calls || null) === JSON.stringify(result.toolCalls || null);
+      const isDuplicate =
+        lastMsg &&
+        lastMsg.role === 'assistant' &&
+        lastMsg.content === (result.content || '') &&
+        JSON.stringify(lastMsg.tool_calls || null) === JSON.stringify(result.toolCalls || null);
       if (!isDuplicate) {
         this.messages.push({
           role: 'assistant',
@@ -304,11 +325,15 @@ class ChatEngine extends EventEmitter {
 
       // 任务指纹提高缓存复用率
       const taskFingerprint = generateTaskFingerprint(input);
-      this.cache.set(input, { model: this.model, contextHash, taskFingerprint: taskFingerprint.full }, {
-        thinking: result.thinking,
-        content: result.content,
-        toolCalls: result.toolCalls,
-      });
+      this.cache.set(
+        input,
+        { model: this.model, contextHash, taskFingerprint: taskFingerprint.full },
+        {
+          thinking: result.thinking,
+          content: result.content,
+          toolCalls: result.toolCalls,
+        },
+      );
 
       this.emit('complete', {
         thinking: result.thinking,
@@ -348,7 +373,7 @@ class ChatEngine extends EventEmitter {
     lastUsage = result.usage;
 
     // compact_context 工具调用后立即返回，不让 AI 在压缩后的混乱上下文中继续
-    if (result.toolCalls?.some(tc => tc.function?.name === 'compact_context')) {
+    if (result.toolCalls?.some((tc) => tc.function?.name === 'compact_context')) {
       this.logger?.info('Agent 循环检测到 compact_context，停止继续');
       return {
         thinking: fullThinking,
@@ -371,9 +396,14 @@ class ChatEngine extends EventEmitter {
     }
 
     // Plan Mode 下调了非规划工具 → 重新引导 AI 先提交计划
-    if (this._planMode && !this._planApproved && !this._awaitingPlanApproval && result.hadToolCalls) {
+    if (
+      this._planMode &&
+      !this._planApproved &&
+      !this._awaitingPlanApproval &&
+      result.hadToolCalls
+    ) {
       const requestedApproval = result.toolCalls?.some(
-        tc => tc.function?.name === 'request_plan_approval'
+        (tc) => tc.function?.name === 'request_plan_approval',
       );
       if (!requestedApproval) {
         this.logger?.info('Plan Mode: AI 调用了非规划工具，重新引导');
@@ -386,7 +416,8 @@ class ChatEngine extends EventEmitter {
 
         this.messages.push({
           role: 'user',
-          content: '[系统提示] 你在 Plan Mode 下，必须先输出结构化计划方案并调用 request_plan_approval 工具请求批准，然后才能执行其他操作。请立即回到规划阶段。',
+          content:
+            '[系统提示] 你在 Plan Mode 下，必须先输出结构化计划方案并调用 request_plan_approval 工具请求批准，然后才能执行其他操作。请立即回到规划阶段。',
         });
 
         result = await this._sendAndProcess();
@@ -409,12 +440,6 @@ class ChatEngine extends EventEmitter {
 
     // 没有工具调用直接返回(闲聊/问答/纯文字回复都不弹窗)
     if (!result.hadToolCalls) {
-      // 简单对话也得跑审阅：检查偏好或检测重构需求（不注入，下轮带出来）
-      this._totalRoundsProcessed++;
-      if (!this._memoryReviewDone) {
-        this._memoryReviewDone = true;
-        await this._runEndOfRoundMemoryReview();
-      }
       return {
         thinking: fullThinking,
         content: fullContent,
@@ -448,7 +473,7 @@ class ChatEngine extends EventEmitter {
       }
 
       // 上下文使用率检查:语义压缩后停止循环
-      if (this.contextManager && (iterationCount % 3 === 1)) {
+      if (this.contextManager && iterationCount % 3 === 1) {
         try {
           const compLevel = this.contextManager.getCompressionLevel(this.messages);
           if (compLevel.needsCompression || compLevel.ratio > 0.85) {
@@ -465,9 +490,11 @@ class ChatEngine extends EventEmitter {
       }
 
       const lastMsg = this.messages[this.messages.length - 1];
-      const isDuplicate = lastMsg && lastMsg.role === 'assistant'
-        && lastMsg.content === (result.content || '')
-        && JSON.stringify(lastMsg.tool_calls || null) === JSON.stringify(result.toolCalls || null);
+      const isDuplicate =
+        lastMsg &&
+        lastMsg.role === 'assistant' &&
+        lastMsg.content === (result.content || '') &&
+        JSON.stringify(lastMsg.tool_calls || null) === JSON.stringify(result.toolCalls || null);
       if (!isDuplicate) {
         this.messages.push({
           role: 'assistant',
@@ -516,11 +543,11 @@ class ChatEngine extends EventEmitter {
 
       // 完成检测:只有 task_complete 返回 complete=true 才停止
       const calledTaskComplete = checkResult.toolCalls?.some(
-        tc => tc.function?.name === 'task_complete'
+        (tc) => tc.function?.name === 'task_complete',
       );
 
       if (calledTaskComplete) {
-        const lastToolMsg = [...this.messages].reverse().find(m => m.role === 'tool');
+        const lastToolMsg = [...this.messages].reverse().find((m) => m.role === 'tool');
         const parsed = parseTaskCompleteResult(lastToolMsg?.content || '');
         if (parsed.complete === true) {
           this.logger?.info('任务完成', { reason: parsed.reason, iterationCount });
@@ -547,7 +574,7 @@ class ChatEngine extends EventEmitter {
       lastUsage = result.usage || lastUsage;
 
       // compact_context 在 while 循环中被调用 → 立即返回
-      if (result.toolCalls?.some(tc => tc.function?.name === 'compact_context')) {
+      if (result.toolCalls?.some((tc) => tc.function?.name === 'compact_context')) {
         this.logger?.info('while 循环检测到 compact_context，停止继续');
         return {
           thinking: fullThinking,
@@ -559,19 +586,20 @@ class ChatEngine extends EventEmitter {
 
       // "继续"后无工具调用:连续多次卡住才停(给 AI 多次机会)
       if (!result.hadToolCalls) {
-        if (result.toolCalls?.some(tc => tc.function?.name === 'task_complete')) {
+        if (result.toolCalls?.some((tc) => tc.function?.name === 'task_complete')) {
           break;
         }
 
         this.messages.push({
           role: 'user',
-          content: '如果任务已完成，请调用 task_complete 工具。如果还有工作要做，请继续执行。' +
-                   '不要只回复文字，用行动回答。',
+          content:
+            '如果任务已完成，请调用 task_complete 工具。如果还有工作要做，请继续执行。' +
+            '不要只回复文字，用行动回答。',
         });
 
         const recheckResult = await this._sendAndProcess();
 
-        if (recheckResult.toolCalls?.some(tc => tc.function?.name === 'task_complete')) {
+        if (recheckResult.toolCalls?.some((tc) => tc.function?.name === 'task_complete')) {
           break;
         }
 
@@ -587,31 +615,6 @@ class ChatEngine extends EventEmitter {
         fullContent += recheckResult.content || '';
         fullThinking += recheckResult.thinking || '';
         lastUsage = recheckResult.usage || lastUsage;
-      }
-
-    }
-
-    // ─── 主 Agent 输出总结前：跑记忆审阅 ───
-    // 若检测到重构需求，注入到对话让 AI 当前轮就询问用户
-    this._totalRoundsProcessed++;
-    if (!this._memoryReviewDone) {
-      this._memoryReviewDone = true;
-      await this._runEndOfRoundMemoryReview();
-      if (this._pendingMemoryRewrite) {
-        const rewrite = this._pendingMemoryRewrite;
-        this._pendingMemoryRewrite = null;
-        this.messages.push({
-          role: 'user',
-          content: `[Memory 系统通知] 记忆审阅分析发现 .anvil/Memory.md 需要整体重构。请先完成当前工作，然后主动询问用户是否要执行重构。\n原因: ${rewrite.reason}\n用户同意后请调用 memory_write 工具执行重构。如果用户拒绝就不要再提出。`,
-        });
-        this.logger?.info('Memory 重构建议已注入，AI 将在总结中询问用户');
-        const finalResult = await this._sendAndProcess();
-        return {
-          thinking: fullThinking + (finalResult.thinking || ''),
-          content: fullContent + (finalResult.content || ''),
-          toolCalls: finalResult.toolCalls || [],
-          usage: finalResult.usage || lastUsage,
-        };
       }
     }
 
@@ -631,8 +634,8 @@ class ChatEngine extends EventEmitter {
     let lastContent = '';
     let lastThinking = '';
     let lastUsage = null;
-    let lastHadToolCalls = false;  // 标记本批次是否执行了工具调用（供 _agentLoop 使用）
-    let lastToolCalls = null;      // 保存实际的 toolCalls（供完成检测使用）
+    let lastHadToolCalls = false; // 标记本批次是否执行了工具调用（供 _agentLoop 使用）
+    let lastToolCalls = null; // 保存实际的 toolCalls（供完成检测使用）
     let continueCount = 0;
     const maxContinues = 5; // 最多自动继续 5 次，防止死循环
 
@@ -674,7 +677,9 @@ class ChatEngine extends EventEmitter {
         throw new Error('请求已被中断');
       }
 
-      if (!this._suppressUI) {this.emit('thinking_start');}
+      if (!this._suppressUI) {
+        this.emit('thinking_start');
+      }
       const response = await this.aiClient.chat(apiMessages, {
         model: this.model,
         thinkingMode: this.config.thinkingMode !== false,
@@ -699,8 +704,8 @@ class ChatEngine extends EventEmitter {
 
       // 处理工具调用
       if (response.toolCalls && response.toolCalls.length > 0) {
-        lastHadToolCalls = true;  // 标记：本批次执行了工具调用
-        lastToolCalls = response.toolCalls;  // 保存实际 toolCalls（供完成检测使用）
+        lastHadToolCalls = true; // 标记：本批次执行了工具调用
+        lastToolCalls = response.toolCalls; // 保存实际 toolCalls（供完成检测使用）
 
         // 注意：内容已通过 AI 客户端的流式发射（aiClient.on('content')）发送到 UI
         // 这里不需要再次发射 response.content，避免重复
@@ -709,15 +714,16 @@ class ChatEngine extends EventEmitter {
         const assistantMsg = {
           role: 'assistant',
           content: response.content || null,
-          reasoning_content: response.thinking || '',  // 思考内容，必须有
+          reasoning_content: response.thinking || '', // 思考内容，必须有
           tool_calls: response.toolCalls.map((tc) => ({
             id: tc.id,
             type: 'function',
             function: {
               name: tc.function?.name || '',
-              arguments: typeof tc.function?.arguments === 'string'
-                ? tc.function.arguments
-                : JSON.stringify(tc.function?.arguments || {}),
+              arguments:
+                typeof tc.function?.arguments === 'string'
+                  ? tc.function.arguments
+                  : JSON.stringify(tc.function?.arguments || {}),
             },
           })),
         };
@@ -728,7 +734,9 @@ class ChatEngine extends EventEmitter {
         for (const toolCall of response.toolCalls) {
           // request_plan_approval 已触发：跳过后续工具（仍需推入 tool result）
           if (awaitingPlanBreak) {
-            if (!this._suppressUI && toolCall.function?.name !== 'task_complete') {this.emit('tool_calls', toolCall);}
+            if (!this._suppressUI && toolCall.function?.name !== 'task_complete') {
+              this.emit('tool_calls', toolCall);
+            }
             this.messages.push({
               role: 'tool',
               tool_call_id: toolCall.id,
@@ -738,19 +746,24 @@ class ChatEngine extends EventEmitter {
               }),
             });
             if (this.logger) {
-              this.logger.info(`工具调用被跳过: ${toolCall.function?.name || ''} (plan approval 触发)`);
+              this.logger.info(
+                `工具调用被跳过: ${toolCall.function?.name || ''} (plan approval 触发)`,
+              );
             }
             continue;
           }
 
           // 逐个发射工具调用事件（UI 逐个展示）
-          if (!this._suppressUI && toolCall.function?.name !== 'task_complete') {this.emit('tool_calls', toolCall);}
+          if (!this._suppressUI && toolCall.function?.name !== 'task_complete') {
+            this.emit('tool_calls', toolCall);
+          }
           const name = toolCall.function?.name || '';
           let args = {};
           try {
-            args = typeof toolCall.function?.arguments === 'string'
-              ? JSON.parse(toolCall.function.arguments)
-              : (toolCall.function?.arguments || {});
+            args =
+              typeof toolCall.function?.arguments === 'string'
+                ? JSON.parse(toolCall.function.arguments)
+                : toolCall.function?.arguments || {};
           } catch {
             args = {};
           }
@@ -767,14 +780,18 @@ class ChatEngine extends EventEmitter {
                 fileTimestamps: this.fileTimestamps,
                 maxOutputLines: this.config.maxOutputLines || 50,
                 planModeRestricted: this._planMode && !this._planApproved,
-                chatEngine: this,  // 让工具可以访问 chatEngine（如 enter_plan_mode）
+                chatEngine: this, // 让工具可以访问 chatEngine（如 enter_plan_mode）
                 onOutput: (data, isError) => {
-                  if (!this._suppressUI) {this.emit('command_output', data, isError);}
+                  if (!this._suppressUI) {
+                    this.emit('command_output', data, isError);
+                  }
                 },
                 todoManager: this.todoManager,
                 onTodoChange: (todos) => this.emit('todo_change', todos),
                 onQuestion: (params) => {
-                  if (this._suppressUI) {return { answers: [] };}
+                  if (this._suppressUI) {
+                    return { answers: [] };
+                  }
                   this.emit('question', params);
                   return this.teamQuestionQueue.enqueue(
                     TeamQuestionQueue.MAIN_AGENT_ID,
@@ -784,11 +801,16 @@ class ChatEngine extends EventEmitter {
                 },
               }),
               new Promise((_, reject) => {
-                toolTimeoutId = setTimeout(() => reject(new Error(`工具执行超时(${TOOL_TIMEOUT / 1000}s)`)), TOOL_TIMEOUT);
+                toolTimeoutId = setTimeout(
+                  () => reject(new Error(`工具执行超时(${TOOL_TIMEOUT / 1000}s)`)),
+                  TOOL_TIMEOUT,
+                );
               }),
             ]);
             clearTimeout(toolTimeoutId);
-            if (!this._suppressUI) {this.emit('tool_result', { name, result, toolCall });}
+            if (!this._suppressUI) {
+              this.emit('tool_result', { name, result, toolCall });
+            }
             // 通知上下文管理器(相位检测 + 文件预取)
             if (this.contextManager && typeof this.contextManager.recordToolCall === 'function') {
               this.contextManager.recordToolCall(name, args);
@@ -812,8 +834,12 @@ class ChatEngine extends EventEmitter {
             const truncFields = ['content', 'output', 'diff'];
             const truncated = { ...result };
             for (const field of truncFields) {
-              if (typeof truncated[field] === 'string' && truncated[field].length > MAX_RESULT_LEN) {
-                truncated[field] = truncated[field].slice(0, MAX_RESULT_LEN) + '... (结果过长已截断)';
+              if (
+                typeof truncated[field] === 'string' &&
+                truncated[field].length > MAX_RESULT_LEN
+              ) {
+                truncated[field] =
+                  truncated[field].slice(0, MAX_RESULT_LEN) + '... (结果过长已截断)';
               }
             }
             resultStr = JSON.stringify(truncated);
@@ -848,7 +874,7 @@ class ChatEngine extends EventEmitter {
         }
 
         // compact_context 执行后立即停止 AI 继续（压缩后的上下文已不连贯，AI 继续会生成垃圾）
-        if (response.toolCalls?.some(tc => tc.function?.name === 'compact_context')) {
+        if (response.toolCalls?.some((tc) => tc.function?.name === 'compact_context')) {
           this.logger?.info('compact_context 执行完成，停止 AI 继续');
           break;
         }
@@ -890,15 +916,18 @@ class ChatEngine extends EventEmitter {
     return {
       thinking: fullThinking,
       content: fullContent,
-      toolCalls: lastToolCalls || [],  // 返回实际 toolCalls（完成检测需要检查 task_complete）
+      toolCalls: lastToolCalls || [], // 返回实际 toolCalls（完成检测需要检查 task_complete）
       usage: lastUsage,
-      hadToolCalls: lastHadToolCalls,  // 标记本批次是否执行了工具调用
+      hadToolCalls: lastHadToolCalls, // 标记本批次是否执行了工具调用
     };
   }
 
   async compactContext(options, skipSemanticSummary = false) {
     if (!this.contextManager) {
-      return { messages: this.messages, stats: { compressed: false, error: '上下文管理器未初始化' } };
+      return {
+        messages: this.messages,
+        stats: { compressed: false, error: '上下文管理器未初始化' },
+      };
     }
 
     // 触发动画：从当前进度 → 100%
@@ -941,7 +970,10 @@ class ChatEngine extends EventEmitter {
     // status 文本也发一份，让 TUI 显示压缩完成信息
     const stats = result?.stats;
     if (stats && stats.compressed) {
-      this.emit('status', `[完成]上下文已压缩: ${stats.beforeTokens.toLocaleString()} → ${stats.afterTokens.toLocaleString()} tokens (节省 ${stats.savedPercent}%)`);
+      this.emit(
+        'status',
+        `[完成]上下文已压缩: ${stats.beforeTokens.toLocaleString()} → ${stats.afterTokens.toLocaleString()} tokens (节省 ${stats.savedPercent}%)`,
+      );
     }
   }
 
@@ -949,7 +981,9 @@ class ChatEngine extends EventEmitter {
   async _semanticBudgetCompress(options = {}) {
     const ctxCfg = this.config.context || {};
     const semanticCfg = ctxCfg.semanticBudget || {};
-    const target = this.contextManager.validateSemanticBudget(options.budgetTokens || semanticCfg.default || 30_000);
+    const target = this.contextManager.validateSemanticBudget(
+      options.budgetTokens || semanticCfg.default || 30_000,
+    );
     const shouldRebuild = options.rebuild !== false;
     const shouldForce = options.force !== false;
 
@@ -1028,7 +1062,9 @@ class ChatEngine extends EventEmitter {
 
   // 完整重注上下文：L0 (System Prompt) + L1 (Project Overview) + Tier 2/3/4 重新组装
   async _rebuildFullContext() {
-    if (!this.contextManager) {return;}
+    if (!this.contextManager) {
+      return;
+    }
 
     // 1) 清空文件 LRU 缓存（换新脑子，不带旧文件）
     if (this.contextManager._fileContexts) {
@@ -1050,9 +1086,9 @@ class ChatEngine extends EventEmitter {
 
     // 4) 重新组装所有 tier（Tier 0/1/2/3/4）
     const sysPrompt = this.messages[0]?.content || this._buildSystemPrompt();
-    const historyMsgs = this.messages.slice(1).filter(
-      (m) => m.role !== 'system' || m._archiveTier !== undefined || m._semanticSummary,
-    );
+    const historyMsgs = this.messages
+      .slice(1)
+      .filter((m) => m.role !== 'system' || m._archiveTier !== undefined || m._semanticSummary);
     this.messages = this.contextManager.assembleMessages(sysPrompt, historyMsgs);
 
     this.logger?.info('完整重注完成', {
@@ -1068,99 +1104,9 @@ class ChatEngine extends EventEmitter {
     });
     this._currentTask = null;
     this.emit('todo_change', []);
-    if (this.logger) {this.logger.info('任务已清除', { reason });}
-  }
-
-  // 每轮结束后 AI 额外回顾本轮对话，检查是否有要写入记忆的内容
-  // 独立 LLM 调用:不污染主 messages,不影响主对话流和 prompt cache
-  async _runEndOfRoundMemoryReview() {
-    if (!this.aiClient) {return;}
-
-    // 艹！必须把 UI 事件屏蔽掉，不然这货流式输出的内容全泄漏到 TUI 上去了
-    const prevSuppress = this._suppressUI;
-    this._suppressUI = true;
-
-    // 跳过空白对话(无实质内容)
-    const recentContent = this.messages.slice(-6).filter((m) =>
-      m.role === 'user' || (m.role === 'assistant' && m.tool_calls?.length),
-    );
-    if (recentContent.length < 2) {return;}
-
-    this.emit('status', '[Memory] AI正在审阅本轮对话，检查是否有需要长期记录的内容...');
-
-    // 检查本轮 AI 是否已主动调用 memory_append（用户说"记住X"已当场写入）
-    // 若已主动添加，审阅只需检查重构需求，跳过重复的偏好扫描
-    const alreadyAppended = this.messages.slice(-10).some(m =>
-      m.role === 'assistant' && m.tool_calls?.some(tc => tc.function?.name === 'memory_append')
-    );
-
-    // 构造临时 messages:只读最近几轮 + 审阅提示,不写回主 messages
-    let reviewHint;
-    if (alreadyAppended) {
-      reviewHint = '[Memory 检查点] 本轮用户已主动添加记忆条目，无需再检查偏好。仅检查记忆文件结构是否需要整体重构?→ 调 memory_write。不需要就回复"无"。';
-    } else {
-      reviewHint = '[Memory 检查点] 快速回顾上面这段对话:\n1) 用户是否表达了需要长期记住的偏好、规则或约定?→ 调 memory_append 写入\n2) 现有记忆条目是否大量冲突、过期或结构混乱需要整体重构?→ 调 memory_write 重构（系统会暂存建议，下轮主动询问用户确认执行）\n都没有就回复"无"。';
+    if (this.logger) {
+      this.logger.info('任务已清除', { reason });
     }
-
-    const reviewMessages = [
-      ...recentContent.map((m) => ({ role: m.role, content: m.content || '' })),
-      { role: 'user', content: reviewHint },
-    ];
-
-    try {
-      // 单独调一次 LLM,不走 _sendAndProcess,主 chat 完全不感知这次调用
-      const reviewResult = await this.aiClient.chat(reviewMessages);
-      // 分类处理:memory_append 自动执行(增量安全);memory_write 捕获意图但不直接执行
-      // (requiresConfirm 工具不能绕过确认,避免 AI 误判清空用户记忆)
-      const toolCalls = reviewResult.toolCalls || [];
-      for (const tc of toolCalls) {
-        let args = {};
-        try { args = JSON.parse(tc.function.arguments || '{}'); } catch { /* skip malformed */ }
-
-        if (tc.function?.name === 'memory_append') {
-          if (!args.section || !args.entry) {continue;}
-          try {
-            await this.toolRegistry.execute('memory_append', {
-              section: args.section,
-              entry: args.entry,
-            }, {
-              projectDir: this.contextManager?.projectDir,
-              config: this.config,
-              logger: this.logger,
-            });
-          } catch (err) {
-            this.logger?.warn('Memory 写入失败', err.message);
-          }
-        } else if (tc.function?.name === 'memory_write') {
-          // 重构 Memory.md:不绕过 requiresConfirm
-          // 改为暂存到 ChatEngine 状态，下轮用户输入时主 AI 主动询问用户
-          if (!args.content) {continue;}
-          this._pendingMemoryRewrite = {
-            reason: 'AI 审阅判断当前 Memory.md 需要整体重构',
-            preview: String(args.content).slice(0, 200),
-          };
-          this.emit('memory_rewrite_suggested', {
-            reason: this._pendingMemoryRewrite.reason,
-            preview: this._pendingMemoryRewrite.preview,
-          });
-          this.emit('status', '[Memory] AI 建议重构 Memory.md，将在您下一次提问时主动询问是否执行');
-        }
-      }
-    } catch (err) {
-      this.logger?.warn('Memory 回顾失败', err.message);
-    } finally {
-      this._suppressUI = prevSuppress;
-    }
-    this.emit('status', '[Memory] 审阅完成');
-  }
-  /**
-   * 获取 Memory 检查点状态（供 UI/命令显示）
-   */
-  getMemoryCheckStatus() {
-    return {
-      totalRounds: this._totalRoundsProcessed,
-      mode: '每轮结束自动回顾',
-    };
   }
 
   // 查找最后一条语义摘要的索引
@@ -1178,8 +1124,7 @@ class ChatEngine extends EventEmitter {
 
     // 计算待摘要的非系统消息数量（上次语义摘要之后的新消息）
     const lastSemanticIdx = this._findLastSemanticSummaryIndex();
-    const newMsgs = this.messages.slice(lastSemanticIdx + 1)
-      .filter(m => m.role !== 'system');
+    const newMsgs = this.messages.slice(lastSemanticIdx + 1).filter((m) => m.role !== 'system');
 
     // 每 2 条消息估一轮
     const roundsToSummarize = Math.ceil(newMsgs.length / 2);
@@ -1193,20 +1138,25 @@ class ChatEngine extends EventEmitter {
 
   // AI 语义压缩：生成语义摘要
   async _generateSemanticSummary(budget = 200) {
-    if (!this.aiClient) {return '';}
+    if (!this.aiClient) {
+      return '';
+    }
 
     try {
       // 获取上次摘要之后的新消息（增量摘要），最多取 60 条防止 Token 浪费
       const lastSemanticIdx = this._findLastSemanticSummaryIndex();
       const newMsgsStart = Math.max(lastSemanticIdx + 1, this.messages.length - 60);
-      const newMsgs = this.messages.slice(newMsgsStart)
-        .filter(m => m.role !== 'system' || m._semanticSummary);
+      const newMsgs = this.messages
+        .slice(newMsgsStart)
+        .filter((m) => m.role !== 'system' || m._semanticSummary);
 
       const dialogueContent = newMsgs
-        .map(m => `${m.role}: ${(m.content || '').slice(0, 300)}`)
+        .map((m) => `${m.role}: ${(m.content || '').slice(0, 300)}`)
         .join('\n');
 
-      if (!dialogueContent.trim()) {return '';}
+      if (!dialogueContent.trim()) {
+        return '';
+      }
 
       // 带预算的结构化摘要指令
       const summaryPrompt = `你最多可以使用 ${budget} tokens 来生成以下对话的语义摘要。
@@ -1233,10 +1183,13 @@ class ChatEngine extends EventEmitter {
 {任务进度、待办事项、下一步方向}`;
 
       // 调用 AI 生成摘要
-      const response = await this.aiClient.chat([
-        { role: 'system', content: summaryPrompt },
-        { role: 'user', content: dialogueContent },
-      ], { model: this.model });
+      const response = await this.aiClient.chat(
+        [
+          { role: 'system', content: summaryPrompt },
+          { role: 'user', content: dialogueContent },
+        ],
+        { model: this.model },
+      );
 
       return response.content || '';
     } catch (err) {
@@ -1247,13 +1200,15 @@ class ChatEngine extends EventEmitter {
 
   // 检测用户输入是否为清除 todolist 请求
   _isTodoClearRequest(input) {
-    if (!input || typeof input !== 'string') {return false;}
+    if (!input || typeof input !== 'string') {
+      return false;
+    }
     const patterns = [
       /^(清除|清空|删除|重置)(所有|全部)?(todo(列表|list)?|任务|待办)(列表)?\s*$/i,
       /^(清掉|删掉|干掉)(todo|任务|待办)/,
       /^clear\s+(all\s+)?(todos?|tasks?)\s*$/i,
     ];
-    return patterns.some(p => p.test(input.trim()));
+    return patterns.some((p) => p.test(input.trim()));
   }
 
   // 检查并获取待注入的用户上下文
@@ -1292,7 +1247,7 @@ class ChatEngine extends EventEmitter {
       this._updateSystemPrompt();
       this.emit('team_mode_end', { reason: 'interrupted' });
       // 异步强制解散，不阻塞 interrupt 返回
-      teamManager.dissolve({ force: true }).catch(err => {
+      teamManager.dissolve({ force: true }).catch((err) => {
         this.logger?.error('中断时解散团队失败', err.message);
       });
     }
@@ -1311,7 +1266,9 @@ class ChatEngine extends EventEmitter {
       if (this.contextManager && contextWindow) {
         this.contextManager.setWindowSize(contextWindow);
         if (this.logger) {
-          this.logger.debug(`切换模型到 ${modelName}，上下文窗口调整为 ${contextWindow.toLocaleString()} tokens`);
+          this.logger.debug(
+            `切换模型到 ${modelName}，上下文窗口调整为 ${contextWindow.toLocaleString()} tokens`,
+          );
         }
       }
 
@@ -1372,7 +1329,9 @@ class ChatEngine extends EventEmitter {
     if (this.contextManager && contextWindow) {
       this.contextManager.setWindowSize(contextWindow);
       if (this.logger) {
-        this.logger.debug(`切换提供商到 ${providerId}，上下文窗口调整为 ${contextWindow.toLocaleString()} tokens`);
+        this.logger.debug(
+          `切换提供商到 ${providerId}，上下文窗口调整为 ${contextWindow.toLocaleString()} tokens`,
+        );
       }
     }
 
@@ -1395,8 +1354,12 @@ class ChatEngine extends EventEmitter {
   // 默认 L0,planMode 追加 L4,teamMode 追加 L5,其他按需
   _buildSystemPrompt() {
     const layers = [PromptLayer.L0];
-    if (this._planMode) {layers.push(PromptLayer.L4);}
-    if (this.teamMode) {layers.push(PromptLayer.L5);}
+    if (this._planMode) {
+      layers.push(PromptLayer.L4);
+    }
+    if (this.teamMode) {
+      layers.push(PromptLayer.L5);
+    }
     return getSystemPrompt({ layers });
   }
 
@@ -1405,17 +1368,27 @@ class ChatEngine extends EventEmitter {
   // 同层重复调用幂等；L3 的两种粒度可同时存在
   injectPromptLayer(layerName, granularity = L3Granularity.DETAIL) {
     const content = getLayerContent(layerName, granularity);
-    if (!content) {return { success: false, error: `未知层级: ${layerName}` };}
+    if (!content) {
+      return { success: false, error: `未知层级: ${layerName}` };
+    }
 
     // L3 内部两种粒度用不同标记，避免 detail 覆盖 required
-    const tag = layerName === PromptLayer.L3 ? `[Layer: ${layerName} (${granularity})]` : `[Layer: ${layerName}]`;
+    const tag =
+      layerName === PromptLayer.L3
+        ? `[Layer: ${layerName} (${granularity})]`
+        : `[Layer: ${layerName}]`;
 
-    const sysIdx = this.messages.findIndex(m => m.role === 'system');
+    const sysIdx = this.messages.findIndex((m) => m.role === 'system');
     if (sysIdx >= 0) {
       const sysContent = this.messages[sysIdx].content;
       // 幂等检查：已注入过的层（含粒度）不重复添加
       if (sysContent.includes(tag)) {
-        return { success: true, layer: layerName, granularity: layerName === PromptLayer.L3 ? granularity : null, action: 'already_loaded' };
+        return {
+          success: true,
+          layer: layerName,
+          granularity: layerName === PromptLayer.L3 ? granularity : null,
+          action: 'already_loaded',
+        };
       }
       this.messages[sysIdx].content = sysContent + `\n\n${tag}\n${content}`;
     } else {
@@ -1424,23 +1397,31 @@ class ChatEngine extends EventEmitter {
         content: `${tag}\n${content}`,
       });
     }
-    return { success: true, layer: layerName, granularity: layerName === PromptLayer.L3 ? granularity : null, action: 'loaded' };
+    return {
+      success: true,
+      layer: layerName,
+      granularity: layerName === PromptLayer.L3 ? granularity : null,
+      action: 'loaded',
+    };
   }
 
   // 查看当前已注入的层级（含粒度，供 get_system_layer 工具的 list 操作）
   // 返回格式: ['L0', 'L3 (detail)', 'L4'] 等
   listLoadedLayers() {
-    const sysIdx = this.messages.findIndex(m => m.role === 'system');
-    if (sysIdx < 0) {return [];}
-    const matches = this.messages[sysIdx].content.match(/\[Layer: ([A-Z0-9_]+(?:\s\([a-z]+\))?)\]/g) || [];
-    return matches.map(m => m.match(/\[Layer: ([A-Z0-9_]+(?:\s\([a-z]+\))?)\]/)[1]);
+    const sysIdx = this.messages.findIndex((m) => m.role === 'system');
+    if (sysIdx < 0) {
+      return [];
+    }
+    const matches =
+      this.messages[sysIdx].content.match(/\[Layer: ([A-Z0-9_]+(?:\s\([a-z]+\))?)\]/g) || [];
+    return matches.map((m) => m.match(/\[Layer: ([A-Z0-9_]+(?:\s\([a-z]+\))?)\]/)[1]);
   }
 
   // 更新 System Prompt(Plan/Team Mode 切换后重建)
   // 保留 AI 主动加载的 L1/L2/L3 detail 层,不因 planMode/teamMode 切换而丢失
   _updateSystemPrompt() {
     const sysPrompt = this._buildSystemPrompt();
-    const sysIdx = this.messages.findIndex(m => m.role === 'system');
+    const sysIdx = this.messages.findIndex((m) => m.role === 'system');
 
     if (sysIdx >= 0) {
       const sysContent = this.messages[sysIdx].content;
@@ -1452,9 +1433,10 @@ class ChatEngine extends EventEmitter {
         additionalLayers.push(match[0].trim());
       }
       // 新内容 = base (L0 + L4 + L5) + 保留的 L1-L3 detail
-      const newContent = additionalLayers.length > 0
-        ? sysPrompt + '\n\n' + additionalLayers.join('\n\n')
-        : sysPrompt;
+      const newContent =
+        additionalLayers.length > 0
+          ? sysPrompt + '\n\n' + additionalLayers.join('\n\n')
+          : sysPrompt;
       this.messages[sysIdx] = { role: 'system', content: newContent };
     } else {
       this.messages.unshift({ role: 'system', content: sysPrompt });
@@ -1462,7 +1444,9 @@ class ChatEngine extends EventEmitter {
   }
 
   async savePlanToFile(planContent) {
-    if (!this.contextManager?.projectDir) {return;}
+    if (!this.contextManager?.projectDir) {
+      return;
+    }
     const filePath = path.join(this.contextManager.projectDir, 'Anvil.md');
     const header = `# Anvil 计划\n\n_自动生成于 ${new Date().toLocaleString('zh-CN')}_\n\n---\n\n`;
     const fsp = require('fs/promises');
@@ -1491,7 +1475,9 @@ class ChatEngine extends EventEmitter {
   }
 
   async approvePlan() {
-    if (!this._awaitingPlanApproval) {return { error: '当前没有待批准的 plan' };}
+    if (!this._awaitingPlanApproval) {
+      return { error: '当前没有待批准的 plan' };
+    }
     this._awaitingPlanApproval = false;
     this._planApproved = true;
     this._pendingPlan = null;
@@ -1510,7 +1496,9 @@ class ChatEngine extends EventEmitter {
   }
 
   async rejectPlan(feedback) {
-    if (!this._awaitingPlanApproval) {return { error: '当前没有待批准的 plan' };}
+    if (!this._awaitingPlanApproval) {
+      return { error: '当前没有待批准的 plan' };
+    }
     this._awaitingPlanApproval = false;
     this._pendingPlan = null;
     this._suppressUI = false;
@@ -1526,7 +1514,9 @@ class ChatEngine extends EventEmitter {
   }
 
   async editPlan(feedback) {
-    if (!this._awaitingPlanApproval) {return { error: '当前没有待批准的 plan' };}
+    if (!this._awaitingPlanApproval) {
+      return { error: '当前没有待批准的 plan' };
+    }
     this._awaitingPlanApproval = false;
     this._pendingPlan = null;
     this._suppressUI = false;
@@ -1577,7 +1567,9 @@ class ChatEngine extends EventEmitter {
     });
 
     if (this.contextManager && typeof this.contextManager.proactiveCompress === 'function') {
-      try { this.messages = this.contextManager.proactiveCompress(this.messages); } catch {}
+      try {
+        this.messages = this.contextManager.proactiveCompress(this.messages);
+      } catch {}
     }
 
     this.emit('complete', {
@@ -1636,13 +1628,21 @@ class ChatEngine extends EventEmitter {
       });
       // 转发 manager 事件到 chatEngine,子 Agent 事件通过 _subAgent 标记路由
       const TEAM_EVENTS = [
-        'team_created', 'team_dissolved', 'team_degraded',
-        'agent_created', 'agent_started', 'agent_completed',
-        'agent_terminated', 'agent_respawned',
+        'team_created',
+        'team_dissolved',
+        'team_degraded',
+        'agent_created',
+        'agent_started',
+        'agent_completed',
+        'agent_terminated',
+        'agent_respawned',
         'state_changed',
-        'thinking', 'content',  // 子 Agent 流式事件(带 _subAgent 标记)
-        'tool_calls', 'tool_result',  // 子 Agent 工具调用事件(带 _subAgent 标记)
-        'subagent_usage', 'subagent_heartbeat',
+        'thinking',
+        'content', // 子 Agent 流式事件(带 _subAgent 标记)
+        'tool_calls',
+        'tool_result', // 子 Agent 工具调用事件(带 _subAgent 标记)
+        'subagent_usage',
+        'subagent_heartbeat',
       ];
       for (const evt of TEAM_EVENTS) {
         this.teamManager.on(evt, (data) => {
@@ -1677,14 +1677,15 @@ class ChatEngine extends EventEmitter {
       let evaluation;
       if (force) {
         // chat 层算 suggestedAgents,UI 与 manager 共享同一份计数
-        const finalRoles = (suggestedRoles && suggestedRoles.length > 0)
-          ? suggestedRoles
-          : [{ role: 'executor', count: 1 }];  // 兜底
+        const finalRoles =
+          suggestedRoles && suggestedRoles.length > 0
+            ? suggestedRoles
+            : [{ role: 'executor', count: 1 }]; // 兜底
         evaluation = {
           complexityScore: 100,
           needsTeam: true,
           reason: '用户明确要求启动团队(force=true)',
-          suggestedAgents: finalRoles.map(r => ({
+          suggestedAgents: finalRoles.map((r) => ({
             role: r.role,
             count: Math.max(1, r.count || 1),
             description: r.description || `${r.role} - AI 指定的角色配置`,
@@ -1712,9 +1713,13 @@ class ChatEngine extends EventEmitter {
       teamModeStarted = true;
 
       const teamManager = await this._getTeamManager();
-      const result = await teamManager.startTeamTask(taskDescription, {
-        messageCount: this.messages.length,
-      }, { force, suggestedRoles });
+      const result = await teamManager.startTeamTask(
+        taskDescription,
+        {
+          messageCount: this.messages.length,
+        },
+        { force, suggestedRoles },
+      );
 
       // 成功路径:任务完成,补发 team_mode_end 让 UI 状态栏恢复
       // (之前漏 emit,导致团队跑完后状态栏永远卡在"团队模式中")
@@ -1734,7 +1739,8 @@ class ChatEngine extends EventEmitter {
           ...result,
           degraded: true,
           degradedReason: result.result.degradedReason,
-          warning: '⚠️ 团队任务完成度不足,子 Agent 可能未正常产出(degraded)。' +
+          warning:
+            '⚠️ 团队任务完成度不足,子 Agent 可能未正常产出(degraded)。' +
             '请检查:1) 团队配置/角色 2) 子 Agent 是否能调通 AI API 3) 考虑用单 Agent 模式重做或拆任务。',
         };
       }
@@ -1782,7 +1788,6 @@ class ChatEngine extends EventEmitter {
       return { success: false, error: error.message };
     }
   }
-
 }
 
 module.exports = ChatEngine;

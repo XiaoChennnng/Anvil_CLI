@@ -368,12 +368,7 @@ async function main() {
   });
 
   chatEngine.on('status', (msg) => {
-    if (msg.startsWith('[Memory]')) {
-      // Memory 审阅状态显示在底部栏中间区域，不推入消息区
-      const displayMsg = msg.replace('[Memory] ', '');
-      tui.statusBar.setInfoMessage(displayMsg, 'info', 30000);
-      tui._refreshStatusBar();
-    } else if (msg.includes('任务进行中')) {
+    if (msg.includes('任务进行中')) {
       tui.setStatusInfo(msg);
     } else {
       tui.renderStatus(msg);
