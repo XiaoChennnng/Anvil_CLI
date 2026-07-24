@@ -165,6 +165,15 @@ class MarkdownRenderer {
     if (newlineIdx === -1) {
       // buffer 超过 200 字符但没有换行符时，强制刷新避免内容延迟
       if (this.lineBuffer.length > 200) {
+        // 如果在表格中且 buffer 是表格行，追加到表格缓冲而不是强行渲染
+        if (this._inTable) {
+          const trimmed = this.lineBuffer.trim();
+          if (trimmed.startsWith('|') && trimmed.indexOf('|', 1) !== -1) {
+            this._tableBuffer.push(this.lineBuffer);
+            this.lineBuffer = '';
+            return '';
+          }
+        }
         const output = this._renderLine(this.lineBuffer, this._inCodeBlock);
         this.lineBuffer = '';
         return output;
@@ -470,6 +479,18 @@ class MarkdownRenderer {
     return false;
   }
 
+  // 从 GFM 分隔行解析列对齐方式
+  // | :--- | :---: | ---: | → ['left', 'center', 'right']
+  _parseColAligns(separatorRow) {
+    if (!separatorRow || !Array.isArray(separatorRow)) {return [];}
+    return separatorRow.map((cell) => {
+      const s = String(cell || '').replace(/\s/g, '');
+      if (s.startsWith(':') && s.endsWith(':')) {return 'center';}
+      if (s.endsWith(':')) {return 'right';}
+      return 'left';
+    });
+  }
+
   // 解析 markdown 表格,估算每列自然宽度,返回表格总宽(含 padding 和边框)
   _estimateTableWidth(source) {
     const lines = source.split('\n').filter((l) => l.trim().startsWith('|'));
@@ -555,11 +576,24 @@ class MarkdownRenderer {
       return inner.split('|').map((c) => c.trim());
     };
     const isSeparator = (row) => row && row.every((c) => /^[\-:\s]+$/.test(c));
-    const rows = lines.map(parseRow).filter(Boolean).filter((r) => !isSeparator(r));
-    if (rows.length === 0) {return '';}
+    const allRows = lines.map(parseRow).filter(Boolean);
+    if (allRows.length === 0) {return '';}
+
+    // 从分隔行提取列对齐信息
+    let colAligns = [];
+    const sepRowIdx = allRows.findIndex(isSeparator);
+    if (sepRowIdx >= 0) {
+      colAligns = this._parseColAligns(allRows[sepRowIdx]);
+    }
+
+    // 过滤掉分隔行
+    const rows = allRows.filter((r) => !isSeparator(r));
     const headers = rows[0];
     const dataRows = rows.slice(1);
     const colCount = Math.max(headers.length, ...dataRows.map((r) => r.length));
+
+    // 补齐 colAligns 到实际列数
+    while (colAligns.length < colCount) {colAligns.push('left');}
 
     // 1. 每列自然宽度(visibleLength,含 ANSI 剥离 + CJK 双倍宽)
     const naturalWidths = new Array(colCount).fill(0);
@@ -610,13 +644,20 @@ class MarkdownRenderer {
     };
 
     // 5. 构造 cli-table3,关闭它自己的 wordWrap(我们已预换行)
+    //    设置 border/head 样式为 gray/red,后续 _applyTableTheme 替换为主题色
     const table = new Table({
       head: headers.map((h, i) => wrapCell(h, targetWidths[i])),
       colWidths: targetWidths,
+      colAligns: colAligns,
       wordWrap: false,
       wrapOnWordBoundary: false,
       truncate: '…',
-      style: { 'padding-left': 1, 'padding-right': 1, head: [], border: [] },
+      style: {
+        'padding-left': 1,
+        'padding-right': 1,
+        head: ['red', 'bold'],
+        border: ['gray'],
+      },
     });
     for (const row of dataRows) {
       const padded = new Array(colCount);
@@ -719,7 +760,17 @@ class MarkdownRenderer {
   flush() {
     let output = '';
 
-    // 先刷新未完成的表格缓冲
+    // 处理 lineBuffer 中残留的表格行:AI 流式输出如果最后一行没带换行符,
+    // 会卡在 lineBuffer 里不进 _tableBuffer,导致表格渲染缺最后一行。
+    if (this._inTable && this.lineBuffer && this.lineBuffer.trim()) {
+      const trimmed = this.lineBuffer.trim();
+      if (trimmed.startsWith('|') && trimmed.indexOf('|', 1) !== -1) {
+        this._tableBuffer.push(this.lineBuffer);
+        this.lineBuffer = '';
+      }
+    }
+
+    // 刷新未完成的表格缓冲
     if (this._inTable) {
       const tableOutput = this._flushTable();
       if (tableOutput) {output += tableOutput + '\n';}

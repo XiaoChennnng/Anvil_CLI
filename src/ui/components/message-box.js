@@ -171,7 +171,14 @@ class MessageBox {
 
       if (this._firstContentBlock) {
         const marker = chalk.hex(t.colors.primary)('●');
-        this.renderedLines.push(` ${marker} ${line}`);
+        // 如果第一行是表格框线(U+2500~U+257F), ● 放单独一行,避免顶框和表身错位
+        const firstCode = line.trim().charCodeAt(0);
+        if (firstCode >= 0x2500 && firstCode <= 0x257F) {
+          this.renderedLines.push(` ${marker}`);
+          this.renderedLines.push(` ${line}`);
+        } else {
+          this.renderedLines.push(` ${marker} ${line}`);
+        }
         this._firstContentBlock = false;
       } else {
         this.renderedLines.push(` ${line}`);
@@ -201,7 +208,13 @@ class MessageBox {
         this._lastRenderedLine = line;
         if (this._firstContentBlock) {
           const marker = chalk.hex(t.colors.primary)('●');
-          this.renderedLines.push(` ${marker} ${line}`);
+          const firstCode = line.trim().charCodeAt(0);
+          if (firstCode >= 0x2500 && firstCode <= 0x257F) {
+            this.renderedLines.push(` ${marker}`);
+            this.renderedLines.push(` ${line}`);
+          } else {
+            this.renderedLines.push(` ${marker} ${line}`);
+          }
           this._firstContentBlock = false;
         } else {
           this.renderedLines.push(` ${line}`);
@@ -361,7 +374,13 @@ class MessageBox {
 
         if (this._firstContentBlock) {
           const marker = chalk.hex(t.colors.primary)('●');
-          this.renderedLines.push(` ${marker} ${line}`);
+          const firstCode = line.trim().charCodeAt(0);
+          if (firstCode >= 0x2500 && firstCode <= 0x257F) {
+            this.renderedLines.push(` ${marker}`);
+            this.renderedLines.push(` ${line}`);
+          } else {
+            this.renderedLines.push(` ${marker} ${line}`);
+          }
           this._firstContentBlock = false;
         } else {
           this.renderedLines.push(` ${line}`);
