@@ -119,7 +119,7 @@ function verifyInstall() {
 function printUsage() {
   const prefix = run('npm config get prefix');
   const installDir = prefix ? prefix.trim() : null;
-  console.log(`\n${c.bold}${c.green}🎉 安装成功!${c.reset}\n`);
+  console.log(`\n${c.bold}${c.green}安装成功!${c.reset}\n`);
   console.log(`${c.bold}使用方法:${c.reset}`);
   console.log(`  ${c.cyan}cd /path/to/your/project${c.reset}`);
   console.log(`  ${c.cyan}anvil${c.reset}                    ${c.gray}# 在当前目录启动 Anvil${c.reset}`);

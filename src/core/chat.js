@@ -882,7 +882,7 @@ class ChatEngine extends EventEmitter {
           break;
         }
 
-        // task_complete 后不继续——AI 会再吐一段"✅已完成"造成重复
+        // task_complete 后停止循环，避免 AI 重复总结
         if (response.toolCalls?.some((tc) => tc.function?.name === 'task_complete')) {
           this.logger?.info('task_complete 已调用，停止 AI 继续');
           break;
@@ -1749,7 +1749,7 @@ class ChatEngine extends EventEmitter {
           degraded: true,
           degradedReason: result.result.degradedReason,
           warning:
-            '⚠️ 团队任务完成度不足,子 Agent 可能未正常产出(degraded)。' +
+            '[警告] 团队任务完成度不足,子 Agent 可能未正常产出(degraded)。' +
             '请检查:1) 团队配置/角色 2) 子 Agent 是否能调通 AI API 3) 考虑用单 Agent 模式重做或拆任务。',
         };
       }
