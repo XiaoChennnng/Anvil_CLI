@@ -134,7 +134,7 @@ class MarkdownRenderer {
       // 配置选项
       width: this.width,
       reflowText: true,
-      showSectionPrefix: true,
+      showSectionPrefix: false,
       unescape: true,
       emoji: true,
       tab: 2,
@@ -232,6 +232,20 @@ class MarkdownRenderer {
       // 如果在代码块内，累积内容到缓冲
       if (this._inCodeBlock) {
         this._codeBlockBuffer.push(line);
+        continue;
+      }
+
+      // 检测标题后直接跟表格行(无换行): "###标题|col1|col2|" → 拆开处理
+      // AI 经常把 ###标题和 |列1|列2| 写在同一行,导致整个被 marked 当标题渲染
+      const headingTableMatch = /^(#{1,6}\s+\S[^|]*?)(\s*\|.*)$/.exec(trimmed);
+      if (headingTableMatch) {
+        // 先渲染标题部分
+        const headingLine = headingTableMatch[1];
+        const headingRendered = this._renderLine(headingLine, false);
+        if (headingRendered) {output += headingRendered + '\n';}
+        // 表格部分推入缓冲
+        this._tableBuffer.push(headingTableMatch[2]);
+        this._inTable = true;
         continue;
       }
 
@@ -389,6 +403,15 @@ class MarkdownRenderer {
 
     // 纯文本行快速 bypass：跳过 marked.parse()（约 100x 快）
     if (!this._hasMarkdownSyntax(line)) {
+      // 即使启发式检测认为不是 markdown,也尝试 marked.parse 兜底
+      // 因为 AI 输出的行内 markdown(如超长无换行的混合内容)可能被漏检
+      try {
+        const fallback = marked.parse(line);
+        const result = fallback.replace(/\n+$/, '');
+        if (result.trim() && result.trim() !== line.trim()) {
+          return result;
+        }
+      } catch {}
       return chalk.hex(this.theme.colors.text)(line);
     }
 

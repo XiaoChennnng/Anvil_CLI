@@ -365,10 +365,12 @@ class ChatEngine extends EventEmitter {
     let fullContent = '';
     let fullThinking = '';
     let lastUsage = null;
+    let streamedContent = '';  // 仅追踪已 emit 到 UI 的内容,用于 summary 去重检测
     const taskFingerprint = generateTaskFingerprint(originalTask);
 
     let result = await this._sendAndProcess();
     fullContent += result.content || '';
+    streamedContent += result.content || '';  // 首次调用 UI 可见
     fullThinking += result.thinking || '';
     lastUsage = result.usage;
 
@@ -422,6 +424,7 @@ class ChatEngine extends EventEmitter {
 
         result = await this._sendAndProcess();
         fullContent += result.content || '';
+        streamedContent += result.content || '';  // Plan Mode 引导, UI 可见
         fullThinking += result.thinking || '';
         lastUsage = result.usage || lastUsage;
 
@@ -551,11 +554,9 @@ class ChatEngine extends EventEmitter {
         const parsed = parseTaskCompleteResult(lastToolMsg?.content || '');
         if (parsed.complete === true) {
           this.logger?.info('任务完成', { reason: parsed.reason, iterationCount });
-          // 只渲染 task_complete 工具的 summary 参数(写给用户的完成说明)
+          // task_complete 的 summary 参数存入 result 供消息历史使用,
+          // 不 emit 到 UI——AI 正文已包含完成说明,再推一条会像"系统内部消息"。
           const userFacingSummary = parsed.summary || '';
-          if (userFacingSummary) {
-            this.emit('content', userFacingSummary);
-          }
           // 把 content 替换成 summary,避免 'complete' 事件 payload 里残留 AI 内部汇报
           result = { ...checkResult, content: userFacingSummary };
           break;
@@ -570,6 +571,7 @@ class ChatEngine extends EventEmitter {
 
       result = await this._sendAndProcess();
       fullContent += result.content || '';
+      streamedContent += result.content || '';  // "继续" 回复, UI 可见
       fullThinking += result.thinking || '';
       lastUsage = result.usage || lastUsage;
 
@@ -613,6 +615,7 @@ class ChatEngine extends EventEmitter {
         // 有实质内容但无工具调用,可能是输出阶段,继续
         result = recheckResult;
         fullContent += recheckResult.content || '';
+        streamedContent += recheckResult.content || '';  // 强制检查回复, UI 可见
         fullThinking += recheckResult.thinking || '';
         lastUsage = recheckResult.usage || lastUsage;
       }
@@ -876,6 +879,12 @@ class ChatEngine extends EventEmitter {
         // compact_context 执行后立即停止 AI 继续（压缩后的上下文已不连贯，AI 继续会生成垃圾）
         if (response.toolCalls?.some((tc) => tc.function?.name === 'compact_context')) {
           this.logger?.info('compact_context 执行完成，停止 AI 继续');
+          break;
+        }
+
+        // task_complete 后不继续——AI 会再吐一段"✅已完成"造成重复
+        if (response.toolCalls?.some((tc) => tc.function?.name === 'task_complete')) {
+          this.logger?.info('task_complete 已调用，停止 AI 继续');
           break;
         }
 
