@@ -13,7 +13,9 @@ function _loadThinkingMessages() {
   try {
     const raw = fs.readFileSync(jsonPath, 'utf8');
     const msgs = JSON.parse(raw);
-    if (Array.isArray(msgs) && msgs.length > 0) return msgs;
+    if (Array.isArray(msgs) && msgs.length > 0) {
+      return msgs;
+    }
   } catch {}
   return ['Anvil 正在思考'];
 }
@@ -119,7 +121,9 @@ class StatusBar {
 
   // 随机换一条 thinking 提示语（timer 或工具调用时触发）
   updateThinkingMessage(toolName) {
-    if (!this.isThinking) return;
+    if (!this.isThinking) {
+      return;
+    }
     if (toolName) {
       this.thinkingMessage = this._pickMessageForTool(toolName);
     } else {

@@ -51,15 +51,6 @@ function generateTaskFingerprint(task) {
   return { keyWords: keyWords.slice(0, 5), full: task.slice(0, 80), length: task.length };
 }
 
-function isTaskLost(messages, fingerprint) {
-  if (!fingerprint.keyWords.length) {
-    return false;
-  }
-  const allText = messages.map((m) => m.content || '').join('');
-  const foundCount = fingerprint.keyWords.filter((w) => allText.includes(w)).length;
-  return foundCount < fingerprint.keyWords.length * 0.6;
-}
-
 class ChatEngine extends EventEmitter {
   constructor(options) {
     super();
@@ -365,12 +356,9 @@ class ChatEngine extends EventEmitter {
     let fullContent = '';
     let fullThinking = '';
     let lastUsage = null;
-    let streamedContent = '';  // 仅追踪已 emit 到 UI 的内容,用于 summary 去重检测
-    const taskFingerprint = generateTaskFingerprint(originalTask);
 
     let result = await this._sendAndProcess();
     fullContent += result.content || '';
-    streamedContent += result.content || '';  // 首次调用 UI 可见
     fullThinking += result.thinking || '';
     lastUsage = result.usage;
 
@@ -424,7 +412,6 @@ class ChatEngine extends EventEmitter {
 
         result = await this._sendAndProcess();
         fullContent += result.content || '';
-        streamedContent += result.content || '';  // Plan Mode 引导, UI 可见
         fullThinking += result.thinking || '';
         lastUsage = result.usage || lastUsage;
 
@@ -571,7 +558,6 @@ class ChatEngine extends EventEmitter {
 
       result = await this._sendAndProcess();
       fullContent += result.content || '';
-      streamedContent += result.content || '';  // "继续" 回复, UI 可见
       fullThinking += result.thinking || '';
       lastUsage = result.usage || lastUsage;
 
@@ -615,7 +601,6 @@ class ChatEngine extends EventEmitter {
         // 有实质内容但无工具调用,可能是输出阶段,继续
         result = recheckResult;
         fullContent += recheckResult.content || '';
-        streamedContent += recheckResult.content || '';  // 强制检查回复, UI 可见
         fullThinking += recheckResult.thinking || '';
         lastUsage = recheckResult.usage || lastUsage;
       }

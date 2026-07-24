@@ -9,9 +9,11 @@ let _cachedShell = null;
 
 // 检测当前 shell 是否为 Windows 原生（cmd/PowerShell），中文输出大概率是 GBK
 function _isWindowsNativeShell() {
-  if (process.platform !== "win32") return false;
+  if (process.platform !== 'win32') {
+    return false;
+  }
   const shell = _cachedShell || detectShell();
-  return shell.includes("cmd.exe") || shell.includes("powershell.exe") || shell.includes("pwsh.exe");
+  return shell.includes('cmd.exe') || shell.includes('powershell.exe') || shell.includes('pwsh.exe');
 }
 
 function detectShell() {
